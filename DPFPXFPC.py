@@ -2,6 +2,9 @@
 EIIDMELW - Islamic BNM EL Daily Deposit Extract (Production Ready)
 SAS reference: daily_deposit_extraction (EL computation)
 
+Input : data/dptrbl/DPTRBLGS.parquet
+Output: data/bnm_pibb/MELW{MM}{W}.sas7bdat   (SAS7BDAT via pyreadstat)
+
 Includes:
 - PBBLNFMT: Loan formats (ACE products, ODPROD, ODCUSTCD, etc.)
 - PBBDPFMT: Deposit formats (SAPROD, CAPROD, FDPRODD, SACUSTCD, DDCUSTCD, FDCUSTCD)
@@ -19,15 +22,6 @@ Key behaviour notes (all align with SAS source):
       INTP : prodcd in {42110,42120,42130,42310,42320,42133}
       SPTF : prodcd == 42132
       MISC : everything else
-
-Parity notes:
-  * SAPROD unknown → ''  (SAS OTHERWISE in savings SELECT discards)
-  * CAPROD unknown → '42110'   (matches SAS SELECT WHEN('42110'))
-  * FDPRODD unknown → '42130'  (matches SAS SELECT WHEN('42130'))
-  * ODPROD unknown → '34180'   (matches SAS SELECT WHEN('34180','34380'))
-  * ODCUSTCD unknown → '79'    (matches SAS OTHERWISE)
-  * Zero-amount rows are emitted (EMIT_ZERO_ROWS); SAS emits 0 but
-    drops missing cells. Toggle to skip zeros.
 """
 
 import os
@@ -35,6 +29,8 @@ import sys
 from datetime import datetime, timedelta
 
 import polars as pl
+import pandas as pd
+import pyreadstat
 
 # ------------------------------------------------------------------
 # Format libraries
@@ -46,9 +42,9 @@ import PBBLNFMT as LNF
 # ------------------------------------------------------------------
 # CONFIG
 # ------------------------------------------------------------------
-BNM_DIR        = 'data/bnm_pibb/'
-DPTRBL_DIR     = 'data/dptrbl/'
-EMIT_ZERO_ROWS = True   # Match SAS "IF AMOUNT NE . THEN OUTPUT" (0 kept)
+BNM_DIR         = 'data/bnm_pibb/'          # OUTPUT directory
+DPTRBL_PARQUET  = 'data/dptrbl/DPTRBLGS.parquet'   # INPUT
+EMIT_ZERO_ROWS  = True
 
 os.makedirs(BNM_DIR, exist_ok=True)
 
@@ -58,7 +54,6 @@ os.makedirs(BNM_DIR, exist_ok=True)
 # ------------------------------------------------------------------
 ACE_PRODUCTS = set(DPF.ACE)   # {40, 42, 43, 150, 151, 152, 181}
 
-# Interest customer codes (post-format)
 INTEREST_CUSTCODES = {
     '80', '81', '82', '83', '84', '85', '86', '87', '88', '89',
     '90', '91', '92', '93', '94', '95', '96', '97', '98', '99',
@@ -68,53 +63,57 @@ INTEREST_CUSTCODES = {
 # ------------------------------------------------------------------
 # SAS format wrappers
 # ------------------------------------------------------------------
-_SAPROD_MAP   = DPF._SAPROD_MAPPINGS       # need blank default, not '42120'
-_SAPROD_MAP_GET = _SAPROD_MAP.get
+_SAPROD_MAP = DPF._SAPROD_MAPPINGS
 
 def _saprod(product: int) -> str:
     """PUT(PRODUCT, SAPROD.) — OTHERWISE leaves PRODCD blank."""
-    return _SAPROD_MAP_GET(product, '')
+    return _SAPROD_MAP.get(product, '')
 
-def _caprod(product: int) -> str:
-    """PUT(PRODUCT, CAPROD.) — defaults '42110' in real format."""
-    return DPF.caprod_format(product)
-
-def _fdprodd(product: int) -> str:
-    """PUT(PRODUCT, FDPRODD.) — defaults '42130'."""
-    return DPF.fdprodd_format(product)
-
-def _odprod(product: int) -> str:
-    """PUT(PRODUCT, ODPROD.) — defaults '34180'."""
-    return LNF.ODPROD(product)
-
-def _odcustcd(cc: int) -> str:
-    """PUT(CUSTCODE, ODCUSTCD.) — defaults '79'."""
-    return LNF.ODCUSTCD(cc)
-
-def _sacustcd(cc: int) -> str:
-    return DPF.sacustcd_format(cc)         # default '78'
-
-def _ddcustcd(cc: int) -> str:
-    return DPF.ddcustcd_format(cc)         # default '79'
-
-def _fdcustcd(cc: int) -> str:
-    return DPF.fdcustcd_format(cc)         # default '78'
+def _caprod(product: int) -> str:   return DPF.caprod_format(product)
+def _fdprodd(product: int) -> str:  return DPF.fdprodd_format(product)
+def _odprod(product: int) -> str:   return LNF.ODPROD(product)
+def _odcustcd(cc: int) -> str:      return LNF.ODCUSTCD(cc)
+def _sacustcd(cc: int) -> str:      return DPF.sacustcd_format(cc)
+def _ddcustcd(cc: int) -> str:      return DPF.ddcustcd_format(cc)
+def _fdcustcd(cc: int) -> str:      return DPF.fdcustcd_format(cc)
 
 
 # ------------------------------------------------------------------
-# Header / report date
+# Read input parquet
 # ------------------------------------------------------------------
 print("EIIDMELW - Islamic BNM EL Daily Deposit Extract")
 print("=" * 60)
 
-print("\nReading DPTRBL header...")
+print(f"\nReading {DPTRBL_PARQUET} ...")
 try:
-    with open(f'{DPTRBL_DIR}DPTRBL.txt', 'r') as f:
-        header      = f.readline()
-        tbdate_str  = header[105:111]
-    reptdate = datetime.strptime(tbdate_str, '%y%m%d').date()
+    df_in = pl.read_parquet(DPTRBL_PARQUET)
 except Exception as e:
-    print(f"Error reading DPTRBL: {e}")
+    print(f"Error reading parquet: {e}")
+    sys.exit(1)
+
+# Required columns (SAS field names — adjust if the parquet uses others)
+REQUIRED_COLS = {
+    'TBDATE', 'BANKNO', 'REPTNO', 'FMTCODE', 'BRANCH', 'DEBIT', 'CREDIT',
+    'CUSTCODE', 'PRODUCT', 'DEPTYPE', 'INT1', 'INT2', 'CURBAL',
+    'OPENIND', 'COSTCTR',
+}
+missing = REQUIRED_COLS - set(df_in.columns)
+if missing:
+    print(f"ERROR: DPTRBL parquet missing columns: {sorted(missing)}")
+    print(f"       Present columns: {sorted(df_in.columns)}")
+    sys.exit(1)
+
+# Derive report date from first row's TBDATE
+try:
+    tbdate_raw = df_in.select(pl.col('TBDATE').first()).item()
+    if isinstance(tbdate_raw, datetime):
+        reptdate = tbdate_raw.date()
+    elif isinstance(tbdate_raw, (int, str)):
+        reptdate = datetime.strptime(str(tbdate_raw), '%y%m%d').date()
+    else:
+        raise TypeError(f"Unsupported TBDATE type: {type(tbdate_raw)}")
+except Exception as e:
+    print(f"Error parsing TBDATE: {e}")
     sys.exit(1)
 
 day = reptdate.day
@@ -123,10 +122,8 @@ elif 9 <= day <= 15: nowk = '2'
 elif 16<= day <= 22: nowk = '3'
 else:                nowk = '4'
 
-reptyear = f'{reptdate.year}'
-reptmon  = f'{reptdate.month:02d}'
-reptday  = f'{reptdate.day:02d}'
-rdate    = reptdate.strftime('%d%m%y')
+reptmon = f'{reptdate.month:02d}'
+reptday = f'{reptdate.day:02d}'
 
 print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
 print(f"Week: {nowk}, Month: {reptmon}, Day: {reptday}")
@@ -134,7 +131,7 @@ print("=" * 60)
 
 
 # ------------------------------------------------------------------
-# ELDAY mapping (mirrors SAS SELECT on &NOWK + DAY(REPTDATE))
+# ELDAY mapping
 # ------------------------------------------------------------------
 def get_elday(day: int, nowk: str, reptdate) -> str:
     m = {
@@ -160,7 +157,7 @@ print(f"ELDAY: {elday}")
 
 
 # ------------------------------------------------------------------
-# Branch accumulators (999 branches, mirroring SAS arrays)
+# Branch accumulators
 # ------------------------------------------------------------------
 _FIELDS = ('INTP','MISC','SPTF','ODFIN',
            'SA','SACAI','CA','HDA',
@@ -169,184 +166,153 @@ branch_data = {i: {k: 0.0 for k in _FIELDS} for i in range(1, 1000)}
 
 
 # ------------------------------------------------------------------
-# Field helpers (SAS 1-based @n → python [n-1:...])
+# Null-safe scalar extraction
 # ------------------------------------------------------------------
-def _get(s, a, b, default=''):
-    return s[a:b].strip() if len(s) >= b else default
+def _int(v, default=0):
+    return default if v is None else int(v)
 
-def _to_int(s):
-    s = s.strip()
-    return int(s) if s else 0
+def _float(v, default=0.0):
+    return default if v is None else float(v)
 
-def _to_float(s):
-    s = s.strip()
-    return float(s) if s else 0.0
+def _str(v, default=''):
+    return default if v is None else str(v).strip()
 
 
 # ------------------------------------------------------------------
-# Main DPTRBL scan
+# Main scan
 # ------------------------------------------------------------------
-print("\nProcessing DPTRBL (Islamic ONLY, COSTCTR 3000-3999)...")
+print("\nProcessing DPTRBL parquet (Islamic ONLY, COSTCTR 3000-3999)...")
 
-try:
-    with open(f'{DPTRBL_DIR}DPTRBL.txt', 'r') as f:
-        for ln, line in enumerate(f):
-            if ln == 0:            # header
-                continue
-            if len(line) < 900:
-                continue
+n_read = 0
+n_kept = 0
 
-            # --- pre-screen on bankno / reptno / fmtcode ---
-            try:
-                bankno  = int(line[2:5])
-                reptno  = int(line[23:27])
-                fmtcode = int(line[26:29])
-            except ValueError:
-                continue
+for row in df_in.iter_rows(named=True):
+    n_read += 1
 
-            if not (bankno == 33 and reptno == 1001 and fmtcode == 1):
-                continue
+    bankno  = _int(row['BANKNO'])
+    reptno  = _int(row['REPTNO'])
+    fmtcode = _int(row['FMTCODE'])
+    if not (bankno == 33 and reptno == 1001 and fmtcode == 1):
+        continue
 
-            # --- full field extraction ---
-            try:
-                branch   = _to_int(line[105:109])   # @106 PD4
-                debit    = _to_float(line[142:150]) # @143 PD8.2
-                credit   = _to_float(line[150:157]) # @151 PD7.2
-                custcode = _to_int(line[175:178])   # @176 PD3
-                product  = _to_int(line[396:398])   # @397 PD2
-                deptype  = _get(line, 430, 431)     # @431 $1
-                int1     = _to_float(line[431:437]) # @432 PD6.2
-                curbal   = _to_float(line[465:472]) # @466 PD7.2
-                int2     = _to_float(line[515:524]) # @516 PD10.9
-                openind  = _get(line, 337, 338)     # @338 $1
-                costctr  = _to_int(line[829:833])   # @830 PD4
-            except (ValueError, IndexError):
-                continue
+    branch   = _int(row['BRANCH'])
+    custcode = _int(row['CUSTCODE'])
+    product  = _int(row['PRODUCT'])
+    deptype  = _str(row['DEPTYPE'])
+    openind  = _str(row['OPENIND'])
+    costctr  = _int(row['COSTCTR'])
 
-            # --- Islamic only ---
-            if not (3000 <= costctr <= 3999):
-                continue
-            # --- Exclude blocked open indicators & special products ---
-            if openind in ('B', 'C', 'P') or product in (297, 298):
-                continue
+    debit    = _float(row['DEBIT'])
+    credit   = _float(row['CREDIT'])
+    int1     = _float(row['INT1'])
+    int2     = _float(row['INT2'])
+    curbal   = _float(row['CURBAL'])
 
-            intpaybl = int1 + int2
+    # --- Islamic only ---
+    if not (3000 <= costctr <= 3999):
+        continue
+    if openind in ('B', 'C', 'P') or product in (297, 298):
+        continue
 
-            # ---------------- PRODCD resolution ----------------
-            if deptype == 'S':
-                prodcd = _saprod(product)          # '' or '42120'/'42320'/'N'
-            elif deptype in ('D', 'N'):
-                prodcd = _caprod(product)          # '42110'/'42180'/'42310'/'43110'/'42199'/'34180'
-            elif deptype == 'C':
-                if product == 318:                 # SAS: DELETE
-                    continue
-                prodcd = _fdprodd(product)         # '42130' or '42132'
-            else:
-                prodcd = ''
+    n_kept += 1
+    intpaybl = int1 + int2
 
-            # ---------------- CUSTCD resolution ----------------
-            if product == 104:
-                custcd = '02'
-            elif product == 105:
-                custcd = '81'
-            elif deptype == 'S':
-                custcd = _sacustcd(custcode)
-            elif deptype in ('D', 'N'):
-                custcd = _ddcustcd(custcode)
-            elif deptype == 'C':
-                custcd = _fdcustcd(custcode)
-            else:
-                custcd = '79'
+    # ---------- PRODCD ----------
+    if deptype == 'S':
+        prodcd = _saprod(product)
+    elif deptype in ('D', 'N'):
+        prodcd = _caprod(product)
+    elif deptype == 'C':
+        if product == 318:
+            continue
+        prodcd = _fdprodd(product)
+    else:
+        prodcd = ''
 
-            # ---------------- Accumulation ----------------
-            if deptype == 'S' and curbal >= 0:
-                if   prodcd == '42120': branch_data[branch]['SA']    += curbal
-                elif prodcd == '42320': branch_data[branch]['SACAI'] += curbal
-                # '' or 'N' → no bucket (matches SAS OTHERWISE)
+    # ---------- CUSTCD ----------
+    if product == 104:
+        custcd = '02'
+    elif product == 105:
+        custcd = '81'
+    elif deptype == 'S':
+        custcd = _sacustcd(custcode)
+    elif deptype in ('D', 'N'):
+        custcd = _ddcustcd(custcode)
+    elif deptype == 'C':
+        custcd = _fdcustcd(custcode)
+    else:
+        custcd = '79'
 
-            elif deptype in ('D', 'N'):
-                if curbal >= 0:
-                    if prodcd == '42110':
-                        if product in ACE_PRODUCTS and curbal > 5000:
-                            sabal = curbal - 5000
-                            branch_data[branch]['SA'] += sabal
-                            branch_data[branch]['CA'] += 5000
-                        else:
-                            branch_data[branch]['CA'] += curbal
-                    elif prodcd == '42180':
-                        branch_data[branch]['HDA']   += curbal
-                    elif prodcd == '42310':
-                        branch_data[branch]['SACAI'] += curbal
-                    # 43110 / 42199 / 34180 / '' → no bucket
+    # ---------- Accumulation ----------
+    if deptype == 'S' and curbal >= 0:
+        if   prodcd == '42120': branch_data[branch]['SA']    += curbal
+        elif prodcd == '42320': branch_data[branch]['SACAI'] += curbal
+
+    elif deptype in ('D', 'N'):
+        if curbal >= 0:
+            if prodcd == '42110':
+                if product in ACE_PRODUCTS and curbal > 5000:
+                    branch_data[branch]['SA'] += curbal - 5000
+                    branch_data[branch]['CA'] += 5000
                 else:
-                    # Overdraft: SAS reassigns CURBAL = -CURBAL
-                    od_bal    = -curbal
-                    od_prodcd = _odprod(product)
-                    if od_prodcd == '34240':
-                        od_prodcd = '34180'
-                    if od_prodcd in ('34180', '34380'):
-                        odc = _odcustcd(custcode)
-                        if   odc == '02': branch_data[branch]['ODCOM'] += od_bal
-                        elif odc == '03': branch_data[branch]['ODIS']  += od_bal
-                        elif odc == '11': branch_data[branch]['ODFIN'] += od_bal
-                        elif odc == '12': branch_data[branch]['ODMB']  += od_bal
-                        elif odc == '13': branch_data[branch]['ODDH']  += od_bal
-                        elif odc == '17': branch_data[branch]['ODCAG'] += od_bal
+                    branch_data[branch]['CA'] += curbal
+            elif prodcd == '42180':
+                branch_data[branch]['HDA']   += curbal
+            elif prodcd == '42310':
+                branch_data[branch]['SACAI'] += curbal
+        else:
+            od_bal    = -curbal
+            od_prodcd = _odprod(product)
+            if od_prodcd == '34240':
+                od_prodcd = '34180'
+            if od_prodcd in ('34180', '34380'):
+                odc = _odcustcd(custcode)
+                if   odc == '02': branch_data[branch]['ODCOM'] += od_bal
+                elif odc == '03': branch_data[branch]['ODIS']  += od_bal
+                elif odc == '11': branch_data[branch]['ODFIN'] += od_bal
+                elif odc == '12': branch_data[branch]['ODMB']  += od_bal
+                elif odc == '13': branch_data[branch]['ODDH']  += od_bal
+                elif odc == '17': branch_data[branch]['ODCAG'] += od_bal
 
-            # ---------------- Interest payable buckets ----------------
-            if custcd in INTEREST_CUSTCODES and deptype in ('S', 'D', 'N', 'C'):
-                if prodcd in ('42110','42120','42130','42310','42320','42133'):
-                    branch_data[branch]['INTP'] += intpaybl
-                elif prodcd == '42132':
-                    branch_data[branch]['SPTF'] += intpaybl
-                else:
-                    branch_data[branch]['MISC'] += intpaybl
+    # ---------- Interest buckets ----------
+    if custcd in INTEREST_CUSTCODES and deptype in ('S', 'D', 'N', 'C'):
+        if prodcd in ('42110','42120','42130','42310','42320','42133'):
+            branch_data[branch]['INTP'] += intpaybl
+        elif prodcd == '42132':
+            branch_data[branch]['SPTF'] += intpaybl
+        else:
+            branch_data[branch]['MISC'] += intpaybl
 
-except Exception as e:
-    print(f"Error scanning DPTRBL: {e}")
-    sys.exit(1)
-
-print("  Processed deposit records")
+print(f"  Rows read: {n_read:,}   kept (Islamic): {n_kept:,}")
 
 
 # ------------------------------------------------------------------
-# Emit MELW rows
-# (mirrors MELW2 = MELW1 ∪ MELW22 ∪ MELW23)
+# Emit MELW records
 # ------------------------------------------------------------------
 print("\nGenerating BNM code records...")
 
-def _emit(recs, branch, code, amount, reptdate, elday):
-    """Mirror SAS: IF AMOUNT NE . THEN OUTPUT."""
-    if EMIT_ZERO_ROWS:
-        recs.append({'REPTDATE': reptdate, 'BRANCH': branch, 'ELDAY': elday,
-                     'BNMCODE': code, 'AMOUNT': float(amount)})
-    else:
-        if amount != 0:
-            recs.append({'REPTDATE': reptdate, 'BRANCH': branch, 'ELDAY': elday,
-                         'BNMCODE': code, 'AMOUNT': float(amount)})
+def _emit(recs, branch, code, amount):
+    if EMIT_ZERO_ROWS or amount != 0:
+        recs.append({'REPTDATE': reptdate, 'BRANCH': branch,
+                     'ELDAY': elday, 'BNMCODE': code,
+                     'AMOUNT': float(amount)})
 
 melw_records = []
 for branch in range(1, 1000):
     d = branch_data[branch]
-
-    # --- MELW2 branch-set (ODFIN, INTP, MISC, SPTF) ---
-    _emit(melw_records, branch,        '3410011000000Y', d['ODFIN'], reptdate, elday)
-    _emit(melw_records, branch,        '4911080000000Y', d['INTP'],  reptdate, elday)
-    _emit(melw_records, branch,        '4929980000000D', d['MISC'],  reptdate, elday)  # Islamic MISC
-    _emit(melw_records, branch + 3000, '4929980000000Y', d['SPTF'],  reptdate, elday)  # Islamic SPTF
-
-    # --- MELW22 (Savings / current / HDA) ---
-    _emit(melw_records, branch, '4212000000000Y', d['SA'],    reptdate, elday)
-    _emit(melw_records, branch, '4230000000000Y', d['SACAI'], reptdate, elday)
-    _emit(melw_records, branch, '4211000000000Y', d['CA'],    reptdate, elday)
-    _emit(melw_records, branch, '4218000000000Y', d['HDA'],   reptdate, elday)
-
-    # --- MELW23 (Overdraft buckets) ---
-    _emit(melw_records, branch, '3410002000000Y', d['ODCOM'], reptdate, elday)
-    _emit(melw_records, branch, '3410003000000Y', d['ODIS'],  reptdate, elday)
-    _emit(melw_records, branch, '3410012000000Y', d['ODMB'],  reptdate, elday)
-    _emit(melw_records, branch, '3410013000000Y', d['ODDH'],  reptdate, elday)
-    _emit(melw_records, branch, '3410017000000Y', d['ODCAG'], reptdate, elday)
+    _emit(melw_records, branch,        '3410011000000Y', d['ODFIN'])
+    _emit(melw_records, branch,        '4911080000000Y', d['INTP'])
+    _emit(melw_records, branch,        '4929980000000D', d['MISC'])
+    _emit(melw_records, branch + 3000, '4929980000000Y', d['SPTF'])
+    _emit(melw_records, branch, '4212000000000Y', d['SA'])
+    _emit(melw_records, branch, '4230000000000Y', d['SACAI'])
+    _emit(melw_records, branch, '4211000000000Y', d['CA'])
+    _emit(melw_records, branch, '4218000000000Y', d['HDA'])
+    _emit(melw_records, branch, '3410002000000Y', d['ODCOM'])
+    _emit(melw_records, branch, '3410003000000Y', d['ODIS'])
+    _emit(melw_records, branch, '3410012000000Y', d['ODMB'])
+    _emit(melw_records, branch, '3410013000000Y', d['ODDH'])
+    _emit(melw_records, branch, '3410017000000Y', d['ODCAG'])
 
 if not melw_records:
     print("  WARNING: no MELW records produced")
@@ -355,50 +321,78 @@ if not melw_records:
         'ELDAY': pl.Utf8, 'BNMCODE': pl.Utf8, 'AMOUNT': pl.Float64,
     })
 else:
-    df_melw = pl.DataFrame(melw_records)
+    df_melw = pl.DataFrame(melw_records, schema={
+        'REPTDATE': pl.Date, 'BRANCH': pl.Int32,
+        'ELDAY': pl.Utf8, 'BNMCODE': pl.Utf8, 'AMOUNT': pl.Float64,
+    })
 
 print(f"  Generated {len(df_melw):,} BNM code records")
 
 
 # ------------------------------------------------------------------
-# Append logic (SAS %MACRO APPEND)
+# SAS7BDAT writer helpers
 # ------------------------------------------------------------------
-filename = f'MELW{reptmon}{nowk}.parquet'
+SAS_COLUMN_LABELS = {
+    'REPTDATE': 'Report date',
+    'BRANCH'  : 'Branch code',
+    'ELDAY'   : 'EL day label',
+    'BNMCODE' : 'BNM item code',
+    'AMOUNT'  : 'Amount',
+}
+
+def _write_sas7bdat(df_pl: pl.DataFrame, filepath: str) -> None:
+    """Write a Polars DataFrame to SAS7BDAT via pandas + pyreadstat."""
+    df_pd = df_pl.to_pandas()
+    # REPTDATE must be datetime64 (not object) for SAS DATE mapping
+    if 'REPTDATE' in df_pd.columns:
+        df_pd['REPTDATE'] = pd.to_datetime(df_pd['REPTDATE'])
+    pyreadstat.write_sas7bdat(
+        df_pd,
+        filepath,
+        column_labels=SAS_COLUMN_LABELS,
+        file_label='EIIDMELW - Islamic BNM EL Daily Deposit',
+    )
+
+def _read_sas7bdat(filepath: str) -> pl.DataFrame:
+    """Read a SAS7BDAT back into Polars, restoring the expected schema."""
+    df_pd, _meta = pyreadstat.read_sas7bdat(filepath)
+    if 'REPTDATE' in df_pd.columns:
+        df_pd['REPTDATE'] = pd.to_datetime(df_pd['REPTDATE']).dt.date
+    return pl.from_pandas(df_pd)
+
+
+# ------------------------------------------------------------------
+# Append / replace logic (SAS %MACRO APPEND parity)
+# ------------------------------------------------------------------
+filename = f'MELW{reptmon}{nowk}.sas7bdat'
 filepath = f'{BNM_DIR}{filename}'
 
-print(f"\nSaving to {filename}...")
+print(f"\nWriting to {filename} ...")
 
 if reptday in ('01', '09', '16', '23'):
-    # Week start: SAS deletes member then appends → full replace
+    # Week-start: SAS deletes member then appends → full replace
     print(f"  Week start (Day {reptday}): full replace")
-    df_melw.write_parquet(filepath)
+    _write_sas7bdat(df_melw, filepath)
 else:
+    # Mid-week: dedupe on REPTDATE then append
     print(f"  Mid-week (Day {reptday}): append (dedupe on REPTDATE)")
-    if os.path.exists(filepath):
-        try:
-            df_existing = pl.read_parquet(filepath)
-            df_existing = df_existing.filter(pl.col('REPTDATE') != reptdate)
-            df_combined = pl.concat([df_existing, df_melw])
-            df_combined.write_parquet(filepath)
-            print(f"    Combined: {len(df_combined):,} records")
-        except Exception as e:
-            print(f"  ERROR appending to existing file {filepath}: {e}")
-            sys.exit(1)
-    else:
-        # SAS DATA step against missing member would fail too
+    if not os.path.exists(filepath):
         print(f"  ERROR: {filepath} missing but reptday={reptday} (mid-week).")
         print(f"         Run week-start day first (01/09/16/23).")
+        sys.exit(1)
+    try:
+        df_existing = _read_sas7bdat(filepath)
+        df_existing = df_existing.filter(pl.col('REPTDATE') != reptdate)
+        df_combined = pl.concat([df_existing, df_melw], how='diagonal_relaxed')
+        _write_sas7bdat(df_combined, filepath)
+        print(f"    Combined: {len(df_combined):,} records")
+    except Exception as e:
+        print(f"  ERROR appending to {filepath}: {e}")
         sys.exit(1)
 
 print(f"\n{'='*60}")
 print("EIIDMELW Complete")
 print(f"{'='*60}")
-print(f"Output : {filename}")
-print(f"Records: {len(df_melw):,}")
-print(f"ELDAY  : {elday}, Week: {nowk}")
-print("Key behaviour:")
-print("  - Islamic only (COSTCTR 3000-3999)")
-print("  - ACE split (>5000) for ACE products {40,42,43,150,151,152,181}")
-print("  - Product 318 (deptype C) excluded")
-print("  - MISC BNM code: 4929980000000D (Islamic)")
-print("  - SPTF BNM code: 4929980000000Y at branch+3000")
+print(f"Output  : {filename}")
+print(f"Records : {len(df_melw):,}")
+print(f"ELDAY   : {elday}, Week: {nowk}")
