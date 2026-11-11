@@ -1,648 +1,799 @@
-#!/usr/bin/env python3
-"""
-EIBDISLM - Islamic Banking Statistics
-Processes daily Islamic account balances and monthly summaries
-Outputs SAS7BDAT files only
-
-Uses:
-  PBMISFMT        - SAS format library for MIS codes (SAPROD, SDNAME, $RACE, $PURPOSE, AGEDESC)
-  PBBDPTFMT_AII   - SAS format library for deposit products (SADENOM, SAPROD, CADENOM, CAPROD, ...)
-"""
-
-import pyreadstat
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from datetime import datetime, timedelta
-import sys
-
-# ---------------------------------------------------------------------------
-# Import format libraries
-# ---------------------------------------------------------------------------
-try:
-    import PBMISFMT
-except ImportError:
-    PBMISFMT = None
-    print("WARNING: PBMISFMT module not found; using inline format logic")
-
-try:
-    import PBBDPTFMT_AII as PBBDPFMT
-except ImportError:
-    PBBDPFMT = None
-    print("WARNING: PBBDPTFMT_AII module not found; using inline format logic")
-
-
-BASE_DIR = Path('.')
-INPUT_DIR = BASE_DIR / '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBDISLM'
-OUTPUT_DIR = BASE_DIR / '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDISLM'
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-AGELIMIT = 12
-MAXAGE = 18
-AGEBELOW = 11
-
-# Hardcode reptdate as yesterday's date
-reptdate = datetime.now() - timedelta(days=1)
-reptyear, reptmon, reptday = reptdate.year, reptdate.month, reptdate.day
-rdate = reptdate.strftime('%d/%m/%Y')
-zdate = int(reptdate.strftime('%y%m%d'))
-
-print(f"Islamic Banking Statistics - {rdate}")
-print(f"Processing data for date: {reptdate.strftime('%Y-%m-%d')}")
-
-CURRENT_FILE = INPUT_DIR / f'intg_dp_acct_current_d{reptday}.sas7bdat'
-SAVING_FILE  = INPUT_DIR / f'intg_dp_acct_saving_d{reptday}.sas7bdat'
-
-print(f"\nInput files:")
-print(f"  CURRENT: {CURRENT_FILE}")
-print(f"  SAVING:  {SAVING_FILE}")
-
-missing = []
-if not CURRENT_FILE.exists():
-    missing.append(str(CURRENT_FILE))
-if not SAVING_FILE.exists():
-    missing.append(str(SAVING_FILE))
-if missing:
-    print("\nERROR: Missing input file(s):")
-    for f in missing:
-        print(f"  - {f}")
-    sys.exit(1)
-
-ENTITY_FILTER = 'PIBB'
-
-# ============================================================================
-# FORMAT WRAPPERS
-# ============================================================================
-
-def apply_saprod(product_code):
-    """SAPROD: savings product -> BNM code."""
-    if PBBDPFMT is not None:
-        return PBBDPFMT.saprod_format(product_code)
-    if PBMISFMT is not None:
-        return PBMISFMT.put(product_code, 'SAPROD.')
-    if product_code in (204, 214, 215):
-        return '42320'
-    return '42120'
-
-
-def apply_sadenom(product_code):
-    """SADENOM: 'I' for Islamic products, 'D' otherwise."""
-    if PBBDPFMT is not None:
-        return PBBDPFMT.sadenom_format(product_code)
-    return 'I' if product_code in (204, 207, 214, 215, 218, 220, 221, 222, 223) else 'D'
-
-
-def apply_cadenom(product_code):
-    """CADENOM: 'I' for Islamic CA products, 'D' otherwise."""
-    if PBBDPFMT is not None:
-        return PBBDPFMT.cadenom_format(product_code)
-    return 'D'
-
-
-def apply_caprod(product_code):
-    """CAPROD: current account product -> BNM code."""
-    if PBBDPFMT is not None:
-        return PBBDPFMT.caprod_format(product_code)
-    return '42110'
-
-
-def apply_race(race_code):
-    """$RACE: '0'-'3' pass through, else '0'."""
-    if PBBDPFMT is not None:
-        return PBBDPFMT.race_format(race_code)
-    if PBMISFMT is not None:
-        return PBMISFMT.put(race_code, '$RACE.')
-    code = str(race_code).rstrip() if race_code is not None else ''
-    return code if code in ('0', '1', '2', '3') else '0'
-
-
-def apply_purpose(purpose_code):
-    """$PURPOSE: normalize purpose code."""
-    if PBMISFMT is not None:
-        return PBMISFMT.put(purpose_code, '$PURPOSE.')
-    return str(purpose_code) if purpose_code not in (None, '') else '0'
-
-
-def apply_agedesc(age_code):
-    """AGEDESC: 0=WITHOUT BIRTHDATE, 11=BELOW 12, 12=12 TO BELOW 18, 18=18+."""
-    if PBMISFMT is not None:
-        return PBMISFMT.put(age_code, 'AGEDESC.')
-    return str(age_code)
-
-
-# ============================================================================
-# FUNCTION TO SAVE SAS DATASET
-# ============================================================================
-
-def save_sas_dataset(df, dataset_name, output_dir):
-    """Save DataFrame as SAS7BDAT using saspy"""
-    try:
-        import saspy
-        sas = saspy.SASsession(cfgname='default')
-
-        df_sas = df.copy()
-        df_sas.columns = df_sas.columns.str.upper()
-
-        for col in df_sas.columns:
-            if df_sas[col].dtype == 'object':
-                df_sas[col] = df_sas[col].astype(str)
-            elif df_sas[col].dtype in ['float64', 'float32']:
-                df_sas[col] = df_sas[col].fillna(0)
-            elif df_sas[col].dtype in ['int64', 'int32']:
-                df_sas[col] = df_sas[col].fillna(0).astype(int)
-
-        sas.dataframe2sasdata(df_sas, table=dataset_name, libref='work')
-        sas.saslib('outlib', path=str(output_dir), engine='base')
-        sas.submit(f"""
-            data outlib.{dataset_name};
-                set work.{dataset_name};
-            run;
-        """)
-
-        print(f"  ✓ Saved SAS dataset: {dataset_name}.sas7bdat")
-        sas.endsas()
-        return True
-    except Exception as e:
-        print(f"  ✗ Error saving SAS dataset {dataset_name}: {e}")
-        return False
-
-# ============================================================================
-# INSPECT INPUT DATASETS
-# ============================================================================
-
-print("\n" + "="*80)
-print("INSPECTING INPUT DATASETS")
-print("="*80)
-
-try:
-    saving_sample, _ = pyreadstat.read_sas7bdat(str(SAVING_FILE))
-    current_sample, _ = pyreadstat.read_sas7bdat(str(CURRENT_FILE))
-
-    print(f"\nSAVING dataset columns (first 20):")
-    print(f"  {', '.join(saving_sample.columns.tolist()[:20])}")
-
-    print(f"\nCURRENT dataset columns (first 20):")
-    print(f"  {', '.join(current_sample.columns.tolist()[:20])}")
-
-except Exception as e:
-    print(f"Error reading sample: {e}")
-    sys.exit(1)
-
-# ============================================================================
-# SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)
-# ============================================================================
-
-print("\n" + "="*80)
-print("SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)")
-print("="*80)
-
-try:
-    current_df, _ = pyreadstat.read_sas7bdat(str(CURRENT_FILE))
-    saving_df, _ = pyreadstat.read_sas7bdat(str(SAVING_FILE))
-    print(f"Loaded CURRENT: {len(current_df)} rows, {len(current_df.columns)} columns")
-    print(f"Loaded SAVING:  {len(saving_df)} rows, {len(saving_df.columns)} columns")
-except Exception as e:
-    print(f"Error loading datasets: {e}")
-    sys.exit(1)
-
-entity_col_c = next((c for c in ['ENTITY_CD', 'entity_cd', 'Entity_cd'] if c in current_df.columns), None)
-entity_col_s = next((c for c in ['ENTITY_CD', 'entity_cd', 'Entity_cd'] if c in saving_df.columns), None)
-
-if entity_col_c is None or entity_col_s is None:
-    print("\nERROR: ENTITY_CD column not found in one of the datasets")
-    sys.exit(1)
-
-current_df = current_df[current_df[entity_col_c] == ENTITY_FILTER].copy()
-saving_df  = saving_df[saving_df[entity_col_s] == ENTITY_FILTER].copy()
-
-print(f"\nAfter ENTITY_CD = '{ENTITY_FILTER}' filter:")
-print(f"  CURRENT: {len(current_df)} rows")
-print(f"  SAVING:  {len(saving_df)} rows")
-
-def find_col(df, candidates):
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-branch_col = find_col(current_df, ['BRANCH', 'branch', 'Branch', 'BRANCH_NO', 'branch_no'])
-product_col = find_col(current_df, ['PRODUCT', 'product', 'Product', 'PROD', 'prod'])
-curbal_col = find_col(current_df, ['CURBAL', 'curbal', 'CurBal', 'CURRENT_BAL', 'current_bal'])
-openind_col = find_col(current_df, ['OPENIND', 'openind', 'OPEN_IND', 'open_ind', 'OpenInd'])
-
-print(f"\nUsing columns:")
-print(f"  BRANCH:  {branch_col}")
-print(f"  PRODUCT: {product_col}")
-print(f"  CURBAL:  {curbal_col}")
-print(f"  OPENIND: {openind_col}")
-
-if None in [branch_col, product_col, curbal_col]:
-    print("\nERROR: Could not find required columns")
-    sys.exit(1)
-
-if openind_col:
-    current_filtered = current_df[~current_df[openind_col].isin(['B', 'C', 'P'])][
-        [branch_col, product_col, curbal_col]].copy()
-    saving_filtered = saving_df[~saving_df[openind_col].isin(['B', 'C', 'P'])][
-        [branch_col, product_col, curbal_col]].copy()
-else:
-    current_filtered = current_df[[branch_col, product_col, curbal_col]].copy()
-    saving_filtered = saving_df[[branch_col, product_col, curbal_col]].copy()
-
-current_filtered.columns = ['branch', 'product', 'curbal']
-saving_filtered.columns = ['branch', 'product', 'curbal']
-
-current_filtered['reptdate'] = zdate
-saving_filtered['reptdate'] = zdate
-
-dyibu_raw = pd.concat([current_filtered, saving_filtered], ignore_index=True)
-print(f"Combined raw data: {len(dyibu_raw)} rows")
-
-dyibu_raw['sai'] = np.where(dyibu_raw['product'].isin([204, 207, 214, 215]), dyibu_raw['curbal'], 0)
-dyibu_raw['saino'] = np.where(dyibu_raw['product'].isin([204, 207, 214, 215]), 1, 0)
-dyibu_raw['mbs'] = np.where(dyibu_raw['product'] == 214, dyibu_raw['curbal'], 0)
-dyibu_raw['mbsno'] = np.where(dyibu_raw['product'] == 214, 1, 0)
-
-cai_products = [60, 61, 63, 64, 70, 71, 93, 94, 160, 161, 162, 163, 164, 166,
-                169, 66, 67, 168, 167, 182, 183, 184, 73]
-exclude_products = [96, 97, 61, 161, 63, 163]
-cai_condition = (dyibu_raw['product'].isin(cai_products)
-                 & (dyibu_raw['curbal'] > 0)
-                 & ~dyibu_raw['product'].isin(exclude_products))
-dyibu_raw['cai'] = np.where(cai_condition, dyibu_raw['curbal'], 0)
-dyibu_raw['caino'] = np.where(cai_condition, 1, 0)
-
-dyibu_raw['ca96'] = np.where(dyibu_raw['product'].isin([96, 97]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
-dyibu_raw['cai96'] = np.where(dyibu_raw['product'].isin([96, 97]) & (dyibu_raw['curbal'] > 0), 1, 0)
-dyibu_raw['caig'] = np.where(dyibu_raw['product'].isin([61, 161]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
-dyibu_raw['caigno'] = np.where(dyibu_raw['product'].isin([61, 161]) & (dyibu_raw['curbal'] > 0), 1, 0)
-dyibu_raw['caih'] = np.where(dyibu_raw['product'].isin([63, 163]) & (dyibu_raw['curbal'] > 0), dyibu_raw['curbal'], 0)
-dyibu_raw['caihno'] = np.where(dyibu_raw['product'].isin([63, 163]) & (dyibu_raw['curbal'] > 0), 1, 0)
-
-dyibu = dyibu_raw.groupby(['branch', 'reptdate']).agg({
-    'sai': 'sum', 'saino': 'sum', 'mbs': 'sum', 'mbsno': 'sum',
-    'cai': 'sum', 'caino': 'sum', 'ca96': 'sum', 'cai96': 'sum',
-    'caig': 'sum', 'caigno': 'sum', 'caih': 'sum', 'caihno': 'sum'
-}).reset_index()
-
-dataset_name = f'dyibu{reptmon:02d}'
-save_sas_dataset(dyibu, dataset_name, OUTPUT_DIR)
-print(f"Section 1: DYIBU - {len(dyibu)} branches")
-
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-def calculate_age(bdate_str, reptdate, reptmon, reptday, reptyear):
-    if pd.isna(bdate_str) or bdate_str == 0 or str(bdate_str).strip() in ('', '0'):
-        return 0
-    try:
-        bdate_str = str(bdate_str).strip()
-        if len(bdate_str) >= 8:
-            try:
-                bdate = datetime.strptime(bdate_str[:8], '%m%d%Y')
-            except Exception:
-                try:
-                    bdate = datetime.strptime(bdate_str[:8], '%Y%m%d')
-                except Exception:
-                    return 0
-            age = reptyear - bdate.year
-            if age == AGELIMIT:
-                if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
-                    age = AGEBELOW
-            elif age == MAXAGE:
-                if (bdate.month == reptmon and bdate.day > reptday) or bdate.month > reptmon:
-                    age = AGELIMIT
-            elif age > MAXAGE:
-                age = MAXAGE
-            elif age < AGELIMIT:
-                age = AGEBELOW
-            else:
-                age = AGELIMIT
-            return age
-    except Exception:
-        return 0
-    return 0
-
-def get_isa_range(curbal):
-    if curbal < 501: return 500
-    elif curbal < 2001: return 2000
-    elif curbal < 5001: return 5000
-    elif curbal < 10001: return 10000
-    elif curbal < 30001: return 30000
-    elif curbal < 50001: return 50000
-    elif curbal < 75001: return 75000
-    else: return 75001
-
-def get_range_bucket(curbal, product):
-    if product == 214:
-        return get_isa_range(curbal)
-    ranges = [(500, '< 500'), (1000, '< 1000'), (5000, '< 5000'),
-              (10000, '< 10000'), (50000, '< 50000'), (100000, '< 100000'),
-              (500000, '< 500000'), (float('inf'), '>= 500000')]
-    for limit, label in ranges:
-        if curbal < limit:
-            return label
-    return '>= 500000'
-
-# ============================================================================
-# SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS
-# ============================================================================
-
-print("\n" + "="*80)
-print("SECTION 2: PROCESS SAVINGS & CURRENT ACCOUNTS")
-print("="*80)
-
-column_map = {
-    'BRANCH': 'branch', 'branch': 'branch',
-    'PRODUCT': 'product', 'product': 'product',
-    'CURBAL': 'curbal', 'curbal': 'curbal',
-    'AVGAMT': 'avgamt', 'avgamt': 'avgamt',
-    'OPENDT': 'opendt', 'opendt': 'opendt',
-    'CLOSEDT': 'closedt', 'closedt': 'closedt',
-    'BDATE': 'bdate', 'bdate': 'bdate',
-    'CUSTCODE': 'custcode', 'custcode': 'custcode',
-    'PURPOSE': 'purpose', 'purpose': 'purpose',
-    'RACE': 'race', 'race': 'race',
-    'OPENIND': 'openind', 'openind': 'openind',
-}
-
-try:
-    saving_df, _ = pyreadstat.read_sas7bdat(str(SAVING_FILE))
-    current_df, _ = pyreadstat.read_sas7bdat(str(CURRENT_FILE))
-
-    entity_col_s = next((c for c in ['ENTITY_CD', 'entity_cd'] if c in saving_df.columns), None)
-    entity_col_c = next((c for c in ['ENTITY_CD', 'entity_cd'] if c in current_df.columns), None)
-    if entity_col_s is None or entity_col_c is None:
-        print("ERROR: ENTITY_CD column not found")
-        sys.exit(1)
-
-    saving_df = saving_df[saving_df[entity_col_s] == ENTITY_FILTER].copy()
-    current_df = current_df[current_df[entity_col_c] == ENTITY_FILTER].copy()
-
-    print(f"After ENTITY_CD = '{ENTITY_FILTER}' filter:")
-    print(f"  SAVING:  {len(saving_df):,} rows")
-    print(f"  CURRENT: {len(current_df):,} rows")
-
-    for orig, new in column_map.items():
-        if orig in saving_df.columns:
-            saving_df.rename(columns={orig: new}, inplace=True)
-        if orig in current_df.columns:
-            current_df.rename(columns={orig: new}, inplace=True)
-
-    if 'openind' in saving_df.columns:
-        saving_filtered = saving_df[(~saving_df['openind'].isin(['B', 'C', 'P']))
-                                    & (~saving_df['product'].isin([297, 298]))]
-    else:
-        saving_filtered = saving_df[~saving_df['product'].isin([297, 298])]
-
-    if 'openind' in current_df.columns:
-        current_filtered = current_df[(~current_df['openind'].isin(['B', 'C', 'P']))
-                                      & (~current_df['product'].isin([297, 298]))]
-    else:
-        current_filtered = current_df[~current_df['product'].isin([297, 298])]
-
-    accounts_df = pd.concat([saving_filtered, current_filtered], ignore_index=True)
-    print(f"Total accounts to process: {len(accounts_df):,}")
-
-except Exception as e:
-    print(f"Error processing accounts: {e}")
-    sys.exit(1)
-
-print("Processing accounts using vectorized operations...")
-
-processed_data = []
-chunk_size = 100000
-total_rows = len(accounts_df)
-
-for start_idx in range(0, total_rows, chunk_size):
-    end_idx = min(start_idx + chunk_size, total_rows)
-    chunk = accounts_df.iloc[start_idx:end_idx].copy()
-
-    chunk['accytd'] = 0
-    mask = (chunk['opendt'] != 0) & (chunk['closedt'].isna() | (chunk['closedt'] == 0))
-    if mask.any():
-        try:
-            opendt_str = chunk.loc[mask, 'opendt'].astype(str).str[:4]
-            chunk.loc[mask, 'accytd'] = (opendt_str.astype(float) == reptyear).astype(int)
-        except Exception:
-            pass
-
-    chunk['age'] = 0
-    for idx, row in chunk.iterrows():
-        chunk.loc[idx, 'age'] = calculate_age(row['bdate'], reptdate, reptmon, reptday, reptyear)
-
-    chunk['avgrnge'] = chunk['avgamt'].apply(lambda x: get_range_bucket(x, 0))
-    chunk['range'] = chunk.apply(lambda x: get_range_bucket(x['curbal'], x['product']), axis=1)
-
-    # Apply SAS formats via PBMISFMT / PBBDPTFMT_AII
-    chunk['sadenom'] = chunk['product'].apply(apply_sadenom)
-    chunk['cadenom'] = chunk['product'].apply(apply_cadenom)
-    chunk['saprod'] = chunk['product'].apply(apply_saprod)
-    chunk['caprod'] = chunk['product'].apply(apply_caprod)
-    chunk['race_fmt'] = chunk['race'].apply(apply_race)
-
-    chunk_processed = chunk[['product', 'branch', 'curbal', 'avgamt', 'accytd',
-                             'age', 'purpose', 'race', 'race_fmt', 'custcode',
-                             'avgrnge', 'range', 'sadenom', 'cadenom',
-                             'saprod', 'caprod']].copy()
-    chunk_processed['reptdate'] = zdate
-
-    processed_data.append(chunk_processed)
-
-    if (start_idx + chunk_size) % 500000 == 0:
-        print(f"  Processed {min(end_idx, total_rows):,} accounts...")
-
-processed_df = pd.concat(processed_data, ignore_index=True)
-print(f"✓ Processed {len(processed_df):,} accounts")
-
-# ============================================================================
-# GENERATE ALL OUTPUT DATASETS (SAS7BDAT ONLY)
-# ============================================================================
-
-print("\n" + "="*80)
-print("GENERATING OUTPUT DATASETS (SAS7BDAT)")
-print("="*80)
-
-def generate_dataset(df, filter_condition, groupby_cols, agg_dict):
-    if filter_condition is not None:
-        filtered = df[filter_condition]
-    else:
-        filtered = df
-
-    if len(filtered) == 0:
-        return pd.DataFrame(columns=groupby_cols + list(agg_dict.keys()))
-
-    base_agg = {
-        'noacct': ('product', 'count'),
-        'curbal': ('curbal', 'sum'),
-        'accytd': ('accytd', 'sum'),
-        'avgamt': ('avgamt', 'sum'),
-    }
-
-    result = filtered.groupby(groupby_cols).agg(**base_agg).reset_index()
-
-    if 'avgacct' in agg_dict:
-        cond = (
-            filtered.assign(_avg_pos=(filtered['avgamt'] > 0).astype(int))
-                    .groupby(groupby_cols)['_avg_pos']
-                    .sum()
-                    .reset_index()
-                    .rename(columns={'_avg_pos': 'avgacct'})
-        )
-        result = result.merge(cond, on=groupby_cols, how='left')
-
-    return result
-
-datasets_config = [
-    {
-        'name': f'awsa{reptmon:02d}',
-        'description': 'Products 204,215 (Regular Savings)',
-        'filter': processed_df['product'].isin([204, 215]),
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
-        'agg': {
-            'noacct': ('product', 'count'),
-            'curbal': ('curbal', 'sum'),
-            'accytd': ('accytd', 'sum'),
-            'avgacct': ('avgamt', lambda x: (x > 0).sum()),
-            'avgamt': ('avgamt', 'sum'),
-        },
-    },
-    {
-        'name': f'awsb{reptmon:02d}',
-        'description': 'Product 207 (Islamic Basic Savings)',
-        'filter': processed_df['product'] == 207,
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
-        'agg': {
-            'noacct': ('product', 'count'),
-            'curbal': ('curbal', 'sum'),
-            'accytd': ('accytd', 'sum'),
-            'avgacct': ('avgamt', lambda x: (x > 0).sum()),
-            'avgamt': ('avgamt', 'sum'),
-        },
-    },
-    {
-        'name': f'awsc{reptmon:02d}',
-        'description': 'Product 214 (Mudharabah by Age/Race)',
-        'filter': processed_df['product'] == 214,
-        'groupby': ['product', 'range', 'race', 'age', 'reptdate'],
-        'agg': {
-            'noacct': ('product', 'count'),
-            'curbal': ('curbal', 'sum'),
-            'accytd': ('accytd', 'sum'),
-            'avgamt': ('avgamt', 'sum'),
-        },
-    },
-    {
-        'name': f'mudh{reptmon:02d}',
-        'description': 'Product 214 (Mudharabah by Purpose)',
-        'filter': processed_df['product'] == 214,
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
-        'agg': {
-            'noacct': ('product', 'count'),
-            'curbal': ('curbal', 'sum'),
-            'accytd': ('accytd', 'sum'),
-            'avgamt': ('avgamt', 'sum'),
-        },
-    },
-    {
-        'name': f'awca{reptmon:02d}',
-        'description': 'Products 93,96 (Islamic Current Accounts)',
-        'filter': (processed_df['product'].isin([93, 96])) & (processed_df['curbal'] > 0),
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
-        'agg': {
-            'noacct': ('product', 'count'),
-            'curbal': ('curbal', 'sum'),
-            'accytd': ('accytd', 'sum'),
-            'avgacct': ('avgamt', lambda x: (x > 0).sum()),
-            'avgamt': ('avgamt', 'sum'),
-        },
-    },
-    {
-        'name': f'awcb{reptmon:02d}',
-        'description': 'Products 160,162,164,168,182,169 (Purpose 1,2,4 only)',
-        'filter': (processed_df['product'].isin([160, 162, 164, 168, 182, 169]))
-                  & (processed_df['curbal'] > 0)
-                  & (processed_df['purpose'].isin(['1', '2', '4'])),
-        'groupby': ['purpose', 'race', 'custcode', 'avgrnge', 'range', 'product', 'reptdate'],
-        'agg': {
-            'noacct': ('product', 'count'),
-            'curbal': ('curbal', 'sum'),
-            'accytd': ('accytd', 'sum'),
-            'avgacct': ('avgamt', lambda x: (x > 0).sum()),
-            'avgamt': ('avgamt', 'sum'),
-        },
-    },
-]
-
-datasets_results = {}
-for ds_config in datasets_config:
-    print(f"\nGenerating {ds_config['name']} ({ds_config['description']})...")
-    result = generate_dataset(
-        processed_df,
-        ds_config['filter'],
-        ds_config['groupby'],
-        ds_config['agg'],
-    )
-    datasets_results[ds_config['name']] = result
-
-    save_sas_dataset(result, ds_config['name'], OUTPUT_DIR)
-
-    total_accts = result['noacct'].sum() if len(result) > 0 and 'noacct' in result.columns else 0
-    print(f"  {ds_config['name']} - {total_accts:,.0f} accounts, {len(result)} groups")
-
-# ============================================================================
-# SUMMARY
-# ============================================================================
-
-print("\n" + "="*80)
-print("ISLAMIC BANKING STATISTICS - COMPLETED")
-print("="*80)
-
-sas_files = list(OUTPUT_DIR.glob('*.sas7bdat'))
-
-print(f"""
-Processing Date: {rdate} (Yesterday)
-Completion Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-Input Files:
-  CURRENT: {CURRENT_FILE}
-  SAVING:  {SAVING_FILE}
-  Entity filter: ENTITY_CD = '{ENTITY_FILTER}'
-
-Format Modules Used:
-  PBMISFMT:        {'✓ loaded' if PBMISFMT else '✗ not available (using inline logic)'}
-  PBBDPTFMT_AII:   {'✓ loaded' if PBBDPFMT else '✗ not available (using inline logic)'}
-
-OUTPUT DATASETS (SAS7BDAT only):
-1. DYIBU{reptmon:02d}  - Daily Islamic Balance Summary
-   Records: {len(dyibu):,}
-   
-2. AWSA{reptmon:02d}   - {datasets_config[0]['description']}
-   Records: {len(datasets_results.get(f'awsa{reptmon:02d}', pd.DataFrame())):,}
-   
-3. AWSB{reptmon:02d}   - {datasets_config[1]['description']}
-   Records: {len(datasets_results.get(f'awsb{reptmon:02d}', pd.DataFrame())):,}
-   
-4. AWSC{reptmon:02d}   - {datasets_config[2]['description']}
-   Records: {len(datasets_results.get(f'awsc{reptmon:02d}', pd.DataFrame())):,}
-   
-5. MUDH{reptmon:02d}   - {datasets_config[3]['description']}
-   Records: {len(datasets_results.get(f'mudh{reptmon:02d}', pd.DataFrame())):,}
-   
-6. AWCA{reptmon:02d}   - {datasets_config[4]['description']}
-   Records: {len(datasets_results.get(f'awca{reptmon:02d}', pd.DataFrame())):,}
-   
-7. AWCB{reptmon:02d}   - {datasets_config[5]['description']}
-   Records: {len(datasets_results.get(f'awcb{reptmon:02d}', pd.DataFrame())):,}
-
-Total Accounts Processed: {len(processed_df):,}
-
-Output Files Generated:
-- SAS7BDAT files: {len(sas_files)}
-- Output Directory: {OUTPUT_DIR}
-""")
-
-print(f"\n✓ Processing completed successfully!")
-print(f"✓ Output directory: {OUTPUT_DIR}")
-print(f"✓ Data processed for date: {reptdate.strftime('%Y-%m-%d')}")
+****************************************************
+* DAILY DEPOSIT EXTRACTION FOR MIS REPORTING       *
+* NOTE : DAILY EL COMPUTATION DONE IN EIBDMELW     *
+*        (23/07/02)                                *
+* INCLUDE NEW DATASTET: FOR BADRAN (A314)          *
+***************************************************;
+OPTIONS YEARCUTOFF=1930 NOCENTER;
+%LET AGELIMIT = 12;
+%LET MAXAGE   = 18;
+%LET AGEBELOW = 11;
+
+%INC PGM(PBBLNFMT);
+%INC PGM(PBBDPFMT);
+
+DATA REPTDATE;
+  INFILE DPTRBL LRECL=779 OBS=1;
+  INPUT @106 TBDATE PD6.;
+  REPTDATE=INPUT(SUBSTR(PUT(TBDATE, Z11.), 1, 8), MMDDYY8.);
+  SELECT;
+     WHEN(1 <= DAY(REPTDATE) <= 8) CALL SYMPUT('NOWK', PUT('1', $1.));
+     WHEN(9 <= DAY(REPTDATE) <= 15) CALL SYMPUT('NOWK', PUT('2', $1.));
+     WHEN(16 <= DAY(REPTDATE) <= 22) CALL SYMPUT('NOWK', PUT('3', $1.));
+     OTHERWISE CALL SYMPUT('NOWK', PUT('4', $1.));
+  END;
+  REPTDAT3=REPTDATE-31;
+  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR4.));
+  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
+  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
+  CALL SYMPUT('RDATE', PUT(REPTDATE, DDMMYY8.));
+  CALL SYMPUT('RDATE3', PUT(REPTDAT3,Z5.));
+RUN;
+ /*
+LIBNAME BNM "SAP.PBB.D&REPTYEAR" DISP=OLD;
+ */
+LIBNAME MIS "SAP.PBB.MIS.D&REPTYEAR" DISP=OLD;
+LIBNAME MISQ "SAP.PBB.MIS.OD.SASDATA" DISP=OLD;
+DATA MISQ.DDMV;
+  SET MISQ.DDMV;
+  IF REPTDATE=&RDATE3 THEN DELETE;
+RUN;
+*------------------------------------------------*
+*  MACRO TO DECLARE VARIABLES                    *
+*------------------------------------------------*;
+%MACRO DCLVAR;
+   RETAIN RD1-RD12 31 RD2 28 RD4 RD6 RD9 RD11 30;
+   ARRAY RPDAYS RD1-RD12;
+%MEND DCLVAR;
+*;
+PROC FORMAT;
+ *----------------------------------------------------------
+     FORMAT APPLICABLE TO PDMD'S SUMMARY REPORT OF
+     DAILY DEMAND DEPOSIT MOVEMENT BY RANGE
+ ----------------------------------------------------------;
+   INVALUE DDMOVE
+      LOW - < 300000  = 300000
+   300000 - < 500000  = 500000
+   500000 - <1000000  = 1000000
+  1000000 - <1500000  = 1500000
+  1500000 - <2000000  = 2000000
+  2000000 - <3000000  = 3000000
+  3000000 - <4000000  = 4000000
+  4000000 - <5000000  = 5000000
+  5000000 - <10000000 = 10000000
+  10000000 -  HIGH    = 10000001;
+ *----------------------------------------------------------
+     FORMAT FOR PDMD'S DAILY SUMMARY REPORT ON DEPOSITS
+     MOVEMENT BY RANGE
+ ----------------------------------------------------------;
+   INVALUE MVTDEP
+    LOW - 5000  = 5000
+   5000 - 10000 = 10000
+  10000 - 30000 = 30000
+  30000 - 50000 = 50000
+  50000 - 75000 = 75000
+  75000 - HIGH  = 80000;
+
+   INVALUE MVTACE
+    LOW - 5000  = 5000
+   5000 - 10000 = 10000
+  10000 - 30000 = 30000
+  30000 - 50000 = 50000
+  50000 - 75000 = 75000
+ 75000 - 100000 = 100000
+ 100000 - HIGH  = 200000;
+RUN;
+
+ /*
+DATA MELW1 (KEEP=INTP1-INTP999 MISC1-MISC999 SPTF1-SPTF999
+                 ODFIN1-ODFIN999 REPTDATE)
+     MELW12 (KEEP=SA1-SA999 SACAI1-SACAI999 CA1-CA999
+                 HDA1-HDA999 REPTDATE)
+     MELW13 (KEEP=ODCOM1-ODCOM999 ODIS1-ODIS999 ODMB1-ODMB999
+                 ODDH1-ODDH999 ODCAG1-ODCAG999 REPTDATE)
+ */
+DATA DYPOSN (KEEP=REPTDATE TOTSAVG TOTSAVGI TOTDMND TOTDMNDI TOTVOSF
+                  TOTVOSC OVDVOSF OVDVOSC TOTOVFT TOTFD TOTFDI
+                  ACESA ACECA TOTMBSA)
+     TEMP.DYDP (KEEP=REPTDATE BRANCH ACCTNO NAME DEBIT CREDIT DEPTYPE
+                    DPTYPE PRODUCT PRODCD CURBAL DYDPBAL APPRLIMT
+                    ACCYTD OPENDT MOVEMENT MVRANGE CUSTCODE SECOND)
+     DDMV (KEEP=REPTDATE BRANCH ACCTNO NAME DEBIT CREDIT DEPTYPE
+                     PRODCD PRODUCT CURBAL)
+     TEMP.SAVG (KEEP=ACCTNO BRANCH PRODUCT DEPTYPE NAME OPENIND RANGE
+                     RACE BDATE CURBAL PURPOSE PRODCD AGE ACCYTD OPENDT
+                     R2NGE)
+     DYIBU  (KEEP=REPTDATE SAI1-SAI999 CAI1-CAI999 CAIG1-CAIG999
+                  SNO1-SNO999 CNO1-CNO999 CGNO1-CGNO999 MBS1-MBS999
+                  MBSNO1-MBSNO999 CAIH1-CAIH999 CHNO1-CHNO999);
+  RETAIN REPTDATE;
+  ARRAY INTP{999};
+  ARRAY MISC{999};
+  ARRAY SPTF{999};
+  ARRAY ODFIN{999};
+  ARRAY SA{999};
+  ARRAY SACAI{999};
+  ARRAY CA{999};
+  ARRAY HDA{999};
+  ARRAY ODCOM{999};
+  ARRAY ODIS{999};
+  ARRAY ODMB{999};
+  ARRAY ODDH{999};
+  ARRAY ODCAG{999};
+  ARRAY SAI{999};
+  ARRAY MBS{999};
+  ARRAY CAI{999};
+  ARRAY CAIG{999}; /* PRODUCT 161, 61 */
+  ARRAY CAIH{999}; /* PRODUCT 163, 63 */
+  ARRAY SNO{999};
+  ARRAY MBSNO{999};
+  ARRAY CNO{999};
+  ARRAY CGNO{999}; /* PRODUCT 161 */
+  ARRAY CHNO{999}; /* PRODUCT 163 */
+  INFILE DPTRBL LRECL=779 END=LAST;
+  IF _N_=1 THEN DO;
+     INPUT @106 TBDATE PD6.;
+     REPTDATE=INPUT(SUBSTR(PUT(TBDATE, Z11.), 1, 8), MMDDYY8.);
+  END;
+
+  INPUT @3   BANKNO   PD2.
+        @24  REPTNO   PD3.
+        @27  FMTCODE  PD2. @;
+
+  IF BANKNO = 33 AND REPTNO = 1001 AND FMTCODE = 1 THEN DO;
+  INPUT @106 BRANCH PD4.
+        @110 ACCTNO PD6.
+        @116 NAME $15.
+        @143 DEBIT PD8.2
+        @151 CREDIT PD7.2
+        @158 CLOSEDT  PD6.
+        @164 OPENDT   PD6.
+        @176 CUSTCODE PD3.
+        @286 PURPOSE $1.
+        @338 OPENIND $1.
+        @399 RACE $1.
+        @397 PRODUCT PD2.
+        @431 DEPTYPE $1.
+        @432 INT1 PD6.2
+        @466 CURBAL PD7.2
+        @516 INT2 PD10.9
+        @566 APPRLIMT PD6.
+        @717 BDATE PD6.
+        @724 SECOND   PD3.;
+
+  INTPAYBL=SUM(INT1, INT2);
+  IF BRANCH=132  THEN BRANCH=168;
+
+  %DCLVAR;
+  IF OPENIND NOT IN ('B','C','P') AND PRODUCT NOT IN (297,298) THEN DO;
+     DYDPBAL=CURBAL; /* TO REPORT AS ACE SAVINGS & CURRENT PORTION */
+     MOVEMENT=CREDIT-DEBIT;
+     IF PRODUCT IN &ACE THEN MVRANGE=INPUT(ABS(MOVEMENT), MVTACE.);
+     ELSE MVRANGE=INPUT(ABS(MOVEMENT), MVTDEP.);
+
+     ACCYTD = 0;
+     IF OPENDT NE 0  AND CLOSEDT EQ 0 THEN DO;
+     IF YEAR(INPUT(SUBSTR(PUT(OPENDT, Z11.),1, 8), MMDDYY8.)) EQ
+        YEAR(INPUT("&RDATE", DDMMYY8.)) THEN
+        ACCYTD = 1;
+     END;
+
+  IF DEPTYPE='S' THEN DO;
+     PRODCD=PUT(PRODUCT, SAPROD.);
+     DPTYPE='S';
+     CUSTCD=PUT(CUSTCODE, SACUSTCD.);
+     IF CURBAL GE 0 THEN DO;
+       SELECT(PRODCD);
+         WHEN ('42120') DO;
+           TOTSAVG+CURBAL;
+           SA{BRANCH}+CURBAL;
+         END;
+         WHEN ('42320') DO;
+           TOTSAVGI+CURBAL;
+           SACAI{BRANCH}+CURBAL;
+           SAI{BRANCH}+CURBAL;
+           SNO{BRANCH}+1;
+           IF PRODUCT = 214 THEN DO;
+              TOTMBSA+CURBAL;
+              MBS{BRANCH}+CURBAL;
+              MBSNO{BRANCH}+1;
+           END;
+         END;
+         OTHERWISE;
+       END;
+       OUTPUT TEMP.DYDP;
+     END;
+     ELSE IF PRODCD = '42320' THEN DO;
+       SAI{BRANCH}+CURBAL;
+       SNO{BRANCH}+1;
+       IF PRODUCT = 214 THEN DO;
+          TOTMBSA+CURBAL;
+          MBS{BRANCH}+CURBAL;
+          MBSNO{BRANCH}+1;
+       END;
+     END;
+  END;
+  IF DEPTYPE IN ('D','N') THEN DO;
+     DPTYPE='D';
+     IF CURBAL GE 0 THEN DO;
+        PRODCD=PUT(PRODUCT, CAPROD.);
+        SELECT(PRODUCT);
+          WHEN(104) DO;
+            TOTVOSC+CURBAL;
+            CUSTCD='02';
+          END;
+          WHEN(105) DO;
+            TOTVOSF+CURBAL;
+            CUSTCD='81';
+          END;
+          OTHERWISE CUSTCD=PUT(CUSTCODE, DDCUSTCD.);
+        END;
+        SELECT(PRODCD);
+          WHEN ('42110') DO;
+             IF PRODUCT IN &ACE THEN ACECA+CURBAL;
+                TOTDMND+CURBAL;
+                CA{BRANCH}+CURBAL;
+                OUTPUT TEMP.DYDP;
+          END;
+          WHEN ('42180') DO;
+            HDA{BRANCH}+CURBAL;
+            IF PRODUCT IN (63,163) THEN DO;
+               CAI{BRANCH}+CURBAL;
+               CNO{BRANCH}+1;
+               CAIH{BRANCH}+CURBAL;
+               CHNO{BRANCH}+1;
+               TOTDMNDI+CURBAL;
+            END;
+            ELSE TOTDMND+CURBAL;
+            OUTPUT TEMP.DYDP;
+          END;
+          WHEN ('42310') DO;
+            TOTDMNDI+CURBAL;
+            SACAI{BRANCH}+CURBAL;
+            CAI{BRANCH}+CURBAL;
+            CNO{BRANCH}+1;
+            OUTPUT TEMP.DYDP;
+            IF PRODUCT IN (61,161) THEN DO;
+               CAIG{BRANCH}+CURBAL;
+               CGNO{BRANCH}+1;
+            END;
+          END;
+          OTHERWISE;
+        END;
+     END;
+     ELSE DO;
+        PRODCD=PUT(PRODUCT, CAPROD.);
+        IF PRODCD = '42110' THEN
+           OUTPUT DDMV;
+        IF PRODCD = '42310' THEN DO;
+           OUTPUT DDMV;
+           CAI{BRANCH}+CURBAL;
+           CNO{BRANCH}+1;
+           IF PRODUCT IN (61,161) THEN DO;
+              CAIG{BRANCH}+CURBAL;
+              CGNO{BRANCH}+1;
+           END;
+        END;
+        IF PRODCD = '42180' AND PRODUCT IN (63,163) THEN DO;
+           CAI{BRANCH}+CURBAL;
+           CNO{BRANCH}+1;
+           CAIH{BRANCH}+CURBAL;
+           CHNO{BRANCH}+1;
+        END;
+
+        CURBAL=(-1)*CURBAL;
+        PRODCD=PUT(PRODUCT, ODPROD.);
+        SELECT(PRODUCT);
+          WHEN(104) DO;
+            OVDVOSC+CURBAL;
+            CUSTCD='02';
+          END;
+          WHEN(105) DO;
+            OVDVOSF+CURBAL;
+            CUSTCD='81';
+          END;
+          OTHERWISE CUSTCD=PUT(CUSTCODE, ODCUSTCD.);
+        END;
+        IF PRODCD IN ('34180','34240','34380') THEN TOTOVFT+CURBAL;
+     END;
+  END;
+
+  IF DEPTYPE IN ('C') THEN DO;
+     PRODCD=PUT(PRODUCT, FDPRODD.);
+     CUSTCD=PUT(CUSTCODE, FDCUSTCD.);
+     SELECT(PRODCD);
+        WHEN ('42130') TOTFD+CURBAL;
+        WHEN ('42132') TOTFDI+CURBAL;
+        OTHERWISE;
+     END;
+  END;
+  ELSE IF DEPTYPE IN ('S') THEN DO;
+     /* WEEKLY & MONTHEND PROCESSING FOR SDRNGE DATASET */
+     /* MAINLY FOR PDMD'S WISE PROFILE REPORT & OTHERS  */
+     MTHEND='N';
+     MTH = RPDAYS(&REPTMON);
+     YY = &REPTYEAR;
+     IF "&REPTMON" = 2 THEN
+         IF MOD(YY,4) = 0 THEN MTH = 29;
+         ELSE MTH = 28;
+     IF "&REPTDAY" EQ MTH THEN MTHEND='Y';
+     IF ("&REPTDAY" IN ('08','15','22') OR MTHEND='Y') AND
+        CURBAL GE 0 THEN DO;
+        /****************************************************/
+        /** APPLY THE FORMAT                         **/
+        /****************************************************/
+        RACE=PUT(RACE, $RACE.);
+        RANGE=INPUT(CURBAL, S1RANGE.);
+        R2NGE=INPUT(CURBAL, S2RANGE.);
+        /******************************************/
+        /* CALCULATION OF AGE RANGE         */
+        /******************************************/
+        AGE = 0;
+        IF (BDATE NE 0) AND (BDATE NE .) THEN DO;
+           BDATE =INPUT(SUBSTR(PUT(BDATE, Z11.),1, 8), MMDDYY8.);
+           BDAY =DAY(BDATE);
+           BMONTH =MONTH(BDATE);
+           BYEAR =YEAR(BDATE);
+
+           AGE=(&REPTYEAR - BYEAR);
+           SELECT;
+              WHEN (AGE = &AGELIMIT) DO;
+                 IF (BMONTH = &REPTMON) AND
+                    (BDAY > &REPTDAY) THEN AGE=&AGEBELOW;
+                 ELSE IF BMONTH > &REPTMON THEN AGE=&AGEBELOW;
+              END;
+              WHEN (AGE = &MAXAGE) DO;
+                 IF (BMONTH = &REPTMON) AND
+                    (BDAY > &REPTDAY) THEN AGE=&AGELIMIT;
+                 ELSE IF BMONTH > &REPTMON THEN AGE=&AGELIMIT;
+              END;
+              WHEN (AGE > &MAXAGE) AGE = &MAXAGE;
+              WHEN (AGE < &AGELIMIT) AGE = &AGEBELOW;
+              OTHERWISE AGE = &AGELIMIT;
+           END;
+        END;
+        OUTPUT TEMP.SAVG;
+        END;
+  END;
+  /*
+  IF CUSTCD IN ('80','81','85','86','90','91','92',
+                '95','96','98','99') AND
+                DEPTYPE IN ('S','D','N','C') THEN DO;
+    SELECT(PRODCD);
+      WHEN('42110','42120','42130') INTP{BRANCH}+INTPAYBL;
+      WHEN('42310','42320','42132') SPTF{BRANCH}+INTPAYBL;
+      OTHERWISE MISC{BRANCH}+INTPAYBL;
+    END;
+  END;
+  SELECT;
+    WHEN (PRODCD = '34180' AND CUSTCD = '02') ODCOM{BRANCH}+CURBAL;
+    WHEN (PRODCD = '34180' AND CUSTCD = '03') ODIS{BRANCH}+CURBAL;
+    WHEN (PRODCD = '34180' AND CUSTCD = '11') ODFIN{BRANCH}+CURBAL;
+    WHEN (PRODCD = '34180' AND CUSTCD = '12') ODMB{BRANCH}+CURBAL;
+    WHEN (PRODCD = '34180' AND CUSTCD = '13') ODDH{BRANCH}+CURBAL;
+    WHEN (PRODCD = '34180' AND CUSTCD = '17') ODCAG{BRANCH}+CURBAL;
+    OTHERWISE;
+  END; */
+  END;
+  END;
+  IF LAST THEN OUTPUT /* MELW1 MELW12 MELW13 */ DYPOSN DYIBU;
+RUN;
+PROC APPEND DATA=DDMV BASE=MISQ.DDMV; RUN;
+ /*
+DATA MELW2 (KEEP=REPTDATE BRANCH ELDAY BNMCODE AMOUNT);
+  SET MELW1;
+  ARRAY INTP{999} INTP1-INTP999;
+  ARRAY MISC{999} MISC1-MISC999;
+  ARRAY SPTF{999} SPTF1-SPTF999;
+  ARRAY ODFIN{999} ODFIN1-ODFIN999;
+  SELECT("&NOWK");
+    WHEN('1') DO;
+      IF DAY(REPTDATE)=1 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=2 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=3 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=4 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=5 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=6 THEN ELDAY='DAYF';
+      IF DAY(REPTDATE)=7 THEN ELDAY='DAYG';
+      IF DAY(REPTDATE)=8 THEN ELDAY='DAYI';
+    END;
+    WHEN('2') DO;
+      IF DAY(REPTDATE)=9 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=10 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=11 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=12 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=13 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=14 THEN ELDAY='DAYF';
+      IF DAY(REPTDATE)=15 THEN ELDAY='DAYI';
+    END;
+    WHEN('3') DO;
+      IF DAY(REPTDATE)=16 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=17 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=18 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=19 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=20 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=21 THEN ELDAY='DAYF';
+      IF DAY(REPTDATE)=22 THEN ELDAY='DAYI';
+    END;
+    WHEN('4') DO;
+      IF DAY(REPTDATE)=23 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=24 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=25 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=26 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=27 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=28 THEN DO;
+         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
+         ELSE ELDAY='DAYF';
+      END;
+      IF DAY(REPTDATE)=29 THEN DO;
+         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
+         ELSE ELDAY='DAYG';
+      END;
+      IF DAY(REPTDATE)=30 THEN DO;
+         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
+         ELSE ELDAY='DAYH';
+      END;
+      IF DAY(REPTDATE)=31 THEN ELDAY='DAYI';
+    END;
+    OTHERWISE;
+  END;
+IF ELDAY NE ' ';
+  DO I=1 TO 999;
+    BRANCH=I;
+    BNMCODE='3410011000000Y'; AMOUNT=ODFIN{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BNMCODE='4911080000000Y'; AMOUNT=INTP{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BNMCODE='4929980000000Y'; AMOUNT=MISC{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BRANCH=SUM(I,3000);
+    BNMCODE='4929980000000Y'; AMOUNT=SPTF{I};
+    IF AMOUNT NE . THEN OUTPUT;
+  END;
+RUN;
+
+PROC DATASETS LIB=WORK NOLIST; DELETE MELW1; RUN;
+
+DATA MELW22 (KEEP=REPTDATE BRANCH ELDAY BNMCODE AMOUNT);
+  SET MELW12;
+  ARRAY SA{999}    SA1-SA999;
+  ARRAY SACAI{999} SACAI1-SACAI999;
+  ARRAY CA{999}    CA1-CA999;
+  ARRAY HDA{999}   HDA1-HDA999;
+  SELECT("&NOWK");
+    WHEN('1') DO;
+      IF DAY(REPTDATE)=1 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=2 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=3 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=4 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=5 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=6 THEN ELDAY='DAYF';
+      IF DAY(REPTDATE)=7 THEN ELDAY='DAYG';
+      IF DAY(REPTDATE)=8 THEN ELDAY='DAYI';
+    END;
+    WHEN('2') DO;
+      IF DAY(REPTDATE)=9 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=10 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=11 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=12 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=13 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=14 THEN ELDAY='DAYF';
+      IF DAY(REPTDATE)=15 THEN ELDAY='DAYI';
+    END;
+    WHEN('3') DO;
+      IF DAY(REPTDATE)=16 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=17 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=18 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=19 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=20 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=21 THEN ELDAY='DAYF';
+      IF DAY(REPTDATE)=22 THEN ELDAY='DAYI';
+    END;
+    WHEN('4') DO;
+      IF DAY(REPTDATE)=23 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=24 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=25 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=26 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=27 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=28 THEN DO;
+         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
+         ELSE ELDAY='DAYF';
+      END;
+      IF DAY(REPTDATE)=29 THEN DO;
+         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
+         ELSE ELDAY='DAYG';
+      END;
+      IF DAY(REPTDATE)=30 THEN DO;
+         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
+         ELSE ELDAY='DAYH';
+      END;
+      IF DAY(REPTDATE)=31 THEN ELDAY='DAYI';
+    END;
+    OTHERWISE;
+  END;
+IF ELDAY NE ' ';
+  DO I=1 TO 999;
+    BRANCH=I;
+    BNMCODE='4212000000000Y'; AMOUNT=SA{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BNMCODE='4230000000000Y'; AMOUNT=SACAI{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BNMCODE='4211000000000Y'; AMOUNT=CA{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BNMCODE='4218000000000Y'; AMOUNT=HDA{I};
+    IF AMOUNT NE . THEN OUTPUT;
+  END;
+RUN;
+
+PROC APPEND DATA=MELW22 BASE=MELW2; RUN;
+PROC DATASETS LIB=WORK NOLIST; DELETE MELW12 MELW22; RUN;
+
+DATA MELW23 (KEEP=REPTDATE BRANCH ELDAY BNMCODE AMOUNT);
+  SET MELW13;
+  ARRAY ODCOM{999} ODCOM1-ODCOM999;
+  ARRAY ODIS{999}  ODIS1-ODIS999;
+  ARRAY ODMB{999}  ODMB1-ODMB999;
+  ARRAY ODDH{999}  ODDH1-ODDH999;
+  ARRAY ODCAG{999} ODCAG1-ODCAG999;
+  SELECT("&NOWK");
+    WHEN('1') DO;
+      IF DAY(REPTDATE)=1 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=2 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=3 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=4 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=5 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=6 THEN ELDAY='DAYF';
+      IF DAY(REPTDATE)=7 THEN ELDAY='DAYG';
+      IF DAY(REPTDATE)=8 THEN ELDAY='DAYI';
+    END;
+    WHEN('2') DO;
+      IF DAY(REPTDATE)=9 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=10 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=11 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=12 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=13 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=14 THEN ELDAY='DAYF';
+      IF DAY(REPTDATE)=15 THEN ELDAY='DAYI';
+    END;
+    WHEN('3') DO;
+      IF DAY(REPTDATE)=16 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=17 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=18 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=19 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=20 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=21 THEN ELDAY='DAYF';
+      IF DAY(REPTDATE)=22 THEN ELDAY='DAYI';
+    END;
+    WHEN('4') DO;
+      IF DAY(REPTDATE)=23 THEN ELDAY='DAYA';
+      IF DAY(REPTDATE)=24 THEN ELDAY='DAYB';
+      IF DAY(REPTDATE)=25 THEN ELDAY='DAYC';
+      IF DAY(REPTDATE)=26 THEN ELDAY='DAYD';
+      IF DAY(REPTDATE)=27 THEN ELDAY='DAYE';
+      IF DAY(REPTDATE)=28 THEN DO;
+         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
+         ELSE ELDAY='DAYF';
+      END;
+      IF DAY(REPTDATE)=29 THEN DO;
+         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
+         ELSE ELDAY='DAYG';
+      END;
+      IF DAY(REPTDATE)=30 THEN DO;
+         IF DAY(REPTDATE+1)=1 THEN ELDAY='DAYI';
+         ELSE ELDAY='DAYH';
+      END;
+      IF DAY(REPTDATE)=31 THEN ELDAY='DAYI';
+    END;
+    OTHERWISE;
+  END;
+IF ELDAY NE ' ';
+  DO I=1 TO 999;
+    BRANCH=I;
+    BNMCODE='3410002000000Y'; AMOUNT=ODCOM{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BNMCODE='3410003000000Y'; AMOUNT=ODIS{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BNMCODE='3410012000000Y'; AMOUNT=ODMB{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BNMCODE='3410013000000Y'; AMOUNT=ODDH{I};
+    IF AMOUNT NE . THEN OUTPUT;
+    BNMCODE='3410017000000Y'; AMOUNT=ODCAG{I};
+    IF AMOUNT NE . THEN OUTPUT;
+  END;
+RUN;
+
+PROC APPEND DATA=MELW23 BASE=MELW2; RUN;
+PROC DATASETS LIB=WORK NOLIST; DELETE MELW13 MELW23; RUN;
+ */
+DATA DYIBU;
+  KEEP REPTDATE I SAI CAI CAIG CAIH SAINO CAINO CAIGNO CAIHNO MBS MBSNO;
+  SET DYIBU;
+  ARRAY SA{999}    SAI1-SAI999;
+  ARRAY MB{999}    MBS1-MBS999;
+  ARRAY CA{999}    CAI1-CAI999;
+  ARRAY CAG{999}   CAIG1-CAIG999;
+  ARRAY CAH{999}   CAIH1-CAIH999;
+  ARRAY SNO{999}   SNO1-SNO999;
+  ARRAY MBNO{999}  MBSNO1-MBSNO999;
+  ARRAY CNO{999}   CNO1-CNO999;
+  ARRAY CGNO{999}  CGNO1-CGNO999;
+  ARRAY CHNO{999}  CHNO1-CHNO999;
+  DO I = 1 TO 999;
+    SAI = SA(I); CAI = CA(I); CAIG = CAG(I); CAIH = CAH(I);
+    MBS = MB(I);
+    SAINO = SNO(I); CAINO = CNO(I); CAIGNO = CGNO(I); CAIHNO = CHNO(I);
+    MBSNO = MBNO(I);
+    IF SAI ^= . | CAI ^= . | CAIG ^= . | CAIH ^= . | MBS ^= .
+       THEN OUTPUT;
+  END;
+  RENAME I = BRANCH;
+RUN;
+
+DATA DYMVNT;
+  KEEP REPTDATE BRANCH ACCTNO NAME DEBIT CREDIT DEPTYPE
+       PRODUCT CURBAL APPRLIMT CUSTCODE SECOND;
+  SET TEMP.DYDP;
+  IF DEPTYPE = 'S' AND ABS(MOVEMENT) GE 50000 THEN OUTPUT;
+  ELSE IF DEPTYPE IN ('D','N') AND DPTYPE='D' THEN
+     IF (ABS(MOVEMENT) GE 100000  AND PRODUCT IN &ACE)
+     OR (ABS(MOVEMENT) GE 1000000) THEN OUTPUT;
+RUN;
+*;
+ **************************************************************
+   DAILY SAVINGS AND DEMAND DEPOSIT MOVEMENT BY BRANCH
+   SUMMARISE DATASET FOR DOWNLOADING TO PC
+ *************************************************************;
+PROC SUMMARY DATA=TEMP.DYDP NWAY;
+   CLASS BRANCH DPTYPE REPTDATE;
+   VAR   DYDPBAL;
+   OUTPUT OUT=TEMP.DYBRDP (DROP=_TYPE_ _FREQ_)
+          SUM=BALANCE;
+   WHERE PRODCD ^ IN ('42320','42310') AND PRODUCT ^ IN (104,105);
+RUN;
+*;
+ ***************************************************
+   DAILY DEMAND DEPOSIT CREDIT MOVEMENT REPORT
+ ***************************************************;
+ *----------------------------------------------------------
+     MANIPULATION PORTION FOR PDMD'S SUMMARY OF DAILY
+     DEMAND DEPOSIT CREDIT MOVEMENT REPORT.
+     ACE ITEMS ARE EXCLUDED. OBTAIN THE MOVEMENT RANGE
+ ----------------------------------------------------------;
+DATA TEMP.DYDDCR;
+   SET TEMP.DYDP;
+   IF DPTYPE='D';
+      IF PRODUCT ^ IN &ACE AND PRODCD ^= ('42310') AND PRODUCT NE 72;
+         PREBAL=0;
+         IF CURBAL >= 0;
+         /* CALCULATE PREVIOUS BALANCE */
+            PREBAL=CURBAL-(CREDIT-DEBIT);
+
+         /* TAKE ONLY THE CREDIT PORTION IF PREVIOUS BALANCE < 0 */
+            IF PREBAL < 0 THEN MOVEMENT=CURBAL;
+            ELSE MOVEMENT=CURBAL-PREBAL;
+
+            RANGE=INPUT(ABS(MOVEMENT),DDMOVE.);
+
+ *-------------------------------------------------------
+    SUMMARISE DATASET BY RANGE FOR DOWNLOADING TO PC
+ -------------------------------------------------------;
+PROC SUMMARY DATA=TEMP.DYDDCR NWAY;
+   CLASS REPTDATE RANGE;
+   VAR   MOVEMENT;
+   OUTPUT OUT=TEMP.DYDDCR
+          SUM= ;
+*;
+ *--------------------------------------------------------
+    SUMMARISE DATASET FOR DAILY SUMMARY DEPOSIT MOVEMENT
+    REPORT (EIBDDPMV)
+ ---------------------------------------------------------;
+PROC SUMMARY DATA=TEMP.DYDP NWAY;
+   CLASS REPTDATE MVRANGE;
+   VAR   MOVEMENT;
+   OUTPUT OUT=DYDPS (DROP=_FREQ_ _TYPE_)
+          SUM= ;
+   WHERE DPTYPE='S' & PRODUCT ^ IN &ACE & PRODCD='42120';
+RUN;
+*;
+PROC SUMMARY DATA=TEMP.DYDP NWAY;
+   CLASS REPTDATE MVRANGE;
+   VAR   MOVEMENT;
+   OUTPUT OUT=DYACE (DROP=_FREQ_ _TYPE_)
+          SUM= ;
+   WHERE DPTYPE='D' & PRODUCT IN &ACE;
+   /* CRITERIA (DYPTYPE='D') TO EXCLUDE THE DUPLICATED ONES IN
+      TEMP.DYDP (WHERE ACE IS SPLITTED INTO ACESA & ACECA BALANCES) */
+RUN;
+*;
+DATA _NULL_;
+   CALL SYMPUT('SDRNGE',N);
+   SET TEMP.SAVG NOBS=N;
+RUN;
+*;
+%MACRO WISEPBB;
+   %IF &SDRNGE > 0 %THEN %DO;
+      PROC SUMMARY DATA=TEMP.SAVG NWAY;
+      CLASS BRANCH RACE PRODCD PRODUCT RANGE AGE R2NGE;
+      VAR CURBAL ACCYTD;
+      OUTPUT OUT=MIS.SDRNGE&REPTMON
+                 (RENAME=(_FREQ_=NOACCT) DROP=_TYPE_)
+             SUM=CURBAL ACCYTD;
+      RUN;
+   %END;
+%MEND;
+%WISEPBB;
+*;
+%MACRO APPEND;
+%IF "&REPTDAY" EQ "01" OR
+    "&REPTDAY" EQ "09" OR
+    "&REPTDAY" EQ "16" OR
+    "&REPTDAY" EQ "23" %THEN
+    %DO;
+      PROC DATASETS LIB=BNM NOLIST;
+        DELETE MELW&REPTMON&NOWK;
+      RUN;
+      PROC APPEND DATA=MELW2 BASE=BNM.MELW&REPTMON&NOWK; RUN;
+    %END;
+%ELSE %DO;
+      DATA BNM.MELW&REPTMON&NOWK;
+        SET BNM.MELW&REPTMON&NOWK;
+        IF REPTDATE EQ INPUT("&RDATE", DDMMYY8.) THEN DELETE;
+      RUN;
+      PROC APPEND DATA=MELW2 BASE=BNM.MELW&REPTMON&NOWK; RUN;
+%END;
+%MEND APPEND;
+ /* %APPEND; */
+*;
+%MACRO MISAPPD;
+%IF "&REPTDAY" EQ "01" %THEN
+    %DO;
+      PROC DATASETS LIB=MIS NOLIST;
+        DELETE DYPOSN&REPTMON DYMVNT&REPTMON DYIBU&REPTMON
+               DYDPS&REPTMON DYACE&REPTMON;
+      RUN;
+      PROC APPEND DATA=DYMVNT BASE=MIS.DYMVNT&REPTMON; RUN;
+      PROC APPEND DATA=DYIBU  BASE=MIS.DYIBU&REPTMON; RUN;
+      PROC APPEND DATA=TEMP.DYDDCR BASE=MIS.DYDDCR&REPTMON; RUN;
+      PROC APPEND DATA=TEMP.DYBRDP BASE=MIS.DYBRDP&REPTMON; RUN;
+      PROC APPEND DATA=DYDPS  BASE=MIS.DYDPS&REPTMON; RUN;
+      PROC APPEND DATA=DYACE  BASE=MIS.DYACE&REPTMON; RUN;
+    %END;
+%ELSE %DO;
+      DATA MIS.DYMVNT&REPTMON;
+        SET MIS.DYMVNT&REPTMON;
+        IF REPTDATE EQ INPUT("&RDATE", DDMMYY8.) THEN DELETE;
+      RUN;
+
+      DATA MIS.DYMVNT&REPTMON;
+         SET MIS.DYMVNT&REPTMON DYMVNT;
+      RUN;
+      DATA MIS.DYIBU&REPTMON;
+        SET MIS.DYIBU&REPTMON;
+        IF REPTDATE EQ INPUT("&RDATE", DDMMYY8.) THEN DELETE;
+      RUN;
+      PROC APPEND DATA=DYIBU BASE=MIS.DYIBU&REPTMON; RUN;
+      DATA MIS.DYDDCR&REPTMON;
+        SET MIS.DYDDCR&REPTMON;
+        IF REPTDATE EQ INPUT("&RDATE", DDMMYY8.) THEN DELETE;
+      RUN;
+      PROC APPEND DATA=TEMP.DYDDCR BASE=MIS.DYDDCR&REPTMON; RUN;
+      DATA MIS.DYBRDP&REPTMON;
+        SET MIS.DYBRDP&REPTMON;
+        IF REPTDATE EQ INPUT("&RDATE", DDMMYY8.) THEN DELETE;
+      RUN;
+      PROC APPEND DATA=TEMP.DYBRDP BASE=MIS.DYBRDP&REPTMON; RUN;
+      DATA MIS.DYDPS&REPTMON;
+         SET MIS.DYDPS&REPTMON;
+         IF REPTDATE EQ INPUT("&RDATE", DDMMYY8.) THEN DELETE;
+      RUN;
+      PROC APPEND DATA=DYDPS BASE=MIS.DYDPS&REPTMON; RUN;
+      DATA MIS.DYACE&REPTMON;
+         SET MIS.DYACE&REPTMON;
+         IF REPTDATE EQ INPUT("&RDATE", DDMMYY8.) THEN DELETE;
+      RUN;
+      PROC APPEND DATA=DYACE BASE=MIS.DYACE&REPTMON; RUN;
+%END;
+%MEND MISAPPD;
+%MISAPPD;
+*;
+//
