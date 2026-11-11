@@ -30,6 +30,28 @@ zdate = int(reptdate.strftime('%y%m%d'))
 print(f"Islamic Banking Statistics - {rdate}")
 print(f"Processing data for date: {reptdate.strftime('%Y-%m-%d')}")
 
+# Build input file paths using reptday (with .sas7bdat extension)
+CURRENT_FILE = INPUT_DIR / f'intg_dp_acct_current_d{reptday}.sas7bdat'
+SAVING_FILE  = INPUT_DIR / f'intg_dp_acct_saving_d{reptday}.sas7bdat'
+
+print(f"\nInput files:")
+print(f"  CURRENT: {CURRENT_FILE}")
+print(f"  SAVING:  {SAVING_FILE}")
+
+# Verify input files exist before processing
+missing = []
+if not CURRENT_FILE.exists():
+    missing.append(str(CURRENT_FILE))
+if not SAVING_FILE.exists():
+    missing.append(str(SAVING_FILE))
+if missing:
+    print("\nERROR: Missing input file(s):")
+    for f in missing:
+        print(f"  - {f}")
+    sys.exit(1)
+
+ENTITY_FILTER = 'PIBB'
+
 # ============================================================================
 # FUNCTION TO SAVE SAS DATASET
 # ============================================================================
@@ -78,8 +100,8 @@ print("INSPECTING INPUT DATASETS")
 print("="*80)
 
 try:
-    saving_sample, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/saving.sas7bdat')
-    current_sample, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/current.sas7bdat')
+    saving_sample, _ = pyreadstat.read_sas7bdat(str(SAVING_FILE))
+    current_sample, _ = pyreadstat.read_sas7bdat(str(CURRENT_FILE))
 
     print(f"\nSAVING dataset columns (first 20):")
     print(f"  {', '.join(saving_sample.columns.tolist()[:20])}")
@@ -100,13 +122,33 @@ print("SECTION 1: DAILY ISLAMIC BALANCE SUMMARY (DYIBU)")
 print("="*80)
 
 try:
-    current_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/current.sas7bdat')
-    saving_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/saving.sas7bdat')
+    current_df, _ = pyreadstat.read_sas7bdat(str(CURRENT_FILE))
+    saving_df, _ = pyreadstat.read_sas7bdat(str(SAVING_FILE))
     print(f"Loaded CURRENT: {len(current_df)} rows, {len(current_df.columns)} columns")
-    print(f"Loaded SAVING: {len(saving_df)} rows, {len(saving_df.columns)} columns")
+    print(f"Loaded SAVING:  {len(saving_df)} rows, {len(saving_df.columns)} columns")
 except Exception as e:
     print(f"Error loading datasets: {e}")
     sys.exit(1)
+
+# Apply ENTITY_CD = 'PIBB' filter on both datasets
+entity_col_c = next((c for c in ['ENTITY_CD', 'entity_cd', 'Entity_cd'] if c in current_df.columns), None)
+entity_col_s = next((c for c in ['ENTITY_CD', 'entity_cd', 'Entity_cd'] if c in saving_df.columns), None)
+
+if entity_col_c is None:
+    print(f"\nERROR: ENTITY_CD column not found in CURRENT")
+    print(f"Available: {current_df.columns.tolist()[:20]}")
+    sys.exit(1)
+if entity_col_s is None:
+    print(f"\nERROR: ENTITY_CD column not found in SAVING")
+    print(f"Available: {saving_df.columns.tolist()[:20]}")
+    sys.exit(1)
+
+current_df = current_df[current_df[entity_col_c] == ENTITY_FILTER].copy()
+saving_df  = saving_df[saving_df[entity_col_s] == ENTITY_FILTER].copy()
+
+print(f"\nAfter ENTITY_CD = '{ENTITY_FILTER}' filter:")
+print(f"  CURRENT: {len(current_df)} rows")
+print(f"  SAVING:  {len(saving_df)} rows")
 
 # Detect column names
 def find_col(df, candidates):
@@ -261,8 +303,22 @@ column_map = {
 }
 
 try:
-    saving_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/saving.sas7bdat')
-    current_df, _ = pyreadstat.read_sas7bdat(f'{INPUT_DIR}/current.sas7bdat')
+    saving_df, _ = pyreadstat.read_sas7bdat(str(SAVING_FILE))
+    current_df, _ = pyreadstat.read_sas7bdat(str(CURRENT_FILE))
+
+    # Apply ENTITY_CD = 'PIBB' filter
+    entity_col_s = next((c for c in ['ENTITY_CD', 'entity_cd'] if c in saving_df.columns), None)
+    entity_col_c = next((c for c in ['ENTITY_CD', 'entity_cd'] if c in current_df.columns), None)
+    if entity_col_s is None or entity_col_c is None:
+        print("ERROR: ENTITY_CD column not found in one of the datasets")
+        sys.exit(1)
+
+    saving_df = saving_df[saving_df[entity_col_s] == ENTITY_FILTER].copy()
+    current_df = current_df[current_df[entity_col_c] == ENTITY_FILTER].copy()
+
+    print(f"After ENTITY_CD = '{ENTITY_FILTER}' filter:")
+    print(f"  SAVING:  {len(saving_df):,} rows")
+    print(f"  CURRENT: {len(current_df):,} rows")
 
     for orig, new in column_map.items():
         if orig in saving_df.columns:
@@ -457,6 +513,11 @@ sas_files = list(OUTPUT_DIR.glob('*.sas7bdat'))
 print(f"""
 Processing Date: {rdate} (Yesterday)
 Completion Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Input Files:
+  CURRENT: {CURRENT_FILE}
+  SAVING:  {SAVING_FILE}
+  Entity filter: ENTITY_CD = '{ENTITY_FILTER}'
 
 OUTPUT DATASETS (SAS7BDAT only):
 1. DYIBU{reptmon:02d}  - Daily Islamic Balance Summary
