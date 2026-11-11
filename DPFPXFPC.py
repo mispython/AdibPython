@@ -1,63 +1,183 @@
-EIBDMELW - Conventional BNM EL Daily Deposit Extract
-============================================================
+DATA REPTDATE;
+  REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+  SELECT(DAY(REPTDATE));
+    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
+    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
+    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
+    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3';
+                            WK2= '2'; WK3 = '1'; END;
+  END;
+  MM = MONTH(REPTDATE);
+  IF WK = '1' THEN DO;
+     MM1 = MM - 1;
+     IF MM1 = 0 THEN MM1 = 12;
+  END;
+  ELSE MM1 = MM;
+  MM2 = MM - 1;
+  IF MM2 = 0 THEN MM2 = 12;
+  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
+  SDESC = 'PUBLIC BANK BERHAD';
+  CALL SYMPUT('NOWK',PUT(WK,$1.));
+  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
+  CALL SYMPUT('NOWK2',PUT(WK2,$1.));
+  CALL SYMPUT('NOWK3',PUT(WK3,$1.));
+  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
+  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
+  CALL SYMPUT('REPTMON2',PUT(MM2,Z2.));
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
+  CALL SYMPUT('SDESC',PUT(SDESC,$26.));
+RUN;
 
-Connecting to SAS via SASPy (cfgname=default) ...
-SAS Connection established. Subprocess id is 840809
+ PROC COPY IN=DEPOBACK OUT=BNM;
+   SELECT FDWKLY
+          FDMTHLY;
+ RUN;
 
+PROC FORMAT;
+  VALUE KREMMTH
+    LOW - 0   = '51'
+      0 - 1   = '52'
+      1 - 2   = '53'
+      2 - 3   = '54'
+      3 - 4   = '81'
+      4 - 5   = '82'
+      5 - 6   = '83'
+      6 - 7   = '84'
+      7 - 8   = '85'
+      8 - 9   = '86'
+      9 - 10  = '87'
+     10 - 11  = '88'
+     11 - 12  = '89'
+     12 - HIGH = '60';
+RUN;
+%MACRO DCLVAR;
+   RETAIN RD1-RD12 FD1-FD12 31 RD2 FD2 28 RD4 RD6 RD9 RD11
+          FD4 FD6 FD9 FD11 30 RPYR RPMTH RPDAY;
+   ARRAY RPDAYS RD1-RD12;
+   ARRAY FDDAYS FD1-FD12;
+%MEND DCLVAR;
+*;
+%MACRO REMMTH;
+   FDYR  = YEAR(FDDATE);
+   FDMTH = MONTH(FDDATE);
+   FDDAY = DAY(FDDATE);
+   IF FDMTH = 2 THEN
+      IF MOD(FDYR,4) = 0 THEN FD2 = 29;
+      ELSE FD2 = 28;
+   IF FDDAY = FDDAYS(FDMTH) THEN FDDAY=RPDAYS(RPMTH);
+   REMY = FDYR - RPYR;
+   REMM = FDMTH - RPMTH;
+   REMD = FDDAY - RPDAY;
+   REMMTH = REMY*12 + REMM + REMD/RPDAYS(RPMTH);
+%MEND REMMTH;
 
-21   
-22   libname XMISOUT    '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDMELW/'  ;
-NOTE: Libref XMISOUT was successfully assigned as follows: 
-      Engine:        V9 
-      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDMELW
-23   
-SAS library XMISOUT assigned to /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDMELW/
+DATA ALM (KEEP=BIC CUSTCODE REMMTH CURBAL);
+   %DCLVAR;
+   SET BNM.FDMTHLY;
 
-Reading /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDMELW/DPTRBLGS.parquet ...
-Report Date: 11/07/2026
-Week: 2, Month: 07, Day: 11
-============================================================
-ELDAY: DAYC
+   IF _N_ = 1 THEN DO;
+      REPTDATE = INPUT("&RDATE",DDMMYY8.);
+      RPYR  = YEAR(REPTDATE);
+      RPMTH = MONTH(REPTDATE);
+      RPDAY = DAY(REPTDATE);
+      IF RPMTH = 2 THEN
+         IF MOD(RPYR,4) = 0 THEN RD2 = 29;
+         ELSE RD2 = 28;
+   END;
+   IF OPENIND='O' THEN DO;
+      FDDATE = INPUT(PUT(MATDATE,Z8.),YYMMDD8.);
+      %REMMTH;
+   END;
+   ELSE IF OPENIND='D' THEN REMMTH=-1;
+RUN;
 
-Processing DPTRBL parquet (CONVENTIONAL, COSTCTR NOT 3000-3999)...
-  ... 500,000 rows read, 399,154 kept
-  ... 1,000,000 rows read, 750,160 kept
-  ... 1,500,000 rows read, 1,158,890 kept
-  ... 2,000,000 rows read, 1,288,348 kept
-  ... 2,500,000 rows read, 1,681,719 kept
-  ... 3,000,000 rows read, 2,028,258 kept
-  ... 3,500,000 rows read, 2,133,508 kept
-  ... 4,000,000 rows read, 2,555,057 kept
-  ... 4,500,000 rows read, 2,967,021 kept
-  ... 5,000,000 rows read, 3,376,333 kept
-  ... 5,500,000 rows read, 3,614,708 kept
-  ... 6,000,000 rows read, 3,614,708 kept
-  ... 6,500,000 rows read, 3,614,708 kept
-  ... 7,000,000 rows read, 3,614,708 kept
-  ... 7,500,000 rows read, 3,765,801 kept
-  ... 8,000,000 rows read, 4,151,977 kept
-  ... 8,500,000 rows read, 4,526,472 kept
-  ... 9,000,000 rows read, 4,915,077 kept
-  ... 9,500,000 rows read, 5,329,711 kept
-  ... 10,000,000 rows read, 5,742,461 kept
-  ... 10,500,000 rows read, 6,142,376 kept
-  ... 11,000,000 rows read, 6,214,120 kept
-  ... 11,500,000 rows read, 6,214,120 kept
-  ... 12,000,000 rows read, 6,233,320 kept
-  Rows read: 12,256,290   kept (Conventional): 6,233,320
+PROC SUMMARY DATA=ALM NWAY;
+   CLASS BIC CUSTCODE REMMTH;
+   VAR   CURBAL;
+   OUTPUT OUT=ALM SUM=AMOUNT;
+RUN;
 
-Generating BNM code records...
-  Generated 12,987 BNM code records
+DATA ALMDEPT (KEEP=BNMCODE AMOUNT CUSTCODE REMMTH);
+   LENGTH BNMCODE $14.;
+   SET ALM;
 
-Writing to SAS table XMISOUT.MELW072 ...
-  Mid-week (Day 11): append (dedupe on REPTDATE)
-The SAS Data Set XMISOUT.MELW072 does not exist
-  NOTE: MELW072 not found — bootstrapping fresh table.
-
-============================================================
-EIBDMELW Complete
-============================================================
-Output  : XMISOUT.MELW072 (/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDMELW/)
-Records : 12,987
-ELDAY   : DAYC, Week: 2
-SAS Connection terminated. Subprocess id was 840809
+   RM=PUT(REMMTH,KREMMTH.);
+   SELECT(CUSTCODE);
+     WHEN('81','82','83','84') DO;
+        BNMCODE = BIC||CUSTCODE||RM||'0000Y'; OUTPUT;
+     END;
+     WHEN('85','86','87','88','89','90','91','92','95','96','98',
+          '99') DO;
+        BNMCODE = BIC||'85'||RM||'0000Y'; OUTPUT;
+     END;
+     OTHERWISE;
+   END;
+RUN;
+*;
+PROC SUMMARY DATA=ALMDEPT NWAY;
+   WHERE SUBSTR(BNMCODE,1,5) = '42130';
+   CLASS BNMCODE;
+   VAR   AMOUNT;
+   OUTPUT OUT=ALMDEPT1 (DROP=_TYPE_ _FREQ_) SUM=AMOUNT;
+RUN;
+*;
+TITLE1 'SPECIAL PURPOSE ITEMS (QUARTERLY): EXTERNAL LIABILITIES';
+TITLE2 'AS AT ' &RDATE;
+TITLE3 'CODE 81 & 85 FOR 42130-80-XX-0000Y';
+PROC PRINT DATA=ALMDEPT1;
+SUM AMOUNT;
+RUN;
+*;
+PROC SUMMARY DATA=ALMDEPT NWAY;
+   WHERE SUBSTR(BNMCODE,1,5) = '42132';
+   CLASS BNMCODE;
+   VAR   AMOUNT;
+   OUTPUT OUT=ALMDEPT1 (DROP=_TYPE_ _FREQ_) SUM=AMOUNT;
+RUN;
+*;
+TITLE1 'SPECIAL PURPOSE ITEMS (QUARTERLY): EXTERNAL LIABILITIES';
+TITLE2 'AS AT ' &RDATE;
+TITLE3 'CODE 81 & 85 FOR 42132-80-XX-0000Y';
+PROC PRINT DATA=ALMDEPT1;
+SUM AMOUNT;
+RUN;
+*;
+PROC SUMMARY DATA=ALMDEPT NWAY;
+   WHERE SUBSTR(BNMCODE,1,5) = '42630';
+   CLASS BNMCODE;
+   VAR   AMOUNT;
+   OUTPUT OUT=ALMDEPT1 (DROP=_TYPE_ _FREQ_) SUM=AMOUNT;
+RUN;
+*;
+TITLE1 'REPORT ON EXTERNAL LIABILITIES FOR FCY FD FROM FNBE (85)';
+TITLE2 'AS AT ' &RDATE;
+PROC PRINT DATA=ALMDEPT1;
+SUM AMOUNT;
+RUN;
+*;
+//*>OPC SCAN
+//*RUNSFTP  EXEC COZBATCH
+//*CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(CSASSFTP)
+//*           DD *
+//*lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+//*lzopts linerule=$lr
+//*cd TEXTFILE
+//*cd FIN
+//*put //SAP.PBB.RDAL.SP    REXL%OMM..TXT
+//*EOB
+//*****************************************************************
+//*  FTP HOST DATASETS TO DATA REPORT REPOSITORY SYSTEM (DRR)
+//*****************************************************************
+//*%OPC SCAN
+//RUNSFTP  EXEC COZBATCH
+//CMD.SYSUT1 DD DISP=SHR,DSN=OPER.PBB.PARMLIB(DRR#SFTP)
+//           DD *
+lzopts servercp=$servercp,notrim,overflow=trunc,mode=text
+lzopts linerule=$lr
+cd "FD-BNM REPORTING/PBB/BNM RPTG"
+put //SAP.PBB.RDAL.SP    REXL%OMM..TXT
+EOB
