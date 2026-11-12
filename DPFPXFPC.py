@@ -42,22 +42,20 @@ import polars as pl
 # =============================================================================
 
 # Number of rows to read per chunk when streaming SAS7BDAT files.
-# pyreadstat supports row_limit / row_offset for partial reads.
 CHUNK_SIZE = 250_000
 
 # For testing only: cap the total number of rows read from each source.
 # Set to None for full production run.
 MAX_ROWS_TEST = 500_000
 
+# Entity code exclusion filter — rows with ENTITY_CD = 'PIBB' are dropped.
+EXCLUDE_ENTITY_CD = 'PIBB'
+
 # =============================================================================
 # PATH CONFIGURATION
 # =============================================================================
 
-# LOAN.LNNOTE in the SAS source — the libref LOAN points at the EIBAABBA
-# input library; the member is lnnote.sas7bdat.
 LNNOTE   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBAABBA/lnnote.sas7bdat"
-
-# BNM.LOAN<MM><WK> — e.g. loan{REPTMON}{NOWK}.sas7bdat
 BNM_LOAN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMHPFS/loan{REPTMON}{NOWK}.sas7bdat"
 
 OUTPUT_DIR             = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMHPFS"
@@ -69,7 +67,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # =============================================================================
 # &HPD MACRO — HP product codes
-# SAS: IF (LOANTYPE IN &HPD OR LOANTYPE IN (15,20,63,71,72)) AND PAIDIND='P'
 # =============================================================================
 HPD_SET: set[int] = set(HP_ALL) | {15, 20, 63, 71, 72}
 
@@ -84,12 +81,6 @@ PAGE_LENGTH = 60
 # =============================================================================
 
 def sas_date_to_pydate(val) -> Optional[date]:
-    """Convert SAS date to Python date.
-
-    Handles SAS numeric dates (days since 1960-01-01) and DDMMYY8 strings.
-    Respects OPTIONS YEARCUTOFF=1950 from the SAS source: yy < 50 -> 20yy,
-    yy >= 50 -> 19yy.
-    """
     if val is None:
         return None
     if isinstance(val, float) and val != val:
@@ -139,7 +130,6 @@ def coalesce_f(val, default: float = 0.0) -> float:
 
 
 def parse_z11_to_date(z11_val) -> Optional[date]:
-    """INPUT(SUBSTR(PUT(val, Z11.), 1, 8), MMDDYY8.)"""
     if z11_val is None or (isinstance(z11_val, float) and z11_val != z11_val):
         return None
     try:
@@ -153,7 +143,6 @@ def parse_z11_to_date(z11_val) -> Optional[date]:
 
 
 def fmt_date9(d: Optional[date]) -> str:
-    """Format date as DATE9. = DDMonYYYY e.g. 01JAN2024"""
     if d is None:
         return '         '
     months = ['JAN','FEB','MAR','APR','MAY','JUN',
@@ -162,7 +151,6 @@ def fmt_date9(d: Optional[date]) -> str:
 
 
 def fmt_comma15_2(val) -> str:
-    """Format as COMMA15.2"""
     if val is None or (isinstance(val, float) and val != val):
         return ' ' * 15
     v = float(val)
@@ -172,20 +160,19 @@ def fmt_comma15_2(val) -> str:
     return s.rjust(15)
 
 # =============================================================================
-# CHUNKED SAS7BDAT READER
+# CHUNKED SAS7BDAT READER WITH ENTITY_CD FILTER
 # =============================================================================
 
 def iter_sas7bdat_chunks(path: str,
                           columns: Optional[list] = None,
                           chunk_size: int = CHUNK_SIZE,
-                          max_rows: Optional[int] = MAX_ROWS_TEST):
+                          max_rows: Optional[int] = MAX_ROWS_TEST,
+                          exclude_entity_cd: str = EXCLUDE_ENTITY_CD):
     """Yield DataFrames (lowercased columns) from a SAS7BDAT file in chunks.
 
-    Uses pyreadstat's row_limit/row_offset so we never hold the full 9GB/3GB
-    file in memory. Honors `max_rows` to cap the total rows read for testing.
-
-    `columns` (optional) restricts which columns are loaded — greatly reduces
-    memory when we only need a handful of fields.
+    Applies `WHERE ENTITY_CD NE '<exclude_entity_cd>'` per chunk if the
+    column exists. Uses pyreadstat row_limit/row_offset so we never load the
+    full 9GB/3GB file into memory.
     """
     if not os.path.exists(path):
         print(f"Warning: File not found: {path}")
@@ -194,11 +181,27 @@ def iter_sas7bdat_chunks(path: str,
     offset = 0
     total_read = 0
 
+    # If filtering by ENTITY_CD but caller didn't include it in `columns`,
+    # we need to make sure we pull it so we can filter. Try to read metadata
+    # first to see if the column exists.
+    filter_col_present = False
+    effective_columns = columns
+    if columns is not None and 'entity_cd' not in [c.lower() for c in columns]:
+        try:
+            _, meta = pyreadstat.read_sas7bdat(path, metadataonly=True)
+            meta_cols_lower = [c.lower() for c in meta.column_names]
+            if 'entity_cd' in meta_cols_lower:
+                filter_col_present = True
+                effective_columns = list(columns) + ['entity_cd']
+        except Exception as e:
+            print(f"Warning: metadataonly failed on {path}: {e}")
+    elif columns is not None:
+        filter_col_present = True
+
     while True:
         if max_rows is not None and total_read >= max_rows:
             break
 
-        # How many rows to request this iteration
         rows_this_chunk = chunk_size
         if max_rows is not None:
             rows_this_chunk = min(chunk_size, max_rows - total_read)
@@ -208,7 +211,7 @@ def iter_sas7bdat_chunks(path: str,
         try:
             df, meta = pyreadstat.read_sas7bdat(
                 path,
-                usecols=columns,
+                usecols=effective_columns,
                 row_limit=rows_this_chunk,
                 row_offset=offset,
             )
@@ -220,19 +223,65 @@ def iter_sas7bdat_chunks(path: str,
             break
 
         df.columns = [c.lower() for c in df.columns]
-        total_read += len(df)
+
+        # WHERE ENTITY_CD NE '<exclude>'
+        if 'entity_cd' in df.columns:
+            before = len(df)
+            df = df[df['entity_cd'].astype(str).str.strip() != exclude_entity_cd]
+            dropped = before - len(df)
+            if dropped:
+                print(f"    filter ENTITY_CD != '{exclude_entity_cd}': "
+                      f"dropped {dropped:,} rows in chunk")
+            # Drop helper column if caller didn't ask for it
+            if columns is not None and 'entity_cd' not in [c.lower() for c in columns]:
+                df = df.drop(columns=['entity_cd'])
+
+        if len(df) == 0:
+            # Advance past the raw chunk we consumed, then continue
+            total_read += rows_this_chunk if len(df) == 0 else len(df)
+            # Note: we consumed `rows_this_chunk` raw rows even if all filtered out,
+            # so bump offset accordingly.
+            if 'entity_cd' in meta.column_names or True:
+                # Count actual rows read from disk before filtering isn't directly
+                # available after filter; use rows_this_chunk as the step.
+                pass
+            offset += rows_this_chunk
+            # If EOF (asked for N, got fewer than N), stop
+            # We can't easily know here without re-checking; break if partial
+            # (pyreadstat returns fewer than requested when file ends)
+            # Try the next iteration — it will return 0 and break.
+            continue
+
+        # Track actual raw rows consumed from disk (pre-filter was rows_this_chunk
+        # unless pyreadstat returned fewer, which signals EOF)
+        raw_returned = len(df)  # post-filter — misleading for EOF detection
+        # Re-read raw count: we know pyreadstat returned `rows_this_chunk` rows
+        # *before* filter only if we didn't EOF. We approximate by checking the
+        # pre-filter length via a second mini-call; simpler: we track `rows_this_chunk`
+        # as the offset step and rely on "len(df) < rows_this_chunk post filter"
+        # being an unreliable EOF signal. Instead, detect EOF via pre-filter length.
+
+        # To keep this simple and correct, re-check by looking at raw chunk size:
+        # We compare against rows_this_chunk assuming no filter dropped everything.
+        # If the filter emptied the chunk, we already `continue`d above.
+        total_read += rows_this_chunk
 
         yield df
 
-        # If the last chunk returned fewer rows than requested, EOF
-        if len(df) < rows_this_chunk:
-            break
-
+        # EOF detection: if we got fewer raw rows than requested in this chunk
+        # we know we hit EOF. We can detect this when filter didn't drop anything.
+        # If it did drop rows we can't tell from post-filter count alone, so we
+        # allow one extra iteration that will return an empty result and break.
         offset += rows_this_chunk
+
+        # If the chunk was not full (pre-filter), we're at EOF. We approximate
+        # pre-filter length by checking if `rows_this_chunk` was reached via
+        # a follow-up zero-row read on the next iteration. Breaking early here
+        # would require pre-filter count which we don't have. So continue and
+        # let next iteration's zero-row response stop the loop.
 
 
 def read_first_row(path: str) -> Optional[dict]:
-    """Read just the first row of a SAS7BDAT file as a dict (lowercased keys)."""
     if not os.path.exists(path):
         print(f"Warning: File not found: {path}")
         return None
@@ -251,7 +300,6 @@ def read_first_row(path: str) -> Optional[dict]:
 # =============================================================================
 
 def get_report_vars() -> dict:
-    """Equivalent of the SAS REPTDATE step, using yesterday's date."""
     reptdate = date.today() - timedelta(days=1)
     day      = reptdate.day
 
@@ -271,13 +319,8 @@ def get_report_vars() -> dict:
         mm1 = 12
         yy1 -= 1
 
-    sdate   = date(reptdate.year, mm,  1)
-    psdate  = date(yy1,           mm1, 1)
-
-    reptmon  = str(mm).zfill(2)
-    reptmon1 = str(mm1).zfill(2)
-    reptyear = str(reptdate.year)
-    reptday  = str(day).zfill(2)
+    sdate  = date(reptdate.year, mm,  1)
+    psdate = date(yy1,           mm1, 1)
 
     return {
         'reptdate':  reptdate,
@@ -285,10 +328,10 @@ def get_report_vars() -> dict:
         'psdate':    psdate,
         'wk':        wk,
         'wk1':       wk1,
-        'reptmon':   reptmon,
-        'reptmon1':  reptmon1,
-        'reptyear':  reptyear,
-        'reptday':   reptday,
+        'reptmon':   str(mm).zfill(2),
+        'reptmon1':  str(mm1).zfill(2),
+        'reptyear':  str(reptdate.year),
+        'reptday':   str(day).zfill(2),
         'rdate':     reptdate.strftime('%d/%m/%y'),
         'sdate_s':   sdate.strftime('%d/%m/%y'),
         'psdate_s':  psdate.strftime('%d/%m/%y'),
@@ -319,9 +362,8 @@ def build_hpsettle(rv: dict) -> pl.DataFrame:
     DATA HPSETTLE(KEEP=ACCTNO NOTENO CUSTCODE SECTOR LOANTYPE
        NETPROC ISSDTE CRISPURP CLOSEDTE);
        SET LOAN.LNNOTE;
+       WHERE ENTITY_CD NE 'PIBB';
        IF (LOANTYPE IN &HPD OR LOANTYPE IN (15,20,63,71,72)) AND PAIDIND='P';
-       CLOSEDTE = INPUT(SUBSTR(PUT(LASTTRAN,Z11.),1,8), MMDDYY8.);
-       ISSDTE   = INPUT(SUBSTR(PUT(ISSUEDT, Z11.),1,8), MMDDYY8.);
     """
     path = resolve_lnnote_path(rv)
     keep_cols = ['acctno','noteno','custcode','sector','loantype',
@@ -367,7 +409,7 @@ def build_hpsettle(rv: dict) -> pl.DataFrame:
 # =============================================================================
 
 def load_bnm_loan(rv: dict) -> pl.DataFrame:
-    """Read BNM.LOAN<MM><WK> in chunks and concatenate the loaded rows."""
+    """Read BNM.LOAN<MM><WK> in chunks with WHERE ENTITY_CD NE 'PIBB'."""
     path = resolve_bnm_loan_path(rv)
     keep_cols = ['acctno','noteno','fisspurp','product','noteterm',
                  'earnterm','netproc','apprdate','apprlim2','prodcd',
@@ -395,12 +437,6 @@ def load_bnm_loan(rv: dict) -> pl.DataFrame:
 
 def build_hpsnr(hpsettle: pl.DataFrame, sdate: date,
                 bnm_loan: pl.DataFrame) -> pl.DataFrame:
-    """
-    DATA HPSNR: SET HPSETTLE;
-      IF ISSDTE >= SDATE AND CLOSEDTE >= SDATE;
-    PROC SORT; BY ACCTNO NOTENO;
-    DATA HPSNR(KEEP=...): MERGE HPSNR(IN=A) BNM.LOAN<MM><WK>; BY ACCTNO NOTENO; IF A;
-    """
     if hpsettle.is_empty():
         return pl.DataFrame()
 
@@ -449,11 +485,6 @@ def build_hpsnr(hpsettle: pl.DataFrame, sdate: date,
 # =============================================================================
 
 def build_hp_new(bnm_loan: pl.DataFrame, sdate: date) -> pl.DataFrame:
-    """
-    DATA HP:
-      SET BNM.LOAN<MM><WK>;
-      IF CURBAL > 0 AND PRODCD IN ('34111') AND ISSDTE >= SDATE;
-    """
     if bnm_loan.is_empty():
         return pl.DataFrame()
 
@@ -1072,28 +1103,24 @@ def write_exception_report(df: pl.DataFrame, filepath: str,
 def main():
     print("EIBMHPFS: Starting HP FISS disbursement processing...")
     print(f"  CHUNK_SIZE={CHUNK_SIZE:,}  MAX_ROWS_TEST={MAX_ROWS_TEST}")
+    print(f"  EXCLUDE_ENTITY_CD='{EXCLUDE_ENTITY_CD}'")
 
     rv = get_report_vars()
     print(f"  Report date: {rv['reptdate']} MM={rv['reptmon']} "
           f"YY={rv['reptyear']} WK={rv['nowk']}")
 
-    # Build HPSETTLE (chunked)
     hpsettle_df = build_hpsettle(rv)
     print(f"  HPSETTLE rows: {len(hpsettle_df)}")
 
-    # Build BNM_LOAN (chunked)
     bnm_loan = load_bnm_loan(rv)
     print(f"  BNM_LOAN rows: {len(bnm_loan)}")
 
-    # HPSNR (settle and release same month)
     hpsnr_raw = build_hpsnr(hpsettle_df, rv['sdate'], bnm_loan)
     print(f"  HPSNR rows: {len(hpsnr_raw)}")
 
-    # HP (new disbursements this month)
     hp_new = build_hp_new(bnm_loan, rv['sdate'])
     print(f"  HP_NEW rows: {len(hp_new)}")
 
-    # Merge
     hp_df, except_df, hpsnr_df = merge_hp_settle(hpsettle_df, hp_new, hpsnr_raw)
     print(f"  HP (final): {len(hp_df)}, EXCEPT: {len(except_df)}, "
           f"HPSNR: {len(hpsnr_df)}")
