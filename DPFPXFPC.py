@@ -15,10 +15,20 @@ ESMR: 06-1485, 06-1762
 
 # %INC PGM(PBBLNFMT) — PBBLNFMT is a genuine dependency of this program.
 # The put() function from PBBLNFMT is used for sector mapping:
-#   $NEWSECT.  -> put(code, 'NEWSECT')  maps old sector codes to new codes
-#   $VALIDSE.  -> put(code, 'VALIDSE')  returns 'VALID' or 'INVALID'
+#   $NEWSECT.  -> put(code, '$NEWSECT')  maps old sector codes to new codes
+#   $VALIDSE.  -> put(code, '$VALIDSE')  returns 'VALID' or 'INVALID'
+#
+# HP_ALL is exported by PBBLNFMT (alias of HP macro) as:
+#   [128,130,131,132,380,381,700,705,720,725,983,993,996,678,679,698,699]
 
 from PBBLNFMT import put
+
+try:
+    from PBBLNFMT import HP_ALL
+except ImportError:
+    # Fallback for older PBBLNFMT versions that don't export HP_ALL
+    HP_ALL = [128, 130, 131, 132, 380, 381, 700, 705, 720, 725,
+              983, 993, 996, 678, 679, 698, 699]
 
 import os
 import pyreadstat
@@ -31,8 +41,12 @@ import polars as pl
 # PATH CONFIGURATION
 # =============================================================================
 
-LNNOTE  = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS/enrh_ln_note_m{REPTMON}.sas7bdat"
-BNM_LOAN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMHPFS/loan{REPTMON}{NOWK}.sas7bdat"    
+# LOAN.LNNOTE in the SAS source — the libref LOAN points at the EIBAABBA
+# input library; the member is lnnote.sas7bdat.
+LNNOTE   = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBAABBA/lnnote.sas7bdat"
+
+# BNM.LOAN<MM><WK> — e.g. loan{REPTMON}{NOWK}.sas7bdat
+BNM_LOAN = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBMHPFS/loan{REPTMON}{NOWK}.sas7bdat"
 
 OUTPUT_DIR             = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBMHPFS"
 RDAL_TXT               = os.path.join(OUTPUT_DIR, "hp_rdal.txt")
@@ -44,10 +58,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # =============================================================================
 # &HPD MACRO — HP product codes
 # SAS: IF (LOANTYPE IN &HPD OR LOANTYPE IN (15,20,63,71,72)) AND PAIDIND='P'
-# HP_ALL from SAS: [128,130,131,132,380,381,700,705,720,725,983,993,996,678,679,698,699]
+#
+# &HPD is the subset of HP_ALL [128,130,131,132,380,381,700,705,720,725]
+# that identifies actual HP products (the remaining HP_ALL entries like
+# 983, 993, 996, 678, 679, 698, 699 are "N/M" placeholders).
+# Additionally SAS allows 15,20,63,71,72.
 # =============================================================================
-HP_ALL = [128, 130, 131, 132, 380, 381, 700, 705, 720, 725, 
-          983, 993, 996, 678, 679, 698, 699]
 HPD_SET: set[int] = set(HP_ALL) | {15, 20, 63, 71, 72}
 
 # =============================================================================
@@ -61,33 +77,41 @@ PAGE_LENGTH = 60
 # =============================================================================
 
 def sas_date_to_pydate(val) -> Optional[date]:
-    """Convert SAS date to Python date"""
-    if val is None or (isinstance(val, float) and val != val):
+    """Convert SAS date to Python date.
+
+    Handles SAS numeric dates (days since 1960-01-01) and DDMMYY8 strings.
+    Respects OPTIONS YEARCUTOFF=1950 from the SAS source: yy < 50 -> 20yy,
+    yy >= 50 -> 19yy.
+    """
+    if val is None:
+        return None
+    if isinstance(val, float) and val != val:
         return None
     if isinstance(val, (int, float)):
         return date(1960, 1, 1) + timedelta(days=int(val))
     if isinstance(val, date):
         return val
     if isinstance(val, str):
-        # Try to parse DDMMYY8 format
-        try:
-            if len(val) == 8:
-                dd = int(val[0:2])
-                mm = int(val[2:4])
-                yy = int(val[4:6])
-                # Assuming 20xx for years < 50, 19xx for >= 50
-                if yy < 50:
-                    yyyy = 2000 + yy
-                else:
-                    yyyy = 1900 + yy
+        s = val.strip()
+        if len(s) == 8 and s.isdigit():
+            try:
+                dd = int(s[0:2])
+                mm = int(s[2:4])
+                yy = int(s[4:8])
+                # YEARCUTOFF=1950
+                yyyy = (2000 + yy) if yy < 50 else (1900 + yy)
                 return date(yyyy, mm, dd)
-        except (ValueError, TypeError):
-            pass
+            except (ValueError, TypeError):
+                pass
     return None
 
 
 def coalesce_s(val, default: str = '') -> str:
-    return str(val).strip() if val is not None else default
+    if val is None:
+        return default
+    if isinstance(val, float) and val != val:
+        return default
+    return str(val).strip()
 
 
 def coalesce_i(val, default: int = 0) -> int:
@@ -151,11 +175,10 @@ def fmt_comma15_2(val) -> str:
 # =============================================================================
 
 def get_report_vars() -> dict:
+    """Equivalent of the SAS REPTDATE step, using yesterday's date instead
+    of reading LOAN.REPTDATE.
     """
-    Using datetime.timedelta(days=1) to get previous day as report date
-    """
-    # Get yesterday's date
-    reptdate = date.today() - timedelta(days=2)
+    reptdate = date.today() - timedelta(days=1)
     day      = reptdate.day
 
     if day == 8:
@@ -207,16 +230,15 @@ def get_report_vars() -> dict:
 # =============================================================================
 
 def load_sas7bdat_lowercase(path: str) -> pl.DataFrame:
-    """
-    Read SAS7BDAT file using pyreadstat and convert column names to lowercase
+    """Read SAS7BDAT file using pyreadstat and convert column names to
+    lowercase for uniform handling.
     """
     if not os.path.exists(path):
         print(f"Warning: File not found: {path}")
         return pl.DataFrame()
-    
+
     try:
         df, meta = pyreadstat.read_sas7bdat(path)
-        # Convert column names to lowercase
         df.columns = [col.lower() for col in df.columns]
         return pl.from_pandas(df)
     except Exception as e:
@@ -230,7 +252,7 @@ def load_sas7bdat_lowercase(path: str) -> pl.DataFrame:
 def load_bnm_loan(rv: dict) -> pl.DataFrame:
     path = (BNM_LOAN
             .replace('{REPTMON}', rv['reptmon'])
-            .replace('{NOWK}', rv['nowk'])
+            .replace('{NOWK}',    rv['nowk'])
             .replace('{REPTYEAR}', rv['reptyear']))
     return load_sas7bdat_lowercase(path)
 
@@ -247,7 +269,8 @@ def build_hpsettle(rv: dict) -> pl.DataFrame:
        CLOSEDTE = INPUT(SUBSTR(PUT(LASTTRAN,Z11.),1,8), MMDDYY8.);
        ISSDTE   = INPUT(SUBSTR(PUT(ISSUEDT, Z11.),1,8), MMDDYY8.);
     """
-    df = load_sas7bdat_lowercase(LNNOTE)
+    path = LNNOTE.replace('{REPTMON}', rv['reptmon'])
+    df = load_sas7bdat_lowercase(path)
 
     if df.is_empty():
         return pl.DataFrame()
@@ -257,9 +280,8 @@ def build_hpsettle(rv: dict) -> pl.DataFrame:
     avail = [c for c in keep if c in df.columns]
     df    = df.select(avail)
 
-    rows     = df.to_dicts()
     out_rows = []
-    for row in rows:
+    for row in df.to_dicts():
         loantype = coalesce_i(row.get('loantype'))
         paidind  = coalesce_s(row.get('paidind'))
         if loantype not in HPD_SET:
@@ -283,12 +305,12 @@ def build_hpsettle(rv: dict) -> pl.DataFrame:
 
     return pl.from_dicts(out_rows) if out_rows else pl.DataFrame()
 
-
 # =============================================================================
 # BUILD HPSNR — settled and released same month
 # =============================================================================
 
-def build_hpsnr(hpsettle: pl.DataFrame, sdate: date, bnm_loan: pl.DataFrame) -> pl.DataFrame:
+def build_hpsnr(hpsettle: pl.DataFrame, sdate: date,
+                bnm_loan: pl.DataFrame) -> pl.DataFrame:
     """
     DATA HPSNR: SET HPSETTLE;
       IF ISSDTE >= SDATE AND CLOSEDTE >= SDATE;
@@ -315,7 +337,6 @@ def build_hpsnr(hpsettle: pl.DataFrame, sdate: date, bnm_loan: pl.DataFrame) -> 
     if bnm_loan.is_empty():
         return hpsnr
 
-    # MERGE HPSNR(IN=A) BNM.LOAN; BY ACCTNO NOTENO; IF A
     loan_keep = [c for c in ['acctno','noteno','fisspurp','product','noteterm',
                               'earnterm','netproc','apprdate','apprlim2','prodcd',
                               'custcd','amtind','sectorcd','balance','issdte',
@@ -360,15 +381,13 @@ def build_hp_new(bnm_loan: pl.DataFrame, sdate: date) -> pl.DataFrame:
 
     out_rows = []
     for row in df.to_dicts():
-        curbal  = coalesce_f(row.get('curbal'))
-        prodcd  = coalesce_s(row.get('prodcd'))
-        issdte  = row.get('issdte')
+        curbal = coalesce_f(row.get('curbal'))
+        prodcd = coalesce_s(row.get('prodcd'))
+        issdte = row.get('issdte')
 
-        if isinstance(issdte, (int, float)):
+        if isinstance(issdte, (int, float, str)):
             issdte = sas_date_to_pydate(issdte)
-        elif isinstance(issdte, str):
-            issdte = sas_date_to_pydate(issdte)
-            
+
         if issdte is None:
             continue
         if curbal > 0 and prodcd == '34111' and issdte >= sdate:
@@ -439,9 +458,9 @@ def merge_hp_settle(hpsettle_df: pl.DataFrame, hp_new: pl.DataFrame,
         if not settle.is_empty():
             merged = hp_sorted.join(settle, on='acctno', how='left', suffix='_st')
             for row in merged.to_dicts():
-                in_b  = row.get('onote') is not None
-                issdte   = row.get('issdte')
-                oissdte  = row.get('oissdte')
+                in_b    = row.get('onote') is not None
+                issdte  = row.get('issdte')
+                oissdte = row.get('oissdte')
 
                 if in_b:
                     except_rows.append(dict(row))
@@ -469,8 +488,8 @@ def merge_hp_settle(hpsettle_df: pl.DataFrame, hp_new: pl.DataFrame,
 
     # DATA HP: SET HP HPSNR
     if not final_hpsnr.is_empty():
-        hp_df = pl.concat([hp_df, final_hpsnr], how='diagonal') if not hp_df.is_empty() \
-                else final_hpsnr
+        hp_df = pl.concat([hp_df, final_hpsnr], how='diagonal') \
+                if not hp_df.is_empty() else final_hpsnr
 
     return hp_df, except_df, final_hpsnr
 
@@ -481,23 +500,49 @@ def merge_hp_settle(hpsettle_df: pl.DataFrame, hp_new: pl.DataFrame,
 def apply_sectcd_mapping(rows: list) -> list:
     """
     DATA ALM:
-       SECTA    = PUT(SECTORCD, $NEWSECT.);   -> put(sectorcd, 'NEWSECT')
-       SECVALID = PUT(SECTORCD, $VALIDSE.);   -> put(sectorcd, 'VALIDSE')
+       SECTA    = PUT(SECTORCD, $NEWSECT.);
+       SECVALID = PUT(SECTORCD, $VALIDSE.);
        IF SECTA NE '    ' THEN SECTCD = SECTA;
        ELSE                    SECTCD = SECTORCD;
     Then remap SECTCD when SECVALID = 'INVALID'.
+
+    Behavioural notes matching SAS PUT():
+      - $NEWSECT has no OTHER rule, so PUT() on an unmapped code returns
+        the input value itself. So SECTA is always non-blank for non-blank
+        inputs -> SECTCD = SECTA = original code (fallthrough).
+      - $VALIDSE has an OTHER rule of 'INVALID' -> unmapped codes get flagged.
     """
     for row in rows:
-        scd      = coalesce_s(row.get('sectorcd'))
-        secta    = put(scd, 'NEWSECT', '')    # $NEWSECT. from PBBLNFMT
-        secvalid = put(scd, 'VALIDSE', '')    # $VALIDSE. from PBBLNFMT
+        scd = coalesce_s(row.get('sectorcd'))
+
+        # PUT(SECTORCD, $NEWSECT.)
+        secta = put(scd, '$NEWSECT')
+        if secta is None:
+            secta = scd
+        else:
+            secta = str(secta)
+
+        # PUT(SECTORCD, $VALIDSE.)
+        secvalid = put(scd, '$VALIDSE')
+        if secvalid is None:
+            secvalid = ''
+        else:
+            secvalid = str(secvalid)
+
         row['secvalid'] = secvalid
+
         # IF SECTA NE '    ' THEN SECTCD=SECTA; ELSE SECTCD=SECTORCD;
-        sectcd = secta if secta.strip() else scd
+        if secta.strip() and secta.strip() != '    ':
+            sectcd = secta.strip()
+        else:
+            sectcd = scd
+
         # IF SECVALID='INVALID' THEN DO; remap SECTCD; END;
         if secvalid == 'INVALID':
             sectcd = remap_invalid_sectcd(sectcd)
+
         row['sectcd'] = sectcd
+
     return rows
 
 
@@ -565,7 +610,7 @@ def expand_alm2_rows(row: dict) -> list:
     if sectcd in ('3431','3432','3433'): emit('3430')
     if sectcd in ('3551','3552'):        emit('3550')
     if sectcd in ('3611','3619'):        emit('3610')
-    if sectcd in ('3710','3720','3730','3720','3721','3731','3732'):
+    if sectcd in ('3710','3720','3730','3721','3731','3732'):
         emit('3700')
         if sectcd == '3721': emit('3720')
         if sectcd in ('3731','3732'): emit('3730')
@@ -667,7 +712,7 @@ def build_alm_with_sector(hp_df: pl.DataFrame) -> pl.DataFrame:
     """
     Full sector mapping pipeline:
     1. PROC SUMMARY by SECTORCD AMTIND
-    2. Apply $NEWSECT. (format_newsect) / $VALIDSE. (format_validse) -> SECTCD
+    2. Apply $NEWSECT. / $VALIDSE. -> SECTCD
     3. Expand ALM2 sub-sector rows
     4. DATA ALM: SET ALM(IN=A) ALM2; IF A THEN SECTORCD=SECTCD
     5. DATA ALMA: rollup to major sectors
@@ -688,29 +733,21 @@ def build_alm_with_sector(hp_df: pl.DataFrame) -> pl.DataFrame:
     alm_sum = filt.group_by(grp_v).agg([pl.col(c).sum() for c in agg_v])
     rows    = alm_sum.to_dicts()
 
-    # Apply $NEWSECT. (format_newsect) and $VALIDSE. (format_validse) from PBBLNFMT
     rows = apply_sectcd_mapping(rows)
 
-    # DATA ALM: IF A THEN SECTORCD=SECTCD
     for row in rows:
         row['sectorcd'] = row['sectcd']
 
-    # DATA ALM2 expansion
     alm2_rows = []
     for row in rows:
         alm2_rows.extend(expand_alm2_rows(row))
 
-    # DATA ALM: SET ALM(IN=A) ALM2
-    alm_all = list(rows) + alm2_rows
-
-    # DATA ALMA rollup
+    alm_all   = list(rows) + alm2_rows
     alma_rows = build_alma_rollup(alm_all)
 
-    # DATA ALM: SET ALM ALMA; blank -> '9999'
     alm_final = alm_all + alma_rows
     for row in alm_final:
-        scd = coalesce_s(row.get('sectorcd'))
-        if not scd.strip():
+        if not coalesce_s(row.get('sectorcd')).strip():
             row['sectorcd'] = '9999'
 
     return pl.from_dicts(alm_final) if alm_final else pl.DataFrame()
@@ -735,7 +772,6 @@ def build_alm_smi_with_sector(hp_df: pl.DataFrame) -> pl.DataFrame:
     alm_sum = filt.group_by(grp_v).agg(pl.col('netproc').sum())
     rows    = alm_sum.to_dicts()
 
-    # Apply $NEWSECT. (format_newsect) and $VALIDSE. (format_validse) from PBBLNFMT
     rows = apply_sectcd_mapping(rows)
 
     for row in rows:
@@ -748,6 +784,7 @@ def build_alm_smi_with_sector(hp_df: pl.DataFrame) -> pl.DataFrame:
     alm_all   = list(rows) + alm2_rows
     alma_rows = build_alma_rollup(alm_all)
     alm_final = alm_all + alma_rows
+
     for row in alm_final:
         if not coalesce_s(row.get('sectorcd')).strip():
             row['sectorcd'] = '9999'
@@ -761,15 +798,8 @@ def build_alm_smi_with_sector(hp_df: pl.DataFrame) -> pl.DataFrame:
 def build_lalm(hp_df: pl.DataFrame) -> list:
     """
     Full LALM accumulation pipeline producing (bnmcode, amtind, amount) rows.
-    Covers all five sections:
-      1. Disbursement by PURPOSE CODE (FISSPURP)
-      2. Disbursement SMI by FISSPURP + CUSTCD
-      3. Disbursement by CUSTCD (custcd-only BNMCODEs)
-      4. Disbursement / repayment by SECTORIAL CODE
-      5. Disbursement SMI by SECTORIAL CODE + CUSTCD
-      6. Count by CUSTCD / FISSPURP
     """
-    lalm = []   # list of (bnmcode str, amtind str, amount float)
+    lalm = []
 
     if hp_df.is_empty():
         return lalm
@@ -784,8 +814,8 @@ def build_lalm(hp_df: pl.DataFrame) -> list:
     if grp1 and 'netproc' in hp_df.columns:
         sum1 = hp_df.group_by(grp1).agg(pl.col('netproc').sum())
 
-        rows1  = sum1.to_dicts()
-        extra  = []
+        rows1 = sum1.to_dicts()
+        extra = []
         for row in rows1:
             fp = coalesce_s(row.get('fisspurp'))
             if fp in ('0220','0230','0210','0211','0212'):
@@ -879,8 +909,6 @@ def build_lalm(hp_df: pl.DataFrame) -> list:
 
     # ------------------------------------------------------------------
     # 4. DISBURSEMENT BY SECTORIAL CODE
-    #    Uses format_newsect ($NEWSECT.) and format_validse ($VALIDSE.)
-    #    from PBBLNFMT via build_alm_with_sector -> apply_sectcd_mapping
     # ------------------------------------------------------------------
     alm_sec = build_alm_with_sector(hp_df)
     if not alm_sec.is_empty():
@@ -892,8 +920,6 @@ def build_lalm(hp_df: pl.DataFrame) -> list:
 
     # ------------------------------------------------------------------
     # 5. DISBURSEMENT SMI BY SECTORIAL CODE + CUSTCD
-    #    Uses format_newsect ($NEWSECT.) and format_validse ($VALIDSE.)
-    #    from PBBLNFMT via build_alm_smi_with_sector -> apply_sectcd_mapping
     # ------------------------------------------------------------------
     alm_smi_sec = build_alm_smi_with_sector(hp_df)
     if not alm_smi_sec.is_empty():
@@ -922,7 +948,6 @@ def build_lalm(hp_df: pl.DataFrame) -> list:
                 add(f'821512000{scd}Y', amtind, amt)
             if cd in smi_grp17:
                 add(f'821517000{scd}Y', amtind, amt)
-            # IF CUSTCD IN (...) & SECTORCD NE '9999'
             if cd in smi_grp18 and scd != '9999':
                 add(f'821518000{scd}Y', amtind, amt)
             if cd in smi_g161:
@@ -938,11 +963,9 @@ def build_lalm(hp_df: pl.DataFrame) -> list:
 
     # ------------------------------------------------------------------
     # 6. COUNT BY CUSTCD / FISSPURP
-    # PROC SUMMARY DATA=ALM; CLASS CUSTCD FISSPURP AMTIND; VAR NETPROC;
-    # Uses _TYPE_ and _FREQ_ logic
     # ------------------------------------------------------------------
     if not hp_df.is_empty() and 'custcd' in hp_df.columns:
-        # _TYPE_=1: CLASS=AMTIND only (all records count)
+        # _TYPE_=1
         if 'amtind' in hp_df.columns:
             type1 = hp_df.group_by('amtind').agg(pl.len().alias('_freq_'))
             for row in type1.to_dicts():
@@ -950,7 +973,7 @@ def build_lalm(hp_df: pl.DataFrame) -> list:
                 freq   = coalesce_i(row.get('_freq_'))
                 add('8015000000000Y', amtind, float(freq * 1000))
 
-        # _TYPE_=5: CLASS=CUSTCD + AMTIND
+        # _TYPE_=5
         grp5 = [c for c in ['custcd','amtind'] if c in hp_df.columns]
         if grp5:
             type5 = hp_df.group_by(grp5).agg(pl.len().alias('_freq_'))
@@ -965,7 +988,7 @@ def build_lalm(hp_df: pl.DataFrame) -> list:
                 if cd != '61':
                     add(f'80150{cd}000000Y', amtind, amt)
 
-        # _TYPE_=3: CLASS=FISSPURP + AMTIND
+        # _TYPE_=3
         grp3b = [c for c in ['fisspurp','amtind'] if c in hp_df.columns]
         if grp3b:
             type3 = hp_df.group_by(grp3b).agg(pl.len().alias('_freq_'))
@@ -988,15 +1011,8 @@ def build_lalm(hp_df: pl.DataFrame) -> list:
 
 def write_rdal(lalm: list, rv: dict):
     """
-    PROC SUMMARY DATA=TEMP.LALM NWAY: sum AMOUNT by BNMCODE AMTIND -> LALM1
-    DATA _NULL_: SET TEMP.LALM1; BY BNMCODE AMTIND;
-    Write RDAL file:
-      Line 1: PHEAD = 'HPRDAL'||REPTDAY||REPTMON||REPTYEAR
-      Line 2: 'AL'
-      For each BNMCODE: BNMCODE;AMOUNTD;AMOUNTI
-      AMOUNT = ROUND(AMOUNT/1000)
-      AMOUNTD accumulates D records; AMOUNTI accumulates I records
-      On LAST.BNMCODE: AMOUNTD += AMOUNTI; write line; reset.
+    PROC SUMMARY DATA=TEMP.LALM NWAY: sum AMOUNT by BNMCODE AMTIND
+    DATA _NULL_: header + per-BNMCODE D and I totals.
     """
     if not lalm:
         with open(RDAL_TXT, 'w', encoding='utf-8') as f:
@@ -1005,7 +1021,6 @@ def write_rdal(lalm: list, rv: dict):
 
     from collections import defaultdict
 
-    # PROC SUMMARY NWAY: sum by BNMCODE AMTIND
     agg: dict[tuple, float] = defaultdict(float)
     for bnmcode, amtind, amount in lalm:
         agg[(bnmcode, amtind)] += amount
@@ -1013,7 +1028,6 @@ def write_rdal(lalm: list, rv: dict):
     phead = f"HPRDAL{rv['reptday']}{rv['reptmon']}{rv['reptyear']}"
     lines = [phead, 'AL']
 
-    # Group by BNMCODE; accumulate D and I
     by_bnm: dict[str, dict] = {}
     for (bnmcode, amtind), total in agg.items():
         if bnmcode not in by_bnm:
@@ -1022,10 +1036,10 @@ def write_rdal(lalm: list, rv: dict):
         by_bnm[bnmcode][key] += total
 
     for bnmcode in sorted(by_bnm.keys()):
-        vals   = by_bnm[bnmcode]
-        amt_d  = round(vals['D'] / 1000)
-        amt_i  = round(vals['I'] / 1000)
-        amt_d += amt_i           # AMOUNTD = AMOUNTD + AMOUNTI
+        vals  = by_bnm[bnmcode]
+        amt_d = round(vals['D'] / 1000)
+        amt_i = round(vals['I'] / 1000)
+        amt_d += amt_i
         lines.append(f"{bnmcode};{int(amt_d)};{int(amt_i)}")
 
     with open(RDAL_TXT, 'w', encoding='utf-8', newline='\n') as f:
@@ -1037,7 +1051,6 @@ def write_rdal(lalm: list, rv: dict):
 # =============================================================================
 
 def _report_header(title1: str, title2: str) -> list:
-    """Build ASA header lines for PROC PRINT equivalent."""
     lines = []
     lines.append('1' + title1)
     lines.append(' ' + title2)
@@ -1051,12 +1064,6 @@ def _report_header(title1: str, title2: str) -> list:
 
 def write_exception_report(df: pl.DataFrame, filepath: str,
                             title1: str, title2: str):
-    """
-    PROC PRINT DATA=EXCEPT/HPSNR SPLIT='*';
-    VAR ACCTNO NOTENO CUSTCD SECTORCD PRODUCT NETPROC ISSDTE FISSPURP;
-    SUM NETPROC;
-    FORMAT NETPROC COMMA15.2 ISSDTE DATE9.;
-    """
     lines       = []
     line_cnt    = 0
     tot_netproc = 0.0
@@ -1084,9 +1091,7 @@ def write_exception_report(df: pl.DataFrame, filepath: str,
             issdte   = row.get('issdte') or row.get('oissdte')
             fisspurp = coalesce_s(row.get('fisspurp') or row.get('ofiss'))
 
-            if isinstance(issdte, (int, float)):
-                issdte = sas_date_to_pydate(issdte)
-            elif isinstance(issdte, str):
+            if isinstance(issdte, (int, float, str)):
                 issdte = sas_date_to_pydate(issdte)
 
             line = (f" {acctno:>12} {noteno:>7} {custcd:>8} {sectorcd:>7}"
@@ -1096,7 +1101,6 @@ def write_exception_report(df: pl.DataFrame, filepath: str,
             line_cnt    += 1
             tot_netproc += netproc
 
-    # SUM line
     lines.append(' ' + '=' * 90)
     sum_line = (f" {'SUM':>12} {'':>7} {'':>8} {'':>7} {'':>8}"
                 f" {fmt_comma15_2(tot_netproc):>15}")
@@ -1114,9 +1118,10 @@ def main():
     print("EIBMHPFS: Starting HP FISS disbursement processing...")
 
     rv = get_report_vars()
-    print(f"  Report date: {rv['reptdate']} MM={rv['reptmon']} YY={rv['reptyear']} WK={rv['nowk']}")
+    print(f"  Report date: {rv['reptdate']} MM={rv['reptmon']} "
+          f"YY={rv['reptyear']} WK={rv['nowk']}")
 
-    # Build HPSETTLE — filter uses HPD_SET = HP_ALL (from PBBLNFMT) + {15,20,63,71,72}
+    # Build HPSETTLE
     hpsettle_df = build_hpsettle(rv)
     print(f"  HPSETTLE rows: {len(hpsettle_df)}")
 
@@ -1131,10 +1136,10 @@ def main():
 
     # Merge HP + HPSETTLE; produce EXCEPT, HPSNR final, HP
     hp_df, except_df, hpsnr_df = merge_hp_settle(hpsettle_df, hp_new, hpsnr_raw)
-    print(f"  HP (final): {len(hp_df)}, EXCEPT: {len(except_df)}, HPSNR: {len(hpsnr_df)}")
+    print(f"  HP (final): {len(hp_df)}, EXCEPT: {len(except_df)}, "
+          f"HPSNR: {len(hpsnr_df)}")
 
-    # Build LALM records (uses format_newsect + format_validse from PBBLNFMT
-    # in sections 4 and 5 for sectorial code mapping)
+    # Build LALM records
     lalm = build_lalm(hp_df)
     print(f"  LALM records: {len(lalm)}")
 
