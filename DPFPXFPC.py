@@ -1,50 +1,20 @@
-import pyreadstat
-import os
 
-paths = [
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote/enrh_ln_note_m10.sas7bdat",
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP01/loan104.sas7bdat",
-]
+=== /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote/enrh_ln_note_m10.sas7bdat ===
+  size on disk: 10,000,859,136 bytes
+  column_names[:10]: ['ACCTNO', 'NAME', 'TAXNO', 'ORGTYPE', 'GUAREND', 'BANKNO', 'APPCODE', 'ACCBRCH', 'CUSTCODE', 'PURPOSE']
+  number_rows: 8125473
+  number_columns: 495
+  row_limit=250k (no usecols) -> 250000 rows, cols: ['ACCTNO', 'NAME', 'TAXNO', 'ORGTYPE', 'GUAREND', 'BANKNO', 'APPCODE', 'ACCBRCH']
+  lowercase usecols -> 0 rows
+  actual-case wanted list: ['ACCTNO', 'NOTENO', 'ENTITY_CD']
+  actual-case usecols -> 250000 rows, cols: ['ACCTNO', 'NOTENO', 'ENTITY_CD']
 
-for p in paths:
-    print(f"\n=== {p} ===")
-    if not os.path.exists(p):
-        print("  FILE NOT FOUND")
-        continue
-    print(f"  size on disk: {os.path.getsize(p):,} bytes")
-
-    # Metadata only
-    _, meta = pyreadstat.read_sas7bdat(p, metadataonly=True)
-    print(f"  column_names[:10]: {meta.column_names[:10]}")
-    print(f"  number_rows: {meta.number_rows}")
-    print(f"  number_columns: {meta.number_columns}")
-
-    # Chunked read — no usecols
-    try:
-        df, _ = pyreadstat.read_sas7bdat(p, row_limit=250_000, row_offset=0)
-        print(f"  row_limit=250k (no usecols) -> {len(df)} rows, "
-              f"cols: {list(df.columns)[:8]}")
-    except Exception as e:
-        print(f"  row_limit=250k (no usecols) FAILED: {e}")
-
-    # Chunked read — lowercase usecols (what the current EIBMHPFS code passes)
-    try:
-        cols_lower = ['acctno','noteno','fisspurp','prodcd']
-        df, _ = pyreadstat.read_sas7bdat(p, usecols=cols_lower,
-                                          row_limit=250_000, row_offset=0)
-        print(f"  lowercase usecols -> {len(df)} rows")
-    except Exception as e:
-        print(f"  lowercase usecols FAILED: {e}")
-
-    # Chunked read — actual stored names from metadata (case-exact)
-    actual = meta.column_names
-    wanted = [c for c in actual if c.upper() in
-              ('ACCTNO','NOTENO','FISSPURP','PRODCD','ENTITY_CD')]
-    print(f"  actual-case wanted list: {wanted}")
-    try:
-        df, _ = pyreadstat.read_sas7bdat(p, usecols=wanted,
-                                          row_limit=250_000, row_offset=0)
-        print(f"  actual-case usecols -> {len(df)} rows, "
-              f"cols: {list(df.columns)}")
-    except Exception as e:
-        print(f"  actual-case usecols FAILED: {e}")
+=== /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP01/loan104.sas7bdat ===
+  size on disk: 3,677,159,424 bytes
+  column_names[:10]: ['ACCTNO', 'NAME', 'CUSTCODE', 'NOTENO', 'ASSMDATE', 'CURBAL', 'INTAMT', 'APPVALUE', 'NOTETERM', 'COLLDESC']
+  number_rows: 2664794
+  number_columns: 473
+  row_limit=250k (no usecols) -> 250000 rows, cols: ['ACCTNO', 'NAME', 'CUSTCODE', 'NOTENO', 'ASSMDATE', 'CURBAL', 'INTAMT', 'APPVALUE']
+  lowercase usecols -> 0 rows
+  actual-case wanted list: ['ACCTNO', 'NOTENO', 'ENTITY_CD', 'FISSPURP', 'PRODCD']
+  actual-case usecols -> 250000 rows, cols: ['ACCTNO', 'NOTENO', 'ENTITY_CD', 'FISSPURP', 'PRODCD']
