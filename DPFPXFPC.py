@@ -1,919 +1,1170 @@
-# !/usr/bin/env python3
-"""
-Program : PBMISFMT.py
-Purpose : Python equivalent of SAS PBMISFMT PROC FORMAT definitions.
-          Provides branch code, group, product, denomination, customer-type,
-            state, deposit-range and various other format mappings used across
-            MIS reporting programs (EIBMISL2, EIBMDPCA, EIBM619D/L, etc.).
-
-Amendment history (from original SAS):
-- Multiple branch additions and renames over the years.
-- Age-limit macro variables: AGELIMIT=12, MAXAGE=18, AGEBELOW=11
-"""
-
-from typing import Optional
-
-# ===========================================================================
-# MACRO-VARIABLE EQUIVALENTS
-# ===========================================================================
-AGELIMIT = 12   # CALL SYMPUT('AGELIMIT', 12)
-MAXAGE   = 18   # CALL SYMPUT('MAXAGE',   18)
-AGEBELOW = 11   # CALL SYMPUT('AGEBELOW', 11)
-
-# ===========================================================================
-# FORMAT: BRCHCD  (numeric branch number -> 3-letter branch code)
-# Handles individual branches plus ranges for HOE.
-# ===========================================================================
-_BRCHCD_MAP: dict[int, str] = {
-    1: 'HOE', 2: 'JSS', 3: 'JRC', 4: 'MLK', 5: 'IMO',
-    6: 'PPG', 7: 'JBU', 8: 'KTN', 9: 'JYK', 10: 'ASR',
-    11: 'GRN', 12: 'PPH', 13: 'KBU', 14: 'TMH', 15: 'KPG',
-    16: 'NLI', 17: 'TPN', 18: 'PJN', 19: 'DUA', 20: 'TCL',
-    21: 'BPT', 22: 'SMY', 23: 'KMT', 24: 'RSH', 25: 'SAM',
-    26: 'SPG', 27: 'NTL', 28: 'MUA', 29: 'JRL', 30: 'KTU',
-    31: 'SKC', 32: 'WSS', 33: 'KKU', 34: 'KGR', 35: 'SSA',
-    36: 'SS2', 37: 'TSA', 38: 'JKL', 39: 'KKG', 40: 'JSB',
-    41: 'JIH', 42: 'BMM', 43: 'BTG', 44: 'TWU', 45: 'SRB',
-    46: 'APG', 47: 'SGM', 48: 'MTK', 49: 'JLP', 50: 'MRI',
-    51: 'SMG', 52: 'UTM', 53: 'TMI', 54: 'BBB', 55: 'LBN',
-    56: 'KJG', 57: 'SPI', 58: 'SBU', 59: 'PKL', 60: 'BAM',
-    61: 'KLI', 62: 'SDK', 63: 'GMS', 64: 'PDN', 65: 'BHU',
-    66: 'BDA', 67: 'CMR', 68: 'SAT', 69: 'BKI', 70: 'PSA',
-    71: 'BCG', 72: 'PPR', 73: 'SPK', 74: 'SIK', 75: 'CAH',
-    76: 'PRS', 77: 'PLI', 78: 'SJA', 79: 'MSI', 80: 'MLB',
-    81: 'SBH', 82: 'MCG', 83: 'JBB', 84: 'PMS', 85: 'SST',
-    86: 'CLN', 87: 'MSG', 88: 'KUM', 89: 'TPI', 90: 'BTL',
-    91: 'KUG', 92: 'KLG', 93: 'EDU', 94: 'STP', 95: 'TIN',
-    96: 'SGK', 97: 'HSL', 98: 'TCY',
-    102: 'PRJ', 103: 'JJG', 104: 'KKL', 105: 'KTI', 106: 'CKI',
-    107: 'JLT', 108: 'BSI', 109: 'KSR', 110: 'TJJ', 111: 'AKH',
-    112: 'LDO', 113: 'TML', 114: 'BBA', 115: 'KNG', 116: 'TRI',
-    117: 'KKI', 118: 'TMW', 119: 'BNV', 120: 'PIH', 121: 'PRA',
-    122: 'SKN', 123: 'IGN', 124: 'S14', 125: 'KJA', 126: 'PTS',
-    127: 'TSM', 128: 'SGB', 129: 'BSR', 130: 'PDG', 131: 'TMG',
-    132: 'CKT', 133: 'PKG', 134: 'RPG', 135: 'BSY', 136: 'TCS',
-    137: 'JPP', 138: 'WMU', 139: 'JRT', 140: 'CPE', 141: 'STL',
-    142: 'KBD', 143: 'LDU', 144: 'KHG', 145: 'BSD', 146: 'PSG',
-    147: 'PNS', 148: 'PJO', 149: 'BFT', 150: 'LMM', 151: 'SLY',
-    152: 'ATR', 153: 'USJ', 154: 'BSJ', 155: 'TTJ', 156: 'TMR',
-    157: 'BPJ', 158: 'SPL', 159: 'RLU', 160: 'MTH', 161: 'DGG',
-    162: 'SEA', 163: 'JKA', 164: 'KBS', 165: 'TKA', 166: 'PGG',
-    167: 'BBG', 168: 'KLC', 169: 'CTD', 170: 'PJA', 171: 'JMR',
-    172: 'TMJ', 173: 'SCA', 174: 'BBP', 175: 'LBG', 176: 'TPG',
-    177: 'JRU', 178: 'MIN', 179: 'OUG', 180: 'KBG',
-    182: 'JPU', 183: 'JCL', 184: 'JPN', 185: 'KCY', 186: 'JTZ',
-    # 187 commented out in SAS
-    188: 'PLT', 189: 'BNH', 190: 'BTR', 191: 'KPT', 192: 'MRD',
-    193: 'MKH', 194: 'SRK', 195: 'BWK', 196: 'JHL', 197: 'TNM',
-    198: 'TDA', 199: 'JTH',
-    # 200 commented out in SAS
-    201: 'PDA', 202: 'RWG', 203: 'SJM', 204: 'BTW', 205: 'SNG',
-    206: 'TBM', 207: 'BCM', 208: 'JSI', 209: 'STW', 210: 'TMM',
-    211: 'TPD', 212: 'JMA', 213: 'JKB', 214: 'JGA', 215: 'JKP',
-    216: 'SKI', 217: 'TMB', 220: 'GHS', 221: 'TSK', 222: 'TDC',
-    223: 'TRJ', 224: 'JAH', 225: 'TIH', 226: 'JPR', 227: 'KSB',
-    228: 'INN', 229: 'TSJ', 230: 'SSH', 231: 'BBM', 232: 'TMD',
-    233: 'BEN', 234: 'SRM', 235: 'SBM', 236: 'UYB', 237: 'KLS',
-    238: 'JKT', 239: 'KMY', 240: 'KAP', 241: 'DJA', 242: 'TKK',
-    243: 'KKR', 244: 'GRT', 245: 'BDR', 246: 'BGH', 247: 'BPR',
-    248: 'JTS', 249: 'TAI', 250: 'TEA', 251: 'KPR', 252: 'TMA',
-    253: 'JTT', 254: 'KPH', 255: 'SBP', 256: 'PBR', 257: 'RAU',
-    258: 'JTA', 259: 'SAN', 260: 'KDN', 261: 'GMG', 262: 'TCT',
-    263: 'BTA', 264: 'JBH', 265: 'JAI', 266: 'JDK', 267: 'TDI',
-    268: 'BBT', 269: 'MKA', 270: 'BPI', 273: 'LHA', 274: 'STG',
-    275: 'MSL', 276: 'JAS', 277: 'WSU', 278: 'JPI', 279: 'PTJ',
-    280: 'KDA', 281: 'PLT', 282: 'PTT', 283: 'PSE', 284: 'BSP',
-    285: 'BMC', 286: 'BIH', 287: 'SUA', 288: 'SPT', 289: 'TEE',
-    290: 'TDY', 291: 'BSL', 292: 'BMJ', 293: 'BSA', 294: 'KKM',
-    295: 'BKR', 296: 'BJL',
-    701: 'IKB', 702: 'IPJ', 703: 'IWS', 704: 'IJK',
-}
-# Ranges that map to 'HOE': 3000-3001, 7000, 7500-8000, 8050-8750
-_BRCHCD_HOE_RANGES = [(3000, 3001), (7000, 7000), (7500, 8000), (8050, 8750)]
-# All other 3xxx codes map to their own code (same as subtracting 3000 from key)
-_BRCHCD_3XXX = {(3000 + k): v for k, v in _BRCHCD_MAP.items() if 1 <= k <= 296}
-
-def format_brchcd(branch: Optional[int]) -> str:
-    """Map numeric branch code to 3-letter branch abbreviation."""
-    if branch is None:
-        return ''
-    for lo, hi in _BRCHCD_HOE_RANGES:
-        if lo <= branch <= hi:
-            return 'HOE'
-    if branch in _BRCHCD_3XXX:
-        return _BRCHCD_3XXX[branch]
-    return _BRCHCD_MAP.get(branch, '')
-
-# ===========================================================================
-# FORMAT: $GROUPF  (3-letter branch code -> group string)
-# ===========================================================================
-GROUPF_MAP: dict[str, str] = {
-    # GROUP 1
-    'BBB': 'GROUP 1', 'BDA': 'GROUP 1', 'BMM': 'GROUP 1', 'DUA': 'GROUP 1',
-    'IMO': 'GROUP 1', 'JKL': 'GROUP 1', 'JRC': 'GROUP 1', 'JRL': 'GROUP 1',
-    'JSS': 'GROUP 1', 'JSB': 'GROUP 1', 'JYK': 'GROUP 1', 'JBU': 'GROUP 1',
-    'KPG': 'GROUP 1', 'KLC': 'GROUP 1', 'MLK': 'GROUP 1', 'PPG': 'GROUP 1',
-    'SS2': 'GROUP 1', 'SPG': 'GROUP 1', 'SSA': 'GROUP 1', 'SAM': 'GROUP 1',
-    'SJA': 'GROUP 1', 'TCL': 'GROUP 1', 'TSA': 'GROUP 1',
-    # GROUP 2
-    'BAM': 'GROUP 2', 'ASR': 'GROUP 2', 'BSY': 'GROUP 2', 'BSR': 'GROUP 2',
-    'BTG': 'GROUP 2', 'BPT': 'GROUP 2', 'CMR': 'GROUP 2', 'GRN': 'GROUP 2',
-    'IGN': 'GROUP 2', 'JIH': 'GROUP 2', 'JJG': 'GROUP 2', 'JBB': 'GROUP 2',
-    'KJG': 'GROUP 2', 'KLG': 'GROUP 2', 'KBU': 'GROUP 2', 'KKU': 'GROUP 2',
-    'KTN': 'GROUP 2', 'WSS': 'GROUP 2', 'KLI': 'GROUP 2', 'MSI': 'GROUP 2',
-    'MLB': 'GROUP 2', 'MRI': 'GROUP 2', 'MUA': 'GROUP 2', 'NTL': 'GROUP 2',
-    'PDG': 'GROUP 2', 'PJN': 'GROUP 2', 'SMY': 'GROUP 2', 'SRB': 'GROUP 2',
-    'SGK': 'GROUP 2', 'SKN': 'GROUP 2', 'SAT': 'GROUP 2', 'SBH': 'GROUP 2',
-    'TCS': 'GROUP 2', 'TMI': 'GROUP 2', 'TMG': 'GROUP 2', 'TMW': 'GROUP 2',
-    'TPN': 'GROUP 2',
-    # GROUP 3
-    'BBA': 'GROUP 3', 'APG': 'GROUP 3', 'BHU': 'GROUP 3', 'BSD': 'GROUP 3',
-    'BKI': 'GROUP 3', 'BNV': 'GROUP 3', 'BTL': 'GROUP 3', 'BCG': 'GROUP 3',
-    'CAH': 'GROUP 3', 'CKT': 'GROUP 3', 'JPP': 'GROUP 3', 'JLP': 'GROUP 3',
-    'JLT': 'GROUP 3', 'KBR': 'GROUP 3', 'KMT': 'GROUP 3', 'KJA': 'GROUP 3',
-    'KUG': 'GROUP 3', 'KKG': 'GROUP 3', 'KUM': 'GROUP 3', 'LBN': 'GROUP 3',
-    'LMM': 'GROUP 3', 'LDO': 'GROUP 3', 'MTK': 'GROUP 3', 'NLI': 'GROUP 3',
-    'PIH': 'GROUP 3', 'PRS': 'GROUP 3', 'PJO': 'GROUP 3', 'PKL': 'GROUP 3',
-    'PKG': 'GROUP 3', 'PTS': 'GROUP 3', 'PSG': 'GROUP 3', 'RSH': 'GROUP 3',
-    'STL': 'GROUP 3', 'S14': 'GROUP 3', 'SGM': 'GROUP 3', 'SKC': 'GROUP 3',
-    'STP': 'GROUP 3', 'SBU': 'GROUP 3', 'SPK': 'GROUP 3', 'SPI': 'GROUP 3',
-    'TCY': 'GROUP 3', 'TJJ': 'GROUP 3', 'TSM': 'GROUP 3', 'TTJ': 'GROUP 3',
-    'TPI': 'GROUP 3', 'TMH': 'GROUP 3', 'TWU': 'GROUP 3', 'USJ': 'GROUP 3',
-    'UTM': 'GROUP 3', 'WMU': 'GROUP 3',
-    # GROUP 4
-    'AKH': 'GROUP 4', 'ATR': 'GROUP 4', 'BBG': 'GROUP 4', 'BBP': 'GROUP 4',
-    'BSI': 'GROUP 4', 'BPJ': 'GROUP 4', 'BSJ': 'GROUP 4', 'BFT': 'GROUP 4',
-    'CLN': 'GROUP 4', 'CKI': 'GROUP 4', 'CTD': 'GROUP 4', 'CPE': 'GROUP 4',
-    'DGG': 'GROUP 4', 'EDU': 'GROUP 4', 'GMS': 'GROUP 4', 'JKA': 'GROUP 4',
-    'JMR': 'GROUP 4', 'JRT': 'GROUP 4', 'HSL': 'GROUP 4', 'KHG': 'GROUP 4',
-    'KGR': 'GROUP 4', 'KNG': 'GROUP 4', 'KBS': 'GROUP 4', 'KBD': 'GROUP 4',
-    'KTI': 'GROUP 4', 'KKL': 'GROUP 4', 'KKI': 'GROUP 4', 'KSR': 'GROUP 4',
-    'KTU': 'GROUP 4', 'LDU': 'GROUP 4', 'MCG': 'GROUP 4', 'MTH': 'GROUP 4',
-    'MSG': 'GROUP 4', 'PJA': 'GROUP 4', 'PPR': 'GROUP 4', 'PRJ': 'GROUP 4',
-    'PMS': 'GROUP 4', 'PPH': 'GROUP 4', 'PNS': 'GROUP 4', 'PSA': 'GROUP 4',
-    'PGG': 'GROUP 4', 'PDN': 'GROUP 4', 'PRA': 'GROUP 4', 'PLI': 'GROUP 4',
-    'RPJ': 'GROUP 4', 'RLU': 'GROUP 4', 'SDK': 'GROUP 4', 'SEA': 'GROUP 4',
-    'SGB': 'GROUP 4', 'SLY': 'GROUP 4', 'SMG': 'GROUP 4', 'SIK': 'GROUP 4',
-    'SPL': 'GROUP 4', 'SCA': 'GROUP 4', 'SST': 'GROUP 4', 'TMJ': 'GROUP 4',
-    'TMR': 'GROUP 4', 'TPG': 'GROUP 4', 'TIN': 'GROUP 4', 'TML': 'GROUP 4',
-    'TKA': 'GROUP 4', 'TRI': 'GROUP 4', 'GHS': 'GROUP 4', 'BPI': 'GROUP 4',
-    'HOE': 'HOE',
-}
-
-def format_groupf(brchcd: Optional[str]) -> str:
-    """Map branch code to group string. OTHER -> 'GROUP 4'."""
-    if brchcd is None:
-        return 'GROUP 4'
-    return GROUPF_MAP.get(brchcd, 'GROUP 4')
-
-# ===========================================================================
-# FORMAT: $ACKNOF  (account number prefix -> account type)
-# ===========================================================================
-def format_acknof(ackno: Optional[str]) -> str:
-    """Map account number code to account type label."""
-    if ackno is None:
-        return 'OTHER'
-    if ackno == '21930':
-        return 'NEF'
-    if ackno == '21940':
-        return 'NIF'
-    if ackno == '21960':
-        return 'SFT'
-    if ackno == '21950':
-        return '3F'
-    if ackno in ('21910', '21920'):
-        return 'SHP'
-    try:
-        v = int(ackno)
-        if 32300 <= v <= 32699:
-            return 'SPECIAL DEPOSIT WITHOLDING TAX'
-    except (ValueError, TypeError):
-        pass
-    return 'OTHER'
-
-# ===========================================================================
-# FORMAT: SAPROD  (savings product code -> product label for EIBMISL2)
-# Note: This is the PBMISFMT SAPROD (simpler than PBBDPFMT SAPROD).
-# ===========================================================================
-def format_saprod_mis(product: Optional[int]) -> str:
-    """Map savings product to MIS label: product 204 -> 'SPTFSD', else 'SD'."""
-    if product == 204:
-        return 'SPTFSD'
-    return 'SD    '
-
-# ===========================================================================
-# FORMAT: CAPROD  (current account product code -> product label)
-# ===========================================================================
-_CAPROD_OTHER = {
-    104, 105, 107, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135,
-    136, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 171, 172, 173,
-}
-
-def format_caprod_mis(product: Optional[int]) -> str:
-    """Map current account product to MIS label."""
-    if product is None:
-        return 'DD   '
-    return 'OTHER' if product in _CAPROD_OTHER else 'DD   '
-
-# ===========================================================================
-# FORMAT: ODPROD  (overdraft product code -> product label)
-# ===========================================================================
-_ODPROD_OTHER = {
-    104, 105, 107, 126, 127, 128, 130, 131, 132, 133, 134, 135, 136,
-    140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 171, 172, 173,
-}
-
-def format_odprod_mis(product: Optional[int]) -> str:
-    """Map overdraft product to MIS label."""
-    if product is None:
-        return 'OD   '
-    return 'OTHER' if product in _ODPROD_OTHER else 'OD   '
-
-# ===========================================================================
-# FORMAT: LNPROD  (loan product code -> loan label)
-# ===========================================================================
-_LNPROD_HL = {4, 5, 100, 101, 200, 201, 204, 205, 209, 210, 211, 212, 214, 215, 219, 220}
-_LNPROD_HLCAG = {225, 226}
-
-def format_lnprod_mis(product: Optional[int]) -> str:
-    """Map loan product to MIS label: HL / HLCAG / FL."""
-    if product is None:
-        return 'FL   '
-    if product in _LNPROD_HL:
-        return 'HL   '
-    if product in _LNPROD_HLCAG:
-        return 'HLCAG'
-    return 'FL   '
-
-# ===========================================================================
-# FORMAT: SADPRG / SA1PRG / SA2PRG / SA3PRG
-# Deposit amount range formats (numeric value -> label string).
-# Each uses a step-ladder of thresholds. SAS uses exclusive upper bound for
-# ranges (HIGH exclusive), so Python uses strict < comparisons.
-# ===========================================================================
-
-def format_sadprg(amount: Optional[float]) -> str:
-    """SADPRG: Savings account deposit range (48 bands)."""
-    if amount is None:
-        return ''
-    v = float(amount)
-    if v <= 5:       return '01)RM        1.00 - RM         5.00'
-    if v <= 10:      return '02)RM        5.01 - RM        10.00'
-    if v <= 50:      return '03)RM       10.01 - RM        50.00'
-    if v <= 100:     return '04)RM       50.01 - RM       100.00'
-    if v <= 500:     return '05)RM      100.01 - RM       500.00'
-    if v <= 1000:    return '06)RM      500.01 - RM     1,000.00'
-    if v <= 1500:    return '07)RM    1,000.01 - RM     1,500.00'
-    if v <= 2000:    return '08)RM    1,500.01 - RM     2,000.00'
-    if v <= 2500:    return '09)RM    2,000.01 - RM     2,500.00'
-    if v <= 3000:    return '10)RM    2,500.01 - RM     3,000.00'
-    if v <= 3500:    return '11)RM    3,000.01 - RM     3,500.00'
-    if v <= 4000:    return '12)RM    3,500.01 - RM     4,000.00'
-    if v <= 4500:    return '13)RM    4,000.01 - RM     4,500.00'
-    if v <= 5000:    return '14)RM    4,500.01 - RM     5,000.00'
-    if v <= 6000:    return '15)RM    5,000.01 - RM     6,000.00'
-    if v <= 7000:    return '16)RM    6,000.01 - RM     7,000.00'
-    if v <= 8000:    return '17)RM    7,000.01 - RM     8,000.00'
-    if v <= 9000:    return '18)RM    8,000.01 - RM     9,000.00'
-    if v <= 10000:   return '19)RM    9,000.01 - RM    10,000.00'
-    if v <= 15000:   return '20)RM   10,000.01 - RM    15,000.00'
-    if v <= 20000:   return '21)RM   15,000.01 - RM    20,000.00'
-    if v <= 25000:   return '22)RM   20,000.01 - RM    25,000.00'
-    if v <= 30000:   return '23)RM   25,000.01 - RM    30,000.00'
-    if v <= 35000:   return '24)RM   30,000.01 - RM    35,000.00'
-    if v <= 40000:   return '25)RM   35,000.01 - RM    40,000.00'
-    if v <= 45000:   return '26)RM   40,000.01 - RM    45,000.00'
-    if v <= 50000:   return '27)RM   45,000.01 - RM    50,000.00'
-    if v <= 55000:   return '28)RM   50,000.01 - RM    55,000.00'
-    if v <= 60000:   return '29)RM   55,000.01 - RM    60,000.00'
-    if v <= 65000:   return '30)RM   60,000.01 - RM    65,000.00'
-    if v <= 70000:   return '31)RM   65,000.01 - RM    70,000.00'
-    if v <= 75000:   return '32)RM   70,000.01 - RM    75,000.00'
-    if v <= 80000:   return '33)RM   75,000.01 - RM    80,000.00'
-    if v <= 85000:   return '34)RM   80,000.01 - RM    85,000.00'
-    if v <= 90000:   return '35)RM   85,000.01 - RM    90,000.00'
-    if v <= 95000:   return '36)RM   90,000.01 - RM    95,000.00'
-    if v <= 100000:  return '37)RM   95,000.01 - RM   100,000.00'
-    if v <= 150000:  return '38)RM  100,000.01 - RM   150,000.00'
-    if v <= 200000:  return '39)RM  150,000.01 - RM   200,000.00'
-    if v <= 300000:  return '40)RM  200,000.01 - RM   300,000.00'
-    if v <= 500000:  return '41)RM  300,000.01 - RM   500,000.00'
-    if v <= 1000000: return '42)RM  500,000.01 - RM 1,000,000.00'
-    if v <= 2000000: return '43)RM1,000,000.01 - RM 2,000,000.00'
-    if v <= 3000000: return '44)RM2,000,000.01 - RM 3,000,000.00'
-    if v <= 4000000: return '45)RM3,000,000.01 - RM 4,000,000.00'
-    if v <= 5000000: return '46)RM4,000,000.01 - RM 5,000,000.00'
-    if v <= 10000000:return '47)RM5,000,000.01 - RM10,000,000.00'
-    return              '48)          ABOVE RM 10,000,000.00'
-
-
-def format_iwsrnge(amount: Optional[float]) -> str:
-    """IWSRNGE: Islamic Wadiah savings range (7 bands). Exclusive upper bound."""
-    if amount is None:
-        return ''
-    v = float(amount)
-    if v < 3001:    return ' 1) UP TO   RM  3,000'
-    if v < 10001:   return ' 2) UP TO   RM 10,000'
-    if v < 30001:   return ' 3) UP TO   RM 30,000'
-    if v < 50001:   return ' 4) UP TO   RM 50,000'
-    if v < 75001:   return ' 5) UP TO   RM 75,000'
-    if v < 100001:  return ' 6) UP TO   RM100,000'
-    return              ' 7) ABOVE RM100,000  '
-
-
-def format_iwsrngx(amount: Optional[float]) -> str:
-    """IWSRNGX: Islamic Wadiah savings tier (interest tier labels)."""
-    if amount is None:
-        return ''
-    v = float(amount)
-    if v <= 5000:    return ' 1) FIRST RM  5,000'
-    if v <= 10000:   return ' 2) NEXT  RM  5,000'
-    if v <= 50000:   return ' 3) NEXT  RM 40,000'
-    if v <= 150000:  return ' 4) NEXT  RM100,000'
-    if v <= 350000:  return ' 5) NEXT  RM200,000'
-    if v <= 650000:  return ' 6) NEXT  RM300,000'
-    if v <= 1200000: return ' 6) NEXT  RM550,000'
-    return              ' 7) THEREAFTER     '
-
-
-def format_ibwsrngd(amount: Optional[float]) -> str:
-    """IBWSRNGD: Interest-bearing savings range display (6 bands, exclusive)."""
-    if amount is None:
-        return ''
-    v = float(amount)
-    if v < 10001:   return ' 1) UP TO   RM 10,000'
-    if v < 30001:   return ' 2) UP TO   RM 30,000'
-    if v < 50001:   return ' 3) UP TO   RM 50,000'
-    if v < 75001:   return ' 4) UP TO   RM 75,000'
-    if v < 100001:  return ' 5) UP TO   RM100,000'
-    return              ' 6) ABOVE RM100,000  '
-
-
-# ===========================================================================
-# INVALUE: IBWRNGE  (numeric -> discretised bucket value for IBWRNGE)
-# ===========================================================================
-def invalue_ibwrnge(amount: Optional[float]) -> int:
-    """Bucket amount into IBWRNGE discrete values."""
-    if amount is None:
-        return 10000
-    v = float(amount)
-    if v <= 10000:  return 10000
-    if v <= 30000:  return 30000
-    if v <= 50000:  return 50000
-    if v <= 75000:  return 75000
-    if v <= 100000: return 100000
-    return 100001
-
-
-# ===========================================================================
-# INVALUE: CARANGE  (numeric -> discrete bucket for current account range)
-# ===========================================================================
-def invalue_carange(amount: Optional[float]) -> int:
-    """Bucket amount into CARANGE discrete values."""
-    if amount is None:
-        return 2000
-    v = float(amount)
-    if v <= 2000:   return 2000
-    if v <= 3000:   return 3000
-    if v <= 5000:   return 5000
-    if v <= 10000:  return 10000
-    if v <= 30000:  return 30000
-    if v <= 50000:  return 50000
-    if v <= 75000:  return 75000
-    if v <= 100000: return 100000
-    if v <= 150000: return 150000
-    if v <= 200000: return 200000
-    return 200001
-
-
-# ===========================================================================
-# INVALUE: ISARANGE  (numeric -> discrete bucket for Islamic savings range)
-# ===========================================================================
-def invalue_isarange(amount: Optional[float]) -> int:
-    """Bucket amount into ISARANGE discrete values."""
-    if amount is None:
-        return 1000
-    v = float(amount)
-    if v <= 1000:  return 1000
-    if v <= 5000:  return 5000
-    if v <= 25000: return 25000
-    if v <= 50000: return 50000
-    return 50001
-
-
-# ===========================================================================
-# FORMAT: ISARANGD  (display label for ISARANGE bucket)
-# ===========================================================================
-def format_isarangd(bucket: Optional[int]) -> str:
-    """Display label for ISARANGE discrete bucket value."""
-    _map = {
-        1000:  ' 1)       BELOW RM1,000',
-        5000:  ' 2)   RM1,000 - RM5,000',
-        25000: ' 3)  RM5,000 - RM25,000',
-        50000: ' 4) RM25,000 - RM50,000',
-        50001: ' 5) RM50,000 AND ABOVE ',
-    }
-    return _map.get(bucket, '')
-
-
-# ===========================================================================
-# FORMAT: CADPRG  (current account deposit range -> label)
-# ===========================================================================
-def format_cadprg(bucket: Optional[int]) -> str:
-    """Map CADPRG discrete bucket to label string."""
-    _map = {
-        1000:   ' 1)         RM0 -     RM1,000',
-        2000:   ' 2)     RM1,001 -     RM2,000',
-        2500:   ' 3)     RM2,001 -     RM2,500',
-        3000:   ' 4)     RM2,501 -     RM5,000',
-        5000:   ' 4)     RM2,501 -     RM5,000',
-        10000:  ' 5)     RM5,001 -    RM10,000',
-        20000:  ' 6)    RM10,001 -    RM20,000',
-        30000:  ' 7)    RM20,001 -    RM30,000',
-        40000:  ' 8)    RM30,001 -    RM40,000',
-        50000:  ' 9)    RM40,001 -    RM50,000',
-        75000:  '10)   RM50,001 -   RM100,000',
-        100000: '10)   RM50,001 -   RM100,000',
-        150000: '11)  RM100,001 -   RM150,000',
-        200000: '12)  RM150,001 -   RM200,000',
-        250000: '13)  RM200,001 -   RM250,000',
-        500000: '14)  RM250,001 -   RM500,000',
-        1000000:  '15)  RM500,001 - RM1,000,000',
-        2000000:  '16)RM1,000,001 - RM2,000,000',
-        3000000:  '17)RM2,000,001 - RM3,000,000',
-        4000000:  '18)RM3,000,001 - RM4,000,000',
-        5000000:  '19)RM4,000,001 - RM5,000,000',
-    }
-    return _map.get(bucket, '20)RM5,000,001 AND ABOVE')
-
-
-# ===========================================================================
-# FORMAT: ICADPRG  (Islamic CA deposit range -> label, 11 bands)
-# ===========================================================================
-def format_icadprg(bucket: Optional[int]) -> str:
-    """Map ICADPRG bucket to label string."""
-    _map = {
-        1000:   ' 1)     BELOW  RM2,000',
-        2000:   ' 1)     BELOW  RM2,000',
-        2500:   ' 2) RM2,000 -  RM3,000',
-        3000:   ' 2) RM2,000 -  RM3,000',
-        5000:   ' 3) RM3,000 -  RM5,000',
-        10000:  ' 4) RM5,000 -  RM10,000',
-        20000:  ' 5) RM10,000 - RM30,000',
-        30000:  ' 5) RM10,000 - RM30,000',
-        40000:  ' 6) RM30,000 - RM50,000',
-        50000:  ' 6) RM30,000 - RM50,000',
-        75000:  ' 7) RM50,000 - RM75,000',
-        100000: ' 8) RM75,000 - RM100,000',
-        150000: ' 9) RM100,000 -  RM150,000',
-        200000: '10) RM150,000 -  RM200,000',
-    }
-    return _map.get(bucket, '11) RM200,000 AND ABOVE')
-
-
-# ===========================================================================
-# FORMAT: CARANGED  (current account range display, 11 steps)
-# ===========================================================================
-def format_caranged(bucket: Optional[int]) -> str:
-    """Map CARANGE bucket to CARANGED display label."""
-    _map = {
-        2000:   ' 1)         BELOW RM2,000',
-        3000:   ' 2)     RM2,000 - RM3,000',
-        5000:   ' 3)     RM3,000 - RM5,000',
-        10000:  ' 4)    RM5,000 - RM10,000',
-        30000:  ' 5)   RM10,000 - RM30,000',
-        50000:  ' 6)   RM30,000 - RM50,000',
-        75000:  ' 7)   RM50,000 - RM75,000',
-        100000: ' 8)  RM75,000 - RM100,000',
-        150000: ' 9) RM100,000 - RM150,000',
-        200000: '10) RM150,000 - RM200,000',
-        200001: '11) RM200,000 AND ABOVE  ',
-    }
-    return _map.get(bucket, '11) RM200,000 AND ABOVE  ')
-
-
-# ===========================================================================
-# FORMAT: PROFNORM, PROFYAA, PROFPLUS, PROFWISE  (income range formats)
-# ===========================================================================
-def format_profnorm(income: Optional[float]) -> str:
-    """PROFNORM: Normal savings income profile."""
-    if income is None:
-        return ''
-    v = float(income)
-    if v <= 5000:  return '1)UP TO RM 5,000.00'
-    if v <= 10000: return '2)UP TO RM10,000.00'
-    if v <= 30000: return '3)UP TO RM30,000.00'
-    if v <= 50000: return '4)UP TO RM50,000.00'
-    if v <= 75000: return '5)UP TO RM75,000.00'
-    return              '6)ABOVE RM75,000.00'
-
-
-def format_sexnorm(age: Optional[float]) -> str:
-    """SEXNORM: Normal savings age group."""
-    if age is None:
-        return ''
-    v = float(age)
-    if v <= 12:  return '1)BELOW 12 YRS'
-    if v <= 18:  return '2)12 - 18 YRS'
-    if v <= 50:  return '3)18 - 50 YRS'
-    return            '4)50 YRS AND ABOVE'
-
-
-def format_profyaa(income: Optional[float]) -> str:
-    """PROFYAA: Young Achiever Account income profile."""
-    if income is None:
-        return ''
-    v = float(income)
-    if v <= 500:   return '1)BELOW RM   500.00'
-    if v <= 2000:  return '2)UP TO RM 2,000.00'
-    if v <= 5000:  return '3)UP TO RM 5,000.00'
-    if v <= 10000: return '4)UP TO RM10,000.00'
-    if v <= 30000: return '5)UP TO RM30,000.00'
-    if v <= 50000: return '6)UP TO RM50,000.00'
-    if v <= 75000: return '7)UP TO RM75,000.00'
-    return              '8)ABOVE RM75,000.00'
-
-
-def format_sexyw(age: Optional[float]) -> str:
-    """SEXYW: Young Achiever age group."""
-    if age is None:
-        return ''
-    v = float(age)
-    if v <= 12: return '1)BELOW 12 YRS'
-    if v <= 18: return '2)12 - 18 YRS'
-    return ''
-
-
-def format_profplus(income: Optional[float]) -> str:
-    """PROFPLUS: 50-plus savings income profile."""
-    if income is None:
-        return ''
-    v = float(income)
-    if v <= 5000:  return '1)UP TO RM 5,000.00'
-    if v <= 10000: return '2)UP TO RM10,000.00'
-    if v <= 30000: return '3)UP TO RM30,000.00'
-    if v <= 50000: return '4)UP TO RM50,000.00'
-    if v <= 75000: return '5)UP TO RM75,000.00'
-    return              '6)ABOVE RM75,000.00'
-
-
-def format_profwise(income: Optional[float]) -> str:
-    """PROFWISE: WISE savings income profile."""
-    if income is None:
-        return ''
-    v = float(income)
-    if v <= 5000:  return '1)UP TO RM 5,000.00'
-    if v <= 10000: return '2)UP TO RM10,000.00'
-    if v <= 20000: return '3)UP TO RM20,000.00'
-    if v <= 30000: return '4)UP TO RM30,000.00'
-    if v <= 50000: return '5)UP TO RM50,000.00'
-    return              '6)ABOVE RM50,000.00'
-
-
-# ===========================================================================
-# FORMAT: SDNAME  (savings product code -> product name)
-# ===========================================================================
-SDNAME_MAP: dict[int, str] = {
-    200: 'PLUS SAVING',
-    201: 'STAFF',
-    202: 'YOUNG ACHIEVER',
-    203: '50 PLUS',
-    204: 'AL-WADIAH',
-    205: 'BASIC SAVING',
-    206: 'BASIC 55 SAVING',
-    208: 'PB BRIGHT STAR SA',
-    210: 'PB MYSALARY SA',
-    212: 'WISE',
-    213: 'PB SAVELINK',
-    214: 'BESTARI SAVING',
-    215: 'STAFF WADIAH',
-    216: 'PB UNIONPAY SA',
-    227: 'STAFF MONEYPLUS SA',
-    228: 'MONEYPLUS SA',
-    480: 'GIA',
-    481: 'STAFF GIA',
-}
-
-def format_sdname(product: Optional[int]) -> str:
-    """Map savings product code to product name."""
-    if product is None:
-        return ''
-    return SDNAME_MAP.get(product, '')
-
-
-# ===========================================================================
-# FORMAT: $RACE  (race code -> race description)
-# ===========================================================================
-_RACE_MAP: dict[str, str] = {
-    '0': 'OTHERS',
-    '1': 'MALAY',
-    '2': 'CHINESE',
-    '3': 'INDIAN',
-}
-
-def format_race(code: Optional[str]) -> str:
-    """Map race code to description."""
-    if code is None:
-        return 'OTHERS'
-    return _RACE_MAP.get(str(code), 'OTHERS')
-
-
-# ===========================================================================
-# FORMAT: $PURPOSE  (purpose code -> description)
-# ===========================================================================
-def format_purpose(code: Optional[str]) -> str:
-    """Map purpose code to description."""
-    if code is None:
-        return 'OTHERS  '
-    c = str(code)
-    if c in ('1', '4'):
-        return 'PERSONAL'
-    if c == '2':
-        return 'JOINT'
-    return 'OTHERS  '
-
-
-# ===========================================================================
-# FORMAT: PROD  (special product labels)
-# ===========================================================================
-_PROD_MAP: dict[int, str] = {
-    150: 'ACE ACCOUNT',
-    160: 'AL-WADIAH CURRENT A/C',
-}
-
-def format_prod(product: Optional[int]) -> str:
-    """Map special product code to product label."""
-    if product is None:
-        return ''
-    return _PROD_MAP.get(product, '')
-
-
-# ===========================================================================
-# FORMAT: AGEDESC  (age group -> description, uses macro vars)
-# ===========================================================================
-def format_agedesc(age_group: Optional[int]) -> str:
-    """Map age group code to description."""
-    if age_group is None:
-        return ''
-    if age_group == 0:
-        return 'WITHOUT BIRTHDATE'
-    if age_group == AGEBELOW:
-        return 'BELOW 12 YEARS'
-    if age_group == AGELIMIT:
-        return '12 TO BELOW 18 YEARS'
-    if age_group == MAXAGE:
-        return '18 AND ABOVE'
-    return ''
-
-
-# ===========================================================================
-# FORMAT: $STATE  (single-letter state code -> full state name)
-# ===========================================================================
-_STATE_MAP: dict[str, str] = {
-    'A': 'PERAK',
-    'B': 'SELANGOR',
-    'C': 'PAHANG',
-    'D': 'KELANTAN',
-    'J': 'JOHOR',
-    'K': 'KEDAH',
-    'L': 'LABUAN',
-    'M': 'MELAKA',
-    'N': 'NEGERI SEMBILAN',
-    'P': 'PULAU PINANG',
-    'Q': 'SARAWAK',
-    'R': 'PERLIS',
-    'S': 'SABAH',
-    'T': 'TERENGGANU',
-    'W': 'WILAYAH PERSEKUTUAN',
-}
-
-def format_state(code: Optional[str]) -> str:
-    """Map single-letter state code to full state name."""
-    if code is None:
-        return ''
-    return _STATE_MAP.get(str(code).upper(), '')
-
-
-# ===========================================================================
-# FORMAT: FDPROD  (FD product code -> term label, used in PBMISFMT context)
-# Note: This is the simplified PBMISFMT FDPROD, different from PBBDPFMT FDPROD
-# which maps to BNM BIC codes.
-# ===========================================================================
-_FDPROD_MIS_MAP: dict[int, str] = {
-    340: '1 MONTH',
-    341: '3 MONTHS',
-    342: '6 MONTHS',
-    343: '9 MONTHS',
-    344: '12 MONTHS',
-    345: '15 MONTHS',
-    346: '18 MONTHS',
-    347: '21 MONTHS',
-    348: '24 MONTHS',
-    349: '36 MONTHS',
-    350: '48 MONTHS',
-    351: '60 MONTHS',
-}
-
-def format_fdprod_mis(product: Optional[int]) -> str:
-    """Map FD product code to term label (PBMISFMT context)."""
-    if product is None:
-        return ' '
-    return _FDPROD_MIS_MAP.get(product, ' ')
-
-
-# ===========================================================================
-# FORMAT: $CPARTYF / $CPARTY  (counterparty code -> BNM group code / label)
-# ===========================================================================
-_CPARTYF_MAP: dict[str, str] = {
-    '01': '01', '02': '10', '03': '10', '04': '20', '05': '20',
-    '06': '20', '10': '10', '11': '10', '12': '10', '13': '20',
-    '15': '20', '17': '20', '20': '20', '30': '20', '32': '20',
-    '33': '20', '34': '20', '35': '20', '36': '20', '37': '20',
-    '38': '20', '39': '20', '40': '20', '50': '60', '57': '60',
-    '59': '60', '60': '60', '61': '60', '62': '60', '63': '60',
-    '64': '60', '65': '60', '66': '60', '67': '60', '68': '60',
-    '69': '60', '70': '70', '71': '70', '72': '70', '73': '70',
-    '74': '70', '75': '60', '76': '76', '77': '76', '78': '76',
-    '79': '79', '80': '80', '81': '80', '85': '80', '86': '80',
-    '90': '80', '91': '80', '92': '80', '95': '80', '96': '80',
-    '98': '80', '99': '80',
-}
-
-def format_cpartyf(code: Optional[str]) -> str:
-    """Map counterparty code to BNM group code."""
-    if code is None:
-        return '76'
-    return _CPARTYF_MAP.get(str(code), '76')
-
-
-_CPARTY_MAP: dict[str, str] = {
-    '01': 'BANK NEGARA MALAYSIA',
-    '10': 'DOMESTIC BANKING INSTITUTION',
-    '20': 'DOMESTIC NON-BANK FI',
-    '60': 'DOMESTIC BUSINESS ENTERPRISES',
-    '70': 'GOVERNMENT',
-    '76': 'INDIVIDUALS',
-    '79': 'DOMESTIC OTHER ENTITIES NIE',
-    '80': 'NON RESIDENTS/FOREIGN ENTITIES',
-}
-
-def format_cparty(code: Optional[str]) -> str:
-    """Map BNM group code to counterparty description."""
-    if code is None:
-        return ''
-    return _CPARTY_MAP.get(str(code), '')
-
-
-# ===========================================================================
-# FORMAT: LNPOGRP  (branch number -> loan portfolio group label)
-# ===========================================================================
-_LNPOGRP_RAW: list[tuple[set, str]] = [
-    ({2,3,22,46,53,56,120,129,136,169,170,173,196,226,232,252,262,802,811,818,284,285,291},
-     '01-SELANGOR/WILAYAH REG.   I'),
-    ({15,29,40,41,66,83,96,97,101,103,118,128,141,151,195,197,248,269,701,812,821,822},
-     '02-SELANGOR/WILAYAH REG.  II'),
-    ({18,19,35,36,81,124,125,131,135,145,148,162,167,180,220,241,267,280,292,295,815,816},
-     '03-SELANGOR/WILAYAH REG. III'),
-    ({7,37,52,59,61,79,87,89,91,93,102,105,110,144,147,174,176,216,217,222,234,286,287,290,804,805},
-     '04-SOUTHERN REGION I       '),
-    ({5,9,49,51,67,71,76,80,85,95,123,137,146,152,158,207,208,209,210,244,245,251,809,823},
-     '05-CENTRAL REGION           '),
-    ({32,50,58,90,130,175,183,184,185,186,189,190,191,192,193,194,259,813,273,274,275,281},
-     '06-SARAWAK REGION           '),
-    ({33,44,55,62,72,112,115,140,142,143,149,161,228,803,278,276,282,283},
-     '07-SABAH REGION             '),
-    ({4,16,17,21,24,28,39,45,47,63,64,65,75,111,156,160,165,172,224,231,242,247,254,800,807},
-     '08-SOUTHERN REGION II       '),
-    ({6,10,34,54,70,74,77,86,104,107,114,126,150,159,171,205,238,258,265,266,806,808,817,704},
-     '09-NORTHERN REGION I        '),
-    ({8,13,14,30,48,106,113,116,117,139,233,237,239,257,260,261,263,264,819,277,703},
-     '10-EAST COAST REGION        '),
-    ({26,38,94,122,138,153,155,157,163,168,178,179,198,225,230,270,296,814,820,279,288,289,702},
-     '11-SELANGOR/WILAYAH REG.  IV'),
-    ({23,27,42,57,60,68,88,108,121,154,164,177,204,206,211,249,256,801,824,11,243},
-     '12-NORTHERN REGION II       '),
-    ({20,25,31,43,69,73,78,92,109,127,133,199,201,202,203,221,235,240,268,293,294},
-     '13-SELANGOR/WILAYAH REG.   V'),
-]
-
-def format_lnpogrp(branch: Optional[int]) -> str:
-    """Map branch number to loan portfolio group label."""
-    if branch is None:
-        return '99-OTHER'
-    for branch_set, label in _LNPOGRP_RAW:
-        if branch in branch_set:
-            return label
-    return '99-OTHER'
-
-
-# ===========================================================================
-# PICTURE FORMATS (numeric -> formatted string)
-# These replicate SAS PICTURE statement behaviour.
-# ===========================================================================
-
-def format_hundred(value: Optional[float]) -> str:
-    """HUNDRED PICTURE: format as 9,999,999.99 (MULT=1)."""
-    if value is None:
-        return '0,000,000.00'
-    prefix = '-' if value < 0 else ''
-    return f"{prefix}{abs(value):>12,.2f}"
-
-
-def format_thousand(value: Optional[float]) -> str:
-    """THOUSAND PICTURE: divide by 1000, format as integer with commas."""
-    if value is None:
-        return '0,000,000,000'
-    v = value / 1000.0
-    prefix = '-' if v < 0 else ''
-    return f"{prefix}{abs(v):>13,.0f}"
-
-
-def format_million(value: Optional[float]) -> str:
-    """MILLION PICTURE: divide by 1,000,000, format as integer with commas."""
-    if value is None:
-        return '0,000,000,000'
-    v = value / 1_000_000.0
-    prefix = '-' if v < 0 else ''
-    return f"{prefix}{abs(v):>13,.0f}"
-
-
-# ===========================================================================
-# CONVENIENCE: unified apply helper
-# ===========================================================================
-def apply_fmt(val, fmt_fn, default: str = '') -> str:
-    """Apply a format function, returning default on None or exception."""
-    try:
-        result = fmt_fn(val)
-        return result if result is not None else default
-    except (TypeError, ValueError):
-        return default
-
-
-# ===========================================================================
-# EXPORTS
-# ===========================================================================
-__all__ = [
-    # Macro vars
-    'AGELIMIT', 'MAXAGE', 'AGEBELOW',
-    # Format functions
-    'format_brchcd',
-    'format_groupf',
-    'format_acknof',
-    'format_saprod_mis',
-    'format_caprod_mis',
-    'format_odprod_mis',
-    'format_lnprod_mis',
-    'format_sadprg',
-    'format_iwsrnge',
-    'format_iwsrngx',
-    'format_ibwsrngd',
-    'format_isarangd',
-    'format_cadprg',
-    'format_icadprg',
-    'format_caranged',
-    'format_profnorm',
-    'format_sexnorm',
-    'format_profyaa',
-    'format_sexyw',
-    'format_profplus',
-    'format_profwise',
-    'format_sdname',
-    'format_race',
-    'format_purpose',
-    'format_prod',
-    'format_agedesc',
-    'format_state',
-    'format_fdprod_mis',
-    'format_cpartyf',
-    'format_cparty',
-    'format_lnpogrp',
-    'format_hundred',
-    'format_thousand',
-    'format_million',
-    # INVALUE bucket functions
-    'invalue_ibwrnge',
-    'invalue_carange',
-    'invalue_isarange',
-    # Dicts (for direct lookups if needed)
-    'GROUPF_MAP',
-    'SDNAME_MAP',
-    # Utility
-    'apply_fmt',
-]
-
-
-if __name__ == '__main__':
-    print(f"BRCHCD(1)   = {format_brchcd(1)}")       # HOE
-    print(f"BRCHCD(2)   = {format_brchcd(2)}")       # JSS
-    print(f"BRCHCD(3000)= {format_brchcd(3000)}")    # HOE
-    print(f"BRCHCD(3002)= {format_brchcd(3002)}")    # JSS
-    print(f"GROUPF(JSS) = {format_groupf('JSS')}")   # GROUP 1
-    print(f"GROUPF(HOE) = {format_groupf('HOE')}")   # HOE
-    print(f"RACE(1)     = {format_race('1')}")        # MALAY
-    print(f"PURPOSE(1)  = {format_purpose('1')}")     # PERSONAL
-    print(f"IWSRNGE(3000)  = {format_iwsrnge(3000)}")  # band 1
-    print(f"IWSRNGE(10001) = {format_iwsrnge(10001)}") # band 3
-    print(f"CARANGE(bucket 5000) -> {format_caranged(invalue_carange(5000))}")
-    print(f"FDPROD_MIS(340) = {format_fdprod_mis(340)}")
-    print(f"STATE(B)    = {format_state('B')}")       # SELANGOR
-    print(f"LNPOGRP(2)  = {format_lnpogrp(2)}")
+
+DATA _NULL_;
+  CALL SYMPUT('AGELIMIT',12);
+  CALL SYMPUT('MAXAGE',18);
+  CALL SYMPUT('AGEBELOW',11);
+RUN;
+
+PROC FORMAT CNTLOUT=PBMISFMT;
+   VALUE BRCHCD
+     1,3000-3001,7000,7500-8000,8050-8750= 'HOE'
+     2,3002     = 'JSS'    /* JALAN SULTAN SULAIMAN (JSS)         */
+     3,3003     = 'JRC'    /* JALAN RAJA CHULAN (JRC)             */
+     4,3004     = 'MLK'    /* MALACCA (MLK)                       */
+     5,3005     = 'IMO'    /* IPOH MAIN OFFICE (IMO)              */
+     6,3006     = 'PPG'    /* PULAU PINANG (PPG)                  */
+     7,3007     = 'JBU'    /* JOHOR BAHRU (JBU)                   */
+     8,3008     = 'KTN'    /* KUANTAN (KTN)                       */
+     9,3009     = 'JYK'    /* JALAN YANG KALSOM (JYK)             */
+     10,3010    = 'ASR'    /* ALOR SETAR (ASR)                    */
+     11,3011    = 'GRN'    /* GURUN (GRN)                         */
+     12,3012    = 'PPH'    /* PASIR PUTEH (PPH)                   */
+     13,3013    = 'KBU'    /* KOTA BHARU (KBU)                    */
+     14,3014    = 'TMH'    /* TANAH MERAH (TMH)                   */
+     15,3015    = 'KPG'    /* KEPONG (KPG)                        */
+     16,3016    = 'NLI'    /* NILAI (NLI)                         */
+     17,3017    = 'TPN'    /* TAMPIN (TPN)                        */
+     18,3018    = 'PJN'    /* PJ NEW TOWN (PJN)                   */
+     19,3019    = 'DUA'    /* DAMANSARA UTAMA (DUA)               */
+     20,3020    = 'TCL'    /* TAMAN CHI LIUNG (TCL)               */
+     21,3021    = 'BPT'    /* BATU PAHAT (BPT)                    */
+     22,3022    = 'SMY'    /* SEMENYIH (SMY)                      */
+     23,3023    = 'KMT'    /* KEMUNTING (KMT)                     */
+     24,3024    = 'RSH'    /* RASAH (RSH)                         */
+     25,3025    = 'SAM'    /* SHAH ALAM (SAM)                     */
+     26,3026    = 'SPG'    /* SERI PETALING (SPG)                 */
+     27,3027    = 'NTL'    /* NIBONG TEBAL (NTL)                  */
+     28,3028    = 'MUA'    /* MUAR (MUA)                          */
+     29,3029    = 'JRL'    /* JALAN RAJA LAUT (JRL)               */
+     30,3030    = 'KTU'    /* K. TRENGGANU (KTU)                  */
+     31,3031    = 'SKC'    /* SEKINCHAN (SKC)                     */
+     32,3032    = 'WSS'    /* KUCHING (WSS)                       */
+     33,3033    = 'KKU'    /* KOTA KINABALU (KKU)                 */
+     34,3034    = 'KGR'    /* KANGAR (KGR)                        */
+     35,3035    = 'SSA'    /* SERI SETIA (SSA)                    */
+     36,3036    = 'SS2'    /* SS2 (SS2)                           */
+     37,3037    = 'TSA'    /* TMN SENTOSA (TSA)                   */
+     38,3038    = 'JKL'    /* JALAN KELANG LAMA (JKL)             */
+     39,3039    = 'KKG'    /* KUALA KELAWANG (KKG)                */
+     40,3040    = 'JSB'    /* JALAN SG BESI (JSB)                 */
+     41,3041    = 'JIH'    /* JALAN IPOH (JIH)                    */
+     42,3042    = 'BMM'    /* BUKIT MERTAJAM (BMM)                */
+     43,3043    = 'BTG'    /* BANTING (BTG)                       */
+     44,3044    = 'TWU'    /* TAWAU (TWU)                         */
+     45,3045    = 'SRB'    /* SEREMBAN (SRB)                      */
+     46,3046    = 'APG'    /* AMPANG (APG)                        */
+     47,3047    = 'SGM'    /* SEGAMAT (SGM)                       */
+     48,3048    = 'MTK'    /* MENTAKAB (MTK)                      */
+     49,3049    = 'JLP'    /* JELAPANG (JLP)                      */
+     50,3050    = 'MRI'    /* MIRI (MRI)                          */
+     51,3051    = 'SMG'    /* SERI MANJUNG (SMG)                  */
+     52,3052    = 'UTM'    /* ULU TIRAM (UTM)                     */
+     53,3053    = 'TMI'    /* TMN MALURI (TMI)                    */
+     54,3054    = 'BBB'    /* BANDAR BAYAN BARU (BBB)             */
+     55,3055    = 'LBN'    /* LABUAN                              */
+     56,3056    = 'KJG'    /* KAJANG (KJG)                        */
+     57,3057    = 'SPI'    /* SUNGAI PETANI (SPI)                 */
+     58,3058    = 'SBU'    /* SIBU (SBU)                          */
+     59,3059    = 'PKL'    /* PONTIAN KECIL (PKL)                 */
+     60,3060    = 'BAM'    /* BAGAN AJAM (BAM)                    */
+     61,3061    = 'KLI'    /* KULAI (KLI)                         */
+     62,3062    = 'SDK'    /* SANDAKAN (SDK)                      */
+     63,3063    = 'GMS'    /* GEMAS (GMS)                         */
+     64,3064    = 'PDN'    /* PORT DICKSON (PDN)                  */
+     65,3065    = 'BHU'    /* BAHAU (BHU)                         */
+     66,3066    = 'BDA'    /* BUKIT DAMANSARA (BDA)               */
+     67,3067    = 'CMR'    /* CHEMOR (CMR)                        */
+     68,3068    = 'SAT'    /* SIMPANG AMPAT (SAT)                 */
+     69,3069    = 'BKI'    /* BATANG KALI (BKI)                   */
+     70,3070    = 'PSA'    /* POKOK SENA (PSA)                    */
+     71,3071    = 'BCG'    /* BRINCHANG (BCG)                     */
+     72,3072    = 'PPR'    /* PAPAR (PPR)                         */
+     73,3073    = 'SPK'    /* SUNGAI PELEK (SPK)                  */
+     74,3074    = 'SIK'    /* SIK (SIK)                           */
+     75,3075    = 'CAH'    /* CHAAH (CAH)                         */
+     76,3076    = 'PRS'    /* PANTAI REMIS (PRS)                  */
+     77,3077    = 'PLI'    /* PULAU LANGKAWI (PLI)                */
+     78,3078    = 'SJA'    /* SUBANG JAYA (SJA)                   */
+     79,3079    = 'MSI'    /* MASAI (MSI)                         */
+     80,3080    = 'MLB'    /* MENGLEMBU (MLB)                     */
+     81,3081    = 'SBH'    /* SUNGAI BULOH (SBH)                  */
+     82,3082    = 'MCG'    /* MACHANG (MCG)                       */
+     83,3083    = 'JBB'    /* JALAN BUKIT BINTANG (JBB)           */
+     84,3084    = 'PMS'    /* PASIR MAS (PMS)                     */
+     85,3085    = 'SST'    /* SUNGAI SIPUT (SST)                  */
+     86,3086    = 'CLN'    /* CHANGLUN (CLN)                      */
+     87,3087    = 'MSG'    /* MERSING (MSG)                       */
+     88,3088    = 'KUM'    /* KULIM (KUM)                         */
+     89,3089    = 'TPI'    /* TAMPOI (TPI)                        */
+     90,3090    = 'BTL'    /* BINTULU (BTL)                       */
+     91,3091    = 'KUG'    /* KLUANG (KUG)                        */
+     92,3092    = 'KLG'    /* KLANG (KLG)                         */
+     93,3093    = 'EDU'    /* ENDAU (EDU)                         */
+     94,3094    = 'STP'    /* SETAPAK (STP)                       */
+     95,3095    = 'TIN'    /* TELUK INTAN (TIN)                   */
+     96,3096    = 'SGK'    /* SERI GOMBAK (SGK)                   */
+     97,3097    = 'HSL'    /* JALAN TUN H S LEE (HSL)             */
+     98,3098    = 'TCY'    /* TMN CENTURY (TCY)                   */
+     102,3102   = 'PRJ'    /* PARIT RAJA (PRJ)                    */
+     103,3103   = 'JJG'    /* JINJANG (JJG)                       */
+     104,3104   = 'KKL'    /* KUALA KETIL (KKL)                   */
+     105,3105   = 'KTI'    /* KOTA TINGGI (KTI)                   */
+     106,3106   = 'CKI'    /* CHUKAI (CKI)                        */
+     107,3107   = 'JLT'    /* JELUTONG (JLT)                      */
+     108,3108   = 'BSI'    /* BAGAN SERAI (BSI)                   */
+     109,3109   = 'KSR'    /* K. SELANGOR (KSR)                   */
+     110,3110   = 'TJJ'    /* TMN JOHOR JAYA (TJJ)                */
+     111,3111   = 'AKH'    /* AIR KEROH (AKH)                     */
+     112,3112   = 'LDO'    /* LIDO (LDO)                          */
+     113,3113   = 'TML'    /* TEMERLOH (TML)                      */
+     114,3114   = 'BBA'    /* BANDAR BARU AIR ITAM (BBA)          */
+     115,3115   = 'KNG'    /* KENINGAU (KNG)                      */
+     116,3116   = 'TRI'    /* TRIANG (TRI)                        */
+     117,3117   = 'KKI'    /* KUALA KRAI (KKI)                    */
+     118,3118   = 'TMW'    /* TMN MELAWATI (TMW)                  */
+     119,3119   = 'BNV'    /* BERCHAM N/V (BNV)                   */
+     120,3120   = 'PIH'    /* PANDAN INDAH (PIH)                  */
+     121,3121   = 'PRA'    /* PRAI (PRA)                          */
+     122,3122   = 'SKN'    /* SRI KEMBANGAN (SKN)                 */
+     123,3123   = 'IGN'    /* IPOH GARDEN (IGN)                   */
+     124,3124   = 'S14'    /* SECTION 14 (S14)                    */
+     125,3125   = 'KJA'    /* KELANA JAYA (KJA)                   */
+     126,3126   = 'PTS'    /* PULAU TIKUS (PTS)                   */
+     127,3127   = 'TSM'    /* TMN SERI MUDA (TSM)                 */
+     128,3128   = 'SGB'    /* SEGAMBUT (SGB)                      */
+     129,3129   = 'BSR'    /* BANGSAR (BSR)                       */
+     130,3130   = 'PDG'    /* PADUNGAN (PDG)                      */
+     131,3131   = 'TMG'    /* TMN MAYANG (TMG)                    */
+     132,3132   = 'CKT'    /* CHOW KIT (CKT)                      */
+     133,3133   = 'PKG'    /* PORT KLANG (PKG)                    */
+     134,3134   = 'RPG'    /* RANTAU PANJANG (RPG)                */
+     135,3135   = 'BSY'    /* BANDAR SUNWAY (BSY)                 */
+     136,3136   = 'TCS'    /* TMN CHERAS (TCS)                    */
+     137,3137   = 'JPP'    /* JALAN PASIR PUTEH (JPP)             */
+     138,3138   = 'WMU'    /* WANGSA MAJU (WMU)                   */
+     139,3139   = 'JRT'    /* JERANTUT (JRT)                      */
+     140,3140   = 'CPE'    /* CITY PARADE (CPE)                   */
+     141,3141   = 'STL'    /* SENTUL (STL)                        */
+     142,3142   = 'KBD'    /* KOTA BELUD (KBD)                    */
+     143,3143   = 'LDU'    /* LAHAD DATU (LDU)                    */
+     144,3144   = 'KHG'    /* KAHANG (KHG)                        */
+     145,3145   = 'BSD'    /* BDR SRI DAMANSARA (BSD)             */
+     146,3146   = 'PSG'    /* PUSING (PSG)                        */
+     147,3147   = 'PNS'    /* PEKAN NENAS (PNS)                   */
+     148,3148   = 'PJO'    /* PJ OLD TOWN (PJO)                   */
+     149,3149   = 'BFT'    /* BEAUFORT (BFT)                      */
+     150,3150   = 'LMM'    /* LEBOH MACALLUM (LMM)                */
+     151,3151   = 'SLY'    /* SELAYANG (SLY)                      */
+     152,3152   = 'ATR'    /* AYER TAWAR (ATR)                    */
+     153,3153   = 'USJ'    /* USJ (USJ)                           */
+     154,3154   = 'BSJ'    /* BDR SEBERANG JAYA (BSJ)             */
+     155,3155   = 'TTJ'    /* TMN TAMING JAYA (TTJ)               */
+     156,3156   = 'TMR'    /* TMN MELAKA RAYA (TMR)               */
+     157,3157   = 'BPJ'    /* BDR PUCHONG JAYA (BPJ)              */
+     158,3158   = 'SPL'    /* SIMPANG PULAI (SPL)                 */
+     159,3159   = 'RLU'    /* RELAU (RLU)                         */
+     160,3160   = 'MTH'    /* MASJID TANAH (MTH)                  */
+     161,3161   = 'DGG'    /* DONGGONGON (DGG)                    */
+     162,3162   = 'SEA'    /* SEA PARK (SEA)                      */
+     163,3163   = 'JKA'    /* JALAN KUCHAI LAMA (JKA)             */
+     164,3164   = 'KBS'    /* KEPALA BATAS (KBS)                  */
+     165,3165   = 'TKA'    /* TENGKERA (TKA)                      */
+     166,3166   = 'PGG'    /* PASIR GUDANG (PGG)                  */
+     167,3167   = 'BBG'    /* BUKIT BERUNTUNG (BBG)               */
+     168,3168   = 'KLC'    /* KUALA LUMPUR CITY MAIN (KLC)        */
+     169,3169   = 'CTD'    /* CHANGKAT THAMBI DOLLAH (CTD)        */
+     170,3170   = 'PJA'    /* PANDAN JAYA  (PJA)                  */
+     171,3171   = 'JMR'    /* JALAN MACALISTER (JMR)              */
+     172,3172   = 'TMJ'    /* TAMAN MALIM JAYA (TMJ)              */
+     173,3173   = 'SCA'    /* SUNGAI CHUA (SCA)                   */
+     174,3174   = 'BBP'    /* BANDAR BARU PERMAS JAYA (BBP)       */
+     175,3175   = 'LBG'    /* LIMBANG (LBG)                       */
+     176,3176   = 'TPG'    /* TAMAN PERLING JAYA                  */
+     177,3177   = 'JRU'    /* JALAN RAJA UDA                      */
+     178,3178   = 'MIN'    /* MEDAN IDAMAN                        */
+     179,3179   = 'OUG'    /* OVERSEAS UNION GARDEN               */
+     180,3180   = 'KBG'    /* KAMPUNG BARU SUBANG                 */
+     182,3182   = 'JPU'    /* JALAN PULAU, SIBU                   */
+     183,3183   = 'JCL'      /* JALAN CENTRAL, SIBU (JCL)         */
+     184,3184   = 'JPN'      /* JALAN PENRISSEN, KUCHING (JPN)    */
+     185,3185   = 'KCY'      /* JALAN TUN HJ OPENG, KUCHING (KCY) */
+     186,3186   = 'JTZ'      /* JALAN TUN ZAIDI, KUCHING (JTZ)    */
+ /*  187,3187   = 'CST'         CHINA STREET, MIRI (CST)          */
+     188,3188   = 'PLT'      /* PELITA, MIRI (PLT)                */
+     189,3189   = 'BNH'      /* BATU NIAH (BNH)                   */
+     190,3190   = 'BTR'      /* BINTANGOR (BTR)                   */
+     191,3191   = 'KPT'      /* KAPIT (KPT)                       */
+     192,3192   = 'MRD'      /* MARUDI (MRD)                      */
+     193,3193   = 'MKH'      /* MUKAH (MKH)                       */
+     194,3194   = 'SRK'      /* SARIKEI (SRK)                     */
+     195,3195   = 'BWK'      /* BINTANG WALK BRANCH, KL (BWK)     */
+     196,3196   = 'JHL'      /* JALAN HANG LEKIU (JHL)            */
+     197,3197   = 'TNM'      /* TIONG NAM BRANCH, KL (TNM)        */
+     198,3198   = 'TDA'      /* TAMAN DESA, JLN KELANG LAMA (TDA) */
+     199,3199   = 'JTH'      /* JALAN TAPAH, KLANG (JTH)          */
+  /* 200,3200   = 'JSK'         JALAN SK10/4, SERI KEMBANGAN (JSK)*/
+     201,3201   = 'PDA'      /* PANDAMARAN, KLANG (PDA)           */
+     202,3202   = 'RWG'      /* RAWANG (RWG)                      */
+     203,3203   = 'SJM'      /* SUNGAI JAROM (SJM)                */
+     204,3204   = 'BTW'      /* BUTTERWORTH (BTW)                 */
+     205,3205   = 'SNG'      /* SUNGAI NIBONG (SNG)               */
+     206,3206   = 'TBM'      /* TAMAN BUKIT MAS (TBM)             */
+     207,3207   = 'BCM'      /* JALAN BERCHAM, IPOH (JBM)         */
+     208,3208   = 'JSI'      /* JALAN SULTAN IDRIS SHAH, IPOH (JSI)*/
+     209,3209   = 'STW'      /* SITIAWAN (STW)                    */
+     210,3210   = 'TMM'      /* TANJUNG MALIM (TMM)               */
+     211,3211   = 'TPD'      /* TANJUNG PIANDANG (TPD)            */
+     212,3212   = 'JMA'      /* JLN MUNSHI ABDULLAH, MELAKA (JMA)   */
+     213,3213   = 'JKB'      /* JALAN KAMPUNG BARU, SG PETANI (JKB) */
+     214,3214   = 'JGA'      /* JALAN GEREJA, JOHOR BARU (JGA)      */
+     215,3215   = 'JKP'      /* JALAN KUKUP, PONTIAN KECHIL (JKP)   */
+     216,3216   = 'SKI'      /* SKUDAI (SKI)                        */
+     217,3217   = 'TMB'      /* T. MUNSHI IBRAHIM, TAMPOI (TMB)     */
+     220,3220   = 'GHS'      /* GENTING HIGHLANDS, PAHANG (GHS)     */
+     221,3221   = 'TSK'      /* TAMAN SENTOSA, KLANG                */
+     222,3222   = 'TDC'      /* TAMAN DESA CEMERLANG, JOHOR         */
+     223,3223   = 'TRJ'      /* TAMAN RASAH JAYA, SEREMBAN          */
+     224,3224   = 'JAH'      /* JALAN ABDULLAH, MUAR                */
+     225,3225   = 'TIH'      /* TAMAN INDAH                         */
+     226,3226   = 'JPR'      /* JALAN PASAR, KUALA LUMPUR           */
+     227,3227   = 'KSB'      /* KAMPONG BARU, SG BULOH, SELANGOR    */
+     228,3228   = 'INN'      /* INANAM, KOTA KINABALU               */
+     229,3229   = 'TSJ'      /* TAMAN SELAYANG JAYA, SELANGOR       */
+     230,3230   = 'SSH'      /* SALAK SOUTH, KUALA LUMPUR           */
+     231,3231   = 'BBM'      /* BATU BERENDAM, MELAKA               */
+     232,3232   = 'TMD'      /* TAMAN MIDAH, KUALA LUMPUR           */
+     233,3233   = 'BEN'      /* BENTONG, PAHANG - PFB CONVERTED     */
+     234,3234   = 'SRM'      /* SIMPANG RENGAM, JOHORE. PFB CONV.   */
+     235,3235   = 'SBM'      /* SABAK BERNAM, SELANGOR              */
+     236,3236   = 'UYB'      /* ULU YAM BARU, SELANGOR              */
+     237,3237   = 'KLS'      /* KUALA LIPIS, PAHANG                 */
+     238,3238   = 'JKT'      /* JALAN KOTA, KEDAH                   */
+     239,3239   = 'KMY'      /* KEMAYAN, PAHANG                     */
+     240,3240   = 'KAP'      /* KAPAR, SELANGOR                     */
+     241,3241   = 'DJA'      /* DAMANSARA JAYA, SELANGOR            */
+     242,3242   = 'TKK'      /* TANGKAK JOHOR                       */
+     243,3243   = 'KKR'      /* KUALA KANGSAR PERAK                 */
+     244,3244   = 'GRT'      /* GUNUNG RAPAT IPOH.                  */
+     245,3245   = 'BDR'      /* BIDOR PERAK                         */
+     246,3246   = 'BGH'      /* BATU GAJAH PERAK                    */
+     247,3247   = 'BPR'      /* BUKIT PASIR MUAR JOHOR              */
+     248,3248   = 'JTS'      /* JLN TUN SAMBANTHAN, KUALA LUMPUR    */
+     249,3249   = 'TAI'      /* TAIPING PERAK                       */
+     250,3250   = 'TEA'      /* TAMAN ENG ANN KELANG SELANGOR       */
+     251,3251   = 'KPR'      /* KAMPAR PERAK                        */
+     252,3252   = 'TMA'      /* TAMAN MUDA AMPANG SELANGOR          */
+     253,3253   = 'JTT'      /* JALAN TANJONG TOKONG, P.PINANG      */
+     254,3254   = 'KPH'      /* KUALA PILAH NEGERI SEMBILAN         */
+     255,3255   = 'SBP'      /* SUNGAI BAKAP, S. PERAI,PULAU PINANG */
+     256,3256   = 'PBR'      /* PARIT BUNTAR PERAK                  */
+     257,3257   = 'RAU'      /* RAUB PAHANG                         */
+     258,3258   = 'JTA'      /* JITRA KEDAH                         */
+     259,3259   = 'SAN'      /* SRI AMAN, SARAWAK                   */
+     260,3260   = 'KDN'      /* KUALA DUNGUN TERENGGANU             */
+     261,3261   = 'GMG'      /* GUA MUSANG, KELANTAN                */
+     262,3262   = 'TCT'      /* TAMAN CONNAUGHT CHERAS KUALA LUMPUR */
+     263,3263   = 'BTA'      /* BENTA PAHANG                        */
+     264,3264   = 'JBH'      /* JALAN BESERAH PAHANG                */
+     265,3265   = 'JAI'      /* JALAN AIR ITAM, PENANG              */
+     266,3266   = 'JDK'      /* JALAN DATUK KERAMAT, PENANG         */
+     267,3267   = 'TDI'      /* TMN TUN DR ISMAIL, WILAYAH          */
+     268,3268   = 'BBT'      /* BANDAR BUKIT TINGGI, KLANG SELANGOR */
+     269,3269   = 'MKA'      /* MONT KIARA,KUALA LUMPUR             */
+     270,3270   = 'BPI'      /* BANDAR PUTERI PUCHONG               */
+     273,3273   = 'LHA'      /* LI HUA, SARAWAK                     */
+     277,3277   = 'WSU'      /* WAKAF SIKU, KELANTAN                */
+     278,3278   = 'JPI'      /* JALAN PANTAI, SABAH                 */
+     274,3274   = 'STG'      /* STUTONG, SARAWAK                    */
+     275,3275   = 'MSL'      /* MEDAN SENTRAL, SARAWAK              */
+     276,3276   = 'JAS'      /* JALAN APAS, SABAH                   */
+     279,3279   = 'PTJ'      /* PUTRAJAYA                           */
+     280,3280   = 'KDA'      /* KOTA DAMANSARA                      */
+     281,3281   = 'PLT'      /* PELITA                              */
+     282,3282   = 'PTT'      /* PUTATAN                             */
+     283,3283   = 'PSE'      /* PRIMA SQUARE                        */
+     284,3284   = 'BSP'      /* BANDAR SRI PERMAISURI               */
+     285,3285   = 'BMC'      /* BANDAR MAHKOTA CHERAS               */
+     286,3286   = 'BIH'      /* BUKIT INDAH BRANCH                  */
+     287,3287   = 'SUA'    /* SUTERA UTAMA                        */
+     288,3288   = 'SPT'    /* STARPARC POINT                      */
+     289,3289   = 'TEE'    /* TAMAN EQUINE                        */
+     290,3290   = 'TDY'    /* TAMAN DAYA                          */
+     291,3291   = 'BSL'    /* BANDAR SUNGAI LONG                  */
+     292,3292   = 'BMJ'    /* BANDAR MENJALARA                    */
+     293,3293   = 'BSA'    /* BANDAR SETIA ALAM                   */
+     294,3294   = 'KKM'    /* KOTA KEMUNING                       */
+     295,3295   = 'BKR'    /* BANDAR KINRARA                      */
+     296,3296   = 'BJL'    /* BUKIT JALIL                         */
+     701,3701   = 'IKB'    /* KAMPUNG BARU ISLAMIC                */
+     702,3702   = 'IPJ'    /* PUTRAJAYA                           */
+     703,3703   = 'IWS'    /* ISLAMIC WAKAF SIKU                  */
+     704,3704   = 'IJK'    /* ISLAMIC JALAN KOTA                  */
+     ;
+
+   VALUE $GROUPF
+     'BBB' = 'GROUP 1'  /* BANDAR BAYAN BARU                   */
+     'BDA' = 'GROUP 1'  /* BUKIT DAMANSARA                     */
+     'BMM' = 'GROUP 1'  /* BUKIT MERTAJAM                      */
+     'DUA' = 'GROUP 1'  /* DAMANSARA UTAMA                     */
+     'IMO' = 'GROUP 1'  /* IPOH MAIN OFFICE                    */
+     'JKL' = 'GROUP 1'  /* JALAN KELANG LAMA                   */
+     'JRC' = 'GROUP 1'  /* JALAN RAJA CHULAN                   */
+     'JRL' = 'GROUP 1'  /* JALAN RAJA LAUT                     */
+     'JSS' = 'GROUP 1'  /* JALAN SULTAN SULAIMAN               */
+     'JSB' = 'GROUP 1'  /* JALAN SUNGEI BESI                   */
+     'JYK' = 'GROUP 1'  /* JALAN YANG KALSOM                   */
+     'JBU' = 'GROUP 1'  /* JOHOR BAHRU                         */
+     'KPG' = 'GROUP 1'  /* KEPONG                              */
+     'KLC' = 'GROUP 1'  /* KL CITY BRANCH                      */
+     'MLK' = 'GROUP 1'  /* MELAKA                              */
+     'PPG' = 'GROUP 1'  /* PENANG                              */
+     'SS2' = 'GROUP 1'  /* S S 2                               */
+     'SPG' = 'GROUP 1'  /* SERI PETALING                       */
+     'SSA' = 'GROUP 1'  /* SERI SETIA                          */
+     'SAM' = 'GROUP 1'  /* SHAH ALAM                           */
+     'SJA' = 'GROUP 1'  /* SUBANG JAYA                         */
+     'TCL' = 'GROUP 1'  /* TAMAN CHI LIUNG                     */
+     'TSA' = 'GROUP 1'  /* TAMAN SENTOSA                       */
+     'BAM' = 'GROUP 2'  /* BAGAN AJAM                          */
+     'ASR' = 'GROUP 2'  /* ALOR SETAR                          */
+     'BSY' = 'GROUP 2'  /* BANDAR SUNWAY                       */
+     'BSR' = 'GROUP 2'  /* BANGSAR                             */
+     'BTG' = 'GROUP 2'  /* BANTING                             */
+     'BPT' = 'GROUP 2'  /* BATU PAHAT                          */
+     'CMR' = 'GROUP 2'  /* CHEMOR                              */
+     'GRN' = 'GROUP 2'  /* GURUN                               */
+     'IGN' = 'GROUP 2'  /* IPOH GARDEN                         */
+     'JIH' = 'GROUP 2'  /* JALAN IPOH                          */
+     'JJG' = 'GROUP 2'  /* JINJANG                             */
+     'JBB' = 'GROUP 2'  /* JALAN BUKIT BINTANG                 */
+     'KJG' = 'GROUP 2'  /* KAJANG                              */
+     'KLG' = 'GROUP 2'  /* KLANG                               */
+     'KBU' = 'GROUP 2'  /* KOTA BAHRU                          */
+     'KKU' = 'GROUP 2'  /* KOTA KINABALU                       */
+     'KTN' = 'GROUP 2'  /* KUANTAN                             */
+     'WSS' = 'GROUP 2'  /* WISMA SABERKAS (KUCHING)            */
+     'KLI' = 'GROUP 2'  /* KULAI                               */
+     'MSI' = 'GROUP 2'  /* MASAI                               */
+     'MLB' = 'GROUP 2'  /* MENGLEMBU                           */
+     'MRI' = 'GROUP 2'  /* MIRI                                */
+     'MUA' = 'GROUP 2'  /* MUAR                                */
+     'NTL' = 'GROUP 2'  /* NIBONG TEBAL                        */
+     'PDG' = 'GROUP 2'  /* PADUNGAN                            */
+     'PJN' = 'GROUP 2'  /* P J NEW TOWN                        */
+     'SMY' = 'GROUP 2'  /* SEMENYIH                            */
+     'SRB' = 'GROUP 2'  /* SEREMBAN                            */
+     'SGK' = 'GROUP 2'  /* SERI GOMBAK                         */
+     'SKN' = 'GROUP 2'  /* SERI KEMBANGAN                      */
+     'SAT' = 'GROUP 2'  /* SIMPANG AMPAT                       */
+     'SBH' = 'GROUP 2'  /* SUNGEI BULOH                        */
+     'TCS' = 'GROUP 2'  /* TAMAN CHERAS                        */
+     'TMI' = 'GROUP 2'  /* TAMAN MALURI                        */
+     'TMG' = 'GROUP 2'  /* TAMAN MAYANG                        */
+     'TMW' = 'GROUP 2'  /* TAMAN MELAWATI                      */
+     'TPN' = 'GROUP 2'  /* TAMPIN                              */
+     'BBA' = 'GROUP 3'  /* BANDAR BARU AIR ITAM                */
+     'APG' = 'GROUP 3'  /* AMPANG                              */
+     'BHU' = 'GROUP 3'  /* BAHAU                               */
+     'BSD' = 'GROUP 3'  /* BANDAR SERI DAMANSARA               */
+     'BKI' = 'GROUP 3'  /* BATANG KALI                         */
+     'BNV' = 'GROUP 3'  /* BERCHAM N. VILLAGE                  */
+     'BTL' = 'GROUP 3'  /* BINTULU                             */
+     'BCG' = 'GROUP 3'  /* BRINCHANG                           */
+     'CAH' = 'GROUP 3'  /* CHAAH                               */
+     'CKT' = 'GROUP 3'  /* JALAN CHOW KIT                      */
+     'JPP' = 'GROUP 3'  /* JALAN PASIR PUTIH                   */
+     'JLP' = 'GROUP 3'  /* JELAPANG                            */
+     'JLT' = 'GROUP 3'  /* JELUTONG                            */
+     'KBR' = 'GROUP 3'  /* KAMPONG BAHRU                       */
+     'KMT' = 'GROUP 3'  /* KAMUNTING                           */
+     'KJA' = 'GROUP 3'  /* KELANA JAYA                         */
+     'KUG' = 'GROUP 3'  /* KLUANG                              */
+     'KKG' = 'GROUP 3'  /* KUALA KELAWANG                      */
+     'KUM' = 'GROUP 3'  /* KULIM                               */
+     'LBN' = 'GROUP 3'  /* LABUAN                              */
+     'LMM' = 'GROUP 3'  /* LEBOH MACALLUM                      */
+     'LDO' = 'GROUP 3'  /* LIDO                                */
+     'MTK' = 'GROUP 3'  /* MENTAKAB                            */
+     'NLI' = 'GROUP 3'  /* NILAI                               */
+     'PIH' = 'GROUP 3'  /* PANDAN INDAH                        */
+     'PRS' = 'GROUP 3'  /* PANTAI REMIS                        */
+     'PJO' = 'GROUP 3'  /* PJ OLD TOWN                         */
+     'PKL' = 'GROUP 3'  /* PONTIAN KECIL                       */
+     'PKG' = 'GROUP 3'  /* PORT KLANG                          */
+     'PTS' = 'GROUP 3'  /* PULAU TIKUS                         */
+     'PSG' = 'GROUP 3'  /* PUSING                              */
+     'RSH' = 'GROUP 3'  /* RASAH                               */
+     'STL' = 'GROUP 3'  /* SENTUL                              */
+     'S14' = 'GROUP 3'  /* SECTION 14                          */
+     'SGM' = 'GROUP 3'  /* SEGAMAT                             */
+     'SKC' = 'GROUP 3'  /* SEKINCHAN                           */
+     'STP' = 'GROUP 3'  /* SETAPAK                             */
+     'SBU' = 'GROUP 3'  /* SIBU                                */
+     'SPK' = 'GROUP 3'  /* SUNGEI PELEK                        */
+     'SPI' = 'GROUP 3'  /* SUNGEI PETANI                       */
+     'TCY' = 'GROUP 3'  /* TAMAN CENTURY                       */
+     'TJJ' = 'GROUP 3'  /* TAMAN JOHOR JAYA                    */
+     'TSM' = 'GROUP 3'  /* TAMAN SERI MUDA                     */
+     'TTJ' = 'GROUP 3'  /* TAMAN TAMING JAYA                   */
+     'TPI' = 'GROUP 3'  /* TAMPOI                              */
+     'TMH' = 'GROUP 3'  /* TANAH MERAH                         */
+     'TWU' = 'GROUP 3'  /* TAWAU                               */
+     'USJ' = 'GROUP 3'  /* USJ                                 */
+     'UTM' = 'GROUP 3'  /* ULU TIRAM                           */
+     'WMU' = 'GROUP 3'  /* WANGSA MAJU                         */
+     'AKH' = 'GROUP 4'  /* AIR KEROH                           */
+     'ATR' = 'GROUP 4'  /* AIR TAWAR                           */
+     'BBG' = 'GROUP 4'  /* BUKIT BERUNTUNG                     */
+     'BBP' = 'GROUP 4'  /* BANDAR BARU PERMAS JAYA             */
+     'BSI' = 'GROUP 4'  /* BAGAN SERAI                         */
+     'BPJ' = 'GROUP 4'  /* BANDAR PUCHONG JAYA                 */
+     'BSJ' = 'GROUP 4'  /* BANDAT SEBERANG JAYA                */
+     'BFT' = 'GROUP 4'  /* BEAUFORT                            */
+     'CLN' = 'GROUP 4'  /* CHANGLUN                            */
+     'CKI' = 'GROUP 4'  /* CHUKAI                              */
+     'CTD' = 'GROUP 4'  /* CHANGKAT THAMBI DOLLAH              */
+     'CPE' = 'GROUP 4'  /* CITY PARADE                         */
+     'DGG' = 'GROUP 4'  /* DONGGONGON                          */
+     'EDU' = 'GROUP 4'  /* ENDAU                               */
+     'GMS' = 'GROUP 4'  /* GEMAS                               */
+     'JKA' = 'GROUP 4'  /* JALAN KUCHAI LAMA                   */
+     'JMR' = 'GROUP 4'  /* JALAN MACALISTER                    */
+     'JRT' = 'GROUP 4'  /* JERANTUT                            */
+     'HSL' = 'GROUP 4'  /* JLN TUN HS LEE                      */
+     'KHG' = 'GROUP 4'  /* KAHANG                              */
+     'KGR' = 'GROUP 4'  /* KANGAR                              */
+     'KNG' = 'GROUP 4'  /* KENINGAU                            */
+     'KBS' = 'GROUP 4'  /* KEPALA BATAS                        */
+     'KBD' = 'GROUP 4'  /* KOTA BELUD                          */
+     'KTI' = 'GROUP 4'  /* KOTA TINGGI                         */
+     'KKL' = 'GROUP 4'  /* KUALA KETIL                         */
+     'KKI' = 'GROUP 4'  /* KUALA KRAI                          */
+     'KSR' = 'GROUP 4'  /* KUALA SELANGOR                      */
+     'KTU' = 'GROUP 4'  /* KUALA TERENGGANU                    */
+     'LDU' = 'GROUP 4'  /* LAHAD DATU                          */
+     'MCG' = 'GROUP 4'  /* MACHANG                             */
+     'MTH' = 'GROUP 4'  /* MASJID TANAH                        */
+     'MSG' = 'GROUP 4'  /* MERSING                             */
+     'PJA' = 'GROUP 4'  /* PANDAN JAYA                         */
+     'PPR' = 'GROUP 4'  /* PAPAR                               */
+     'PRJ' = 'GROUP 4'  /* PARIT RAJA                          */
+     'PMS' = 'GROUP 4'  /* PASIR MAS                           */
+     'PPH' = 'GROUP 4'  /* PASIR PUTIH                         */
+     'PNS' = 'GROUP 4'  /* PEKAN NENAS                         */
+     'PSA' = 'GROUP 4'  /* POKOK SENA                          */
+     'PGG' = 'GROUP 4'  /* PASIR GUDANG                        */
+     'PDN' = 'GROUP 4'  /* PORT DICKSON                        */
+     'PRA' = 'GROUP 4'  /* PRAI                                */
+     'PLI' = 'GROUP 4'  /* PULAU LANGKAWI                      */
+     'RPJ' = 'GROUP 4'  /* RANTAU PANJANG                      */
+     'RLU' = 'GROUP 4'  /* RELAU                               */
+     'SDK' = 'GROUP 4'  /* SANDAKAN                            */
+     'SEA' = 'GROUP 4'  /* SEA PARK                            */
+     'SGB' = 'GROUP 4'  /* SEGAMBUT                            */
+     'SLY' = 'GROUP 4'  /* SELAYANG                            */
+     'SMG' = 'GROUP 4'  /* SERI MANJUNG                        */
+     'SIK' = 'GROUP 4'  /* SIK                                 */
+     'SPL' = 'GROUP 4'  /* SIMPANG PULAI                       */
+     'SCA' = 'GROUP 4'  /* SUNGAI CHUA                         */
+     'SST' = 'GROUP 4'  /* SUNGEI SIPUT                        */
+     'TMJ' = 'GROUP 4'  /* TAMAN MALIM JAYA                    */
+     'TMR' = 'GROUP 4'  /* TAMAN MELAKA RAYA                   */
+     'TPG' = 'GROUP 4'  /* TAMAN PERLING JAYA                  */
+     'TIN' = 'GROUP 4'  /* TELUK INTAN                         */
+     'TML' = 'GROUP 4'  /* TEMERLOH                            */
+     'TKA' = 'GROUP 4'  /* TENGKERA                            */
+     'TRI' = 'GROUP 4'  /* TRIANG                              */
+     'GHS' = 'GROUP 4'  /* GENTING HIGHLANDS                   */
+     'BPI' = 'GROUP 4'  /* BANDAR PUTERI PUCHONG               */
+     'HOE' = 'HOE'
+     OTHER = 'GROUP 4';
+
+    VALUE $ACKNOF
+     '21930'           = 'NEF'
+     '21940'           = 'NIF'
+     '21960'           = 'SFT'
+     '21950'           = '3F'
+     '21910'           = 'SHP'
+     '21920'           = 'SHP'
+     '32300' - '32699' = 'SPECIAL DEPOSIT WITHOLDING TAX'
+     OTHER             = 'OTHER';
+
+   VALUE SAPROD
+     204    = 'SPTFSD'   /* ISLAMIC BANKING AL-WADIAH */
+     OTHER  = 'SD    ';  /* ALL OTHER SAVING CODES    */
+
+   VALUE CAPROD
+     104  = 'OTHER'    /* VOSTRO LOCAL           */
+     105  = 'OTHER'    /* VOSTRO FOREIGN         */
+     107  = 'OTHER'    /* PBCS                   */
+     126  = 'OTHER'    /* NORMAL BANKERS CHEQUE  */
+     127  = 'OTHER'    /* MIDF BANKERS CHEQUE    */
+     128  = 'OTHER'    /* MIH BANKERS CHEQUE     */
+     129  = 'OTHER'    /* DD NORMAL              */
+     130  = 'OTHER'    /* USD C/A                */
+     131  = 'OTHER'    /* GBP C/A                */
+     132  = 'OTHER'    /* AUD C/A                */
+     133  = 'OTHER'    /* SGD C/A                */
+     134  = 'OTHER'    /* JPY C/A                */
+     135  = 'OTHER'    /* DEM C/A                */
+     136  = 'OTHER'    /* HKD C/A                */
+     140  = 'OTHER'    /* SI-CLEARING ACCOUNT    */
+     141  = 'OTHER'    /* ATM-PISA CLEARING ACCT */
+     142  = 'OTHER'    /* ATM-LOAN CLEARING ACCT */
+     143  = 'OTHER'    /* ATM-FD CLEARING ACCT   */
+     144  = 'OTHER'    /* DD SHARE PUBLIC        */
+     145  = 'OTHER'    /* DD SHARE BUMI          */
+     146  = 'OTHER'    /* IBT COLLECTION ACCT    */
+     147  = 'OTHER'    /* HO INTERBANK SETTLEMENT A/C */
+     148  = 'OTHER'    /* INTERBANK GIRO & MEPS CASH COLL) */
+     149  = 'OTHER'    /* BNM BONDS COLLECTION ACCOUNT */
+     171  = 'OTHER'    /* MYR OVERNIGHT A/C      */
+     172  = 'OTHER'    /* MYR OVERNIGHT A/C      */
+     173  = 'OTHER'    /* MYR OVERNIGHT A/C      */
+     OTHER = 'DD   ';
+
+   VALUE ODPROD
+     104  = 'OTHER'    /* VOSTRO LOCAL           */
+     105  = 'OTHER'    /* VOSTRO FOREIGN         */
+     107  = 'OTHER'    /* PBCS                   */
+     126  = 'OTHER'    /* NORMAL BANKERS CHEQUE  */
+     127  = 'OTHER'    /* MIDF BANKERS CHEQUE    */
+     128  = 'OTHER'    /* MIH BANKERS CHEQUE     */
+     130  = 'OTHER'    /* USD C/A                */
+     131  = 'OTHER'    /* GBP C/A                */
+     132  = 'OTHER'    /* AUD C/A                */
+     133  = 'OTHER'    /* SGD C/A                */
+     134  = 'OTHER'    /* JPY C/A                */
+     135  = 'OTHER'    /* DEM C/A                */
+     136  = 'OTHER'    /* HKD C/A                */
+     140  = 'OTHER'    /* SI-CLEARING ACCOUNT    */
+     141  = 'OTHER'    /* ATM-PISA CLEARING ACCT */
+     142  = 'OTHER'    /* ATM-LOAN CLEARING ACCT */
+     143  = 'OTHER'    /* ATM-FD CLEARING ACCT   */
+     144  = 'OTHER'    /* DD SHARE PUBLIC        */
+     145  = 'OTHER'    /* DD SHARE BUMI          */
+     146  = 'OTHER'    /* IBT COLLECTION ACCT    */
+     147  = 'OTHER'    /* HO INTERBANK SETTLEMENT A/C  */
+     148  = 'OTHER'    /* INTERBANK GIRO & MEPS CASH COLL) */
+     149  = 'OTHER'    /* BNM BONDS COLLECTION ACCOUNT */
+     171  = 'OTHER'    /* MYR OVERNIGHT A/C      */
+     172  = 'OTHER'    /* MYR OVERNIGHT A/C      */
+     173  = 'OTHER'    /* MYR OVERNIGHT A/C      */
+     OTHER = 'OD   ' ;
+
+   VALUE LNPROD
+     4, 5     = 'HL   ' /* STAFF LOAN - HOUSING LOAN           */
+     100, 101 = 'HL   ' /* ABBA HOUSING LOAN                   */
+     200, 201 = 'HL   ' /* PRIORITY SECTOR HOUSING LOAN        */
+     204, 205 = 'HL   ' /* NORMAL HOUSING LOAN                 */
+     209, 210 = 'HL   ' /* HOS SPECIAL (<25K(WM) & 32K(EM))    */
+     211, 212 = 'HL   ' /* HOS SPECIAL (25K-100K)              */
+     214, 215 = 'HL   ' /* HOS EXTRA (RM100,001-RM200,000)     */
+     219, 220 = 'HL   ' /* HOME REFINANCING SCHEME             */
+     225, 226 = 'HLCAG' /* NORMAL HOUSING LOAN SOLD TO CAGAMAS */
+     OTHER = 'FL   ';
+
+  VALUE SADPRG
+       LOW -       5 = '01)RM        1.00 - RM         5.00'
+         5 -      10 = '02)RM        5.01 - RM        10.00'
+        10 -      50 = '03)RM       10.01 - RM        50.00'
+        50 -     100 = '04)RM       50.01 - RM       100.00'
+       100 -     500 = '05)RM      100.01 - RM       500.00'
+       500 -    1000 = '06)RM      500.01 - RM     1,000.00'
+      1000 -    1500 = '07)RM    1,000.01 - RM     1,500.00'
+      1500 -    2000 = '08)RM    1,500.01 - RM     2,000.00'
+      2000 -    2500 = '09)RM    2,000.01 - RM     2,500.00'
+      2500 -    3000 = '10)RM    2,500.01 - RM     3,000.00'
+      3000 -    3500 = '11)RM    3,000.01 - RM     3,500.00'
+      3500 -    4000 = '12)RM    3,500.01 - RM     4,000.00'
+      4000 -    4500 = '13)RM    4,000.01 - RM     4,500.00'
+      4500 -    5000 = '14)RM    4,500.01 - RM     5,000.00'
+      5000 -    6000 = '15)RM    5,000.01 - RM     6,000.00'
+      6000 -    7000 = '16)RM    6,000.01 - RM     7,000.00'
+      7000 -    8000 = '17)RM    7,000.01 - RM     8,000.00'
+      8000 -    9000 = '18)RM    8,000.01 - RM     9,000.00'
+      9000 -   10000 = '19)RM    9,000.01 - RM    10,000.00'
+     10000 -   15000 = '20)RM   10,000.01 - RM    15,000.00'
+     15000 -   20000 = '21)RM   15,000.01 - RM    20,000.00'
+     20000 -   25000 = '22)RM   20,000.01 - RM    25,000.00'
+     25000 -   30000 = '23)RM   25,000.01 - RM    30,000.00'
+     30000 -   35000 = '24)RM   30,000.01 - RM    35,000.00'
+     35000 -   40000 = '25)RM   35,000.01 - RM    40,000.00'
+     40000 -   45000 = '26)RM   40,000.01 - RM    45,000.00'
+     45000 -   50000 = '27)RM   45,000.01 - RM    50,000.00'
+     50000 -   55000 = '28)RM   50,000.01 - RM    55,000.00'
+     55000 -   60000 = '29)RM   55,000.01 - RM    60,000.00'
+     60000 -   65000 = '30)RM   60,000.01 - RM    65,000.00'
+     65000 -   70000 = '31)RM   65,000.01 - RM    70,000.00'
+     70000 -   75000 = '32)RM   70,000.01 - RM    75,000.00'
+     75000 -   80000 = '33)RM   75,000.01 - RM    80,000.00'
+     80000 -   85000 = '34)RM   80,000.01 - RM    85,000.00'
+     85000 -   90000 = '35)RM   85,000.01 - RM    90,000.00'
+     90000 -   95000 = '36)RM   90,000.01 - RM    95,000.00'
+     95000 -  100000 = '37)RM   95,000.01 - RM   100,000.00'
+    100000 -  150000 = '38)RM  100,000.01 - RM   150,000.00'
+    150000 -  200000 = '39)RM  150,000.01 - RM   200,000.00'
+    200000 -  300000 = '40)RM  200,000.01 - RM   300,000.00'
+    300000 -  500000 = '41)RM  300,000.01 - RM   500,000.00'
+    500000 - 1000000 = '42)RM  500,000.01 - RM 1,000,000.00'
+   1000000 - 2000000 = '43)RM1,000,000.01 - RM 2,000,000.00'
+   2000000 - 3000000 = '44)RM2,000,000.01 - RM 3,000,000.00'
+   3000000 - 4000000 = '45)RM3,000,000.01 - RM 4,000,000.00'
+   4000000 - 5000000 = '46)RM4,000,000.01 - RM 5,000,000.00'
+   5000000 -10000000 = '47)RM5,000,000.01 - RM10,000,000.00'
+  10000000 - HIGH    = '48)          ABOVE RM 10,000,000.00';
+
+  VALUE SA1PRG
+       LOW -       5 = '01)RM        1.00 - RM         5.00'
+         5 -      10 = '02)RM        5.01 - RM        10.00'
+        10 -      50 = '03)RM       10.01 - RM        50.00'
+        50 -     100 = '04)RM       50.01 - RM       100.00'
+       100 -     500 = '05)RM      100.01 - RM       500.00'
+       500 -    1000 = '06)RM      500.01 - RM     1,000.00'
+      1000 -    1500 = '07)RM    1,000.01 - RM     1,500.00'
+      1500 -    2000 = '08)RM    1,500.01 - RM     2,000.00'
+      2000 -    2500 = '09)RM    2,000.01 - RM     2,500.00'
+      2500 -    3000 = '10)RM    2,500.01 - RM     3,000.00'
+      3000 -    3500 = '11)RM    3,000.01 - RM     3,500.00'
+      3500 -    4000 = '12)RM    3,500.01 - RM     4,000.00'
+      4000 -    4500 = '13)RM    4,000.01 - RM     4,500.00'
+      4500 -    5000 = '14)RM    4,500.01 - RM     5,000.00'
+      5000 -    6000 = '15)RM    5,000.01 - RM     6,000.00'
+      6000 -    7000 = '16)RM    6,000.01 - RM     7,000.00'
+      7000 -    8000 = '17)RM    7,000.01 - RM     8,000.00'
+      8000 -    9000 = '18)RM    8,000.01 - RM     9,000.00'
+      9000 -   10000 = '19)RM    9,000.01 - RM    10,000.00'
+     10000 -   15000 = '20)RM   10,000.01 - RM    15,000.00'
+     15000 -   20000 = '21)RM   15,000.01 - RM    20,000.00'
+     20000 -   25000 = '22)RM   20,000.01 - RM    25,000.00'
+     25000 -   30000 = '23)RM   25,000.01 - RM    30,000.00'
+     30000 -   35000 = '24)RM   30,000.01 - RM    35,000.00'
+     35000 -   40000 = '25)RM   35,000.01 - RM    40,000.00'
+     40000 -   45000 = '26)RM   40,000.01 - RM    45,000.00'
+     45000 -   50000 = '27)RM   45,000.01 - RM    50,000.00'
+     50000 -   55000 = '28)RM   50,000.01 - RM    55,000.00'
+     55000 -   60000 = '29)RM   55,000.01 - RM    60,000.00'
+     60000 -   65000 = '30)RM   60,000.01 - RM    65,000.00'
+     65000 -   70000 = '31)RM   65,000.01 - RM    70,000.00'
+     70000 -   75000 = '32)RM   70,000.01 - RM    75,000.00'
+     75000 -   80000 = '33)RM   75,000.01 - RM    80,000.00'
+     80000 -   85000 = '34)RM   80,000.01 - RM    85,000.00'
+     85000 -   90000 = '35)RM   85,000.01 - RM    90,000.00'
+     90000 -   95000 = '36)RM   90,000.01 - RM    95,000.00'
+     95000 -  100000 = '37)RM   95,000.01 - RM   100,000.00'
+    100000 -  150000 = '38)RM  100,000.01 - RM   150,000.00'
+    150000 -  200000 = '39)RM  150,000.01 - RM   200,000.00'
+    200000 -  300000 = '40)RM  200,000.01 - RM   300,000.00'
+    300000 -  350000 = '41)RM  300,000.01 - RM   350,000.00'
+    350000 -  360000 = '42)RM  350,000.01 - RM   360,000.00'
+    360000 -  500000 = '43)RM  360,000.01 - RM   500,000.00'
+    500000 -  510000 = '44)RM  500,000.01 - RM   510,000.00'
+    510000 -  550000 = '45)RM  510,000.01 - RM   550,000.00'
+    550000 -  850000 = '46)RM  550,000.01 - RM   850,000.00'
+    850000 -  860000 = '47)RM  850,000.01 - RM   860,000.00'
+    860000 - 1000000 = '48)RM  860,000.01 - RM 1,000,000.00'
+   1000000 - 2000000 = '49)RM1,000,000.01 - RM 2,000,000.00'
+   2000000 - 3000000 = '50)RM2,000,000.01 - RM 3,000,000.00'
+   3000000 - 4000000 = '51)RM3,000,000.01 - RM 4,000,000.00'
+   4000000 - 5000000 = '52)RM4,000,000.01 - RM 5,000,000.00'
+   5000000 -10000000 = '53)RM5,000,000.01 - RM10,000,000.00'
+  10000000 - HIGH    = '54)          ABOVE RM 10,000,000.00';
+
+  VALUE SA2PRG
+       LOW -       0 = 'ZERO BALANCE                             '
+         0 -       5 = '01)RM              1.00 - RM         5.00'
+         5 -      10 = '02)ABOVE RM        5.00 - RM        10.00'
+        10 -      50 = '03)ABOVE RM       10.00 - RM        50.00'
+        50 -     100 = '04)ABOVE RM       50.00 - RM       100.00'
+       100 -     500 = '05)ABOVE RM      100.00 - RM       500.00'
+       500 -    1000 = '06)ABOVE RM      500.00 - RM     1,000.00'
+      1000 -    1500 = '07)ABOVE RM    1,000.00 - RM     1,500.00'
+      1500 -    2000 = '08)ABOVE RM    1,500.00 - RM     2,000.00'
+      2000 -    2500 = '09)ABOVE RM    2,000.00 - RM     2,500.00'
+      2500 -    3000 = '10)ABOVE RM    2,500.00 - RM     3,000.00'
+      3000 -    3500 = '11)ABOVE RM    3,000.00 - RM     3,500.00'
+      3500 -    4000 = '12)ABOVE RM    3,500.00 - RM     4,000.00'
+      4000 -    4500 = '13)ABOVE RM    4,000.00 - RM     4,500.00'
+      4500 -    5000 = '14)ABOVE RM    4,500.00 - RM     5,000.00'
+      5000 -    6000 = '15)ABOVE RM    5,000.00 - RM     6,000.00'
+      6000 -    7000 = '16)ABOVE RM    6,000.00 - RM     7,000.00'
+      7000 -    8000 = '17)ABOVE RM    7,000.00 - RM     8,000.00'
+      8000 -    9000 = '18)ABOVE RM    8,000.00 - RM     9,000.00'
+      9000 -   10000 = '19)ABOVE RM    9,000.00 - RM    10,000.00'
+     10000 -   15000 = '20)ABOVE RM   10,000.00 - RM    15,000.00'
+     15000 -   20000 = '21)ABOVE RM   15,000.00 - RM    20,000.00'
+     20000 -   25000 = '22)ABOVE RM   20,000.00 - RM    25,000.00'
+     25000 -   30000 = '23)ABOVE RM   25,000.00 - RM    30,000.00'
+     30000 -   35000 = '24)ABOVE RM   30,000.00 - RM    35,000.00'
+     35000 -   40000 = '25)ABOVE RM   35,000.00 - RM    40,000.00'
+     40000 -   45000 = '26)ABOVE RM   40,000.00 - RM    45,000.00'
+     45000 -   50000 = '27)ABOVE RM   45,000.00 - RM    50,000.00'
+     50000 -   55000 = '28)ABOVE RM   50,000.00 - RM    55,000.00'
+     55000 -   60000 = '29)ABOVE RM   55,000.00 - RM    60,000.00'
+     60000 -   65000 = '30)ABOVE RM   60,000.00 - RM    65,000.00'
+     65000 -   70000 = '31)ABOVE RM   65,000.00 - RM    70,000.00'
+     70000 -   75000 = '32)ABOVE RM   70,000.00 - RM    75,000.00'
+     75000 -   80000 = '33)ABOVE RM   75,000.00 - RM    80,000.00'
+     80000 -   85000 = '34)ABOVE RM   80,000.00 - RM    85,000.00'
+     85000 -   90000 = '35)ABOVE RM   85,000.00 - RM    90,000.00'
+     90000 -   95000 = '36)ABOVE RM   90,000.00 - RM    95,000.00'
+     95000 -  100000 = '37)ABOVE RM   95,000.00 - RM   100,000.00'
+    100000 -  150000 = '38)ABOVE RM  100,000.00 - RM   150,000.00'
+    150000 -  200000 = '39)ABOVE RM  150,000.00 - RM   200,000.00'
+    200000 -  300000 = '40)ABOVE RM  200,000.00 - RM   300,000.00'
+    300000 -  350000 = '41)ABOVE RM  300,000.00 - RM   350,000.00'
+    350000 -  360000 = '42)ABOVE RM  350,000.00 - RM   360,000.00'
+    360000 -  500000 = '43)ABOVE RM  360,000.00 - RM   500,000.00'
+    500000 -  510000 = '44)ABOVE RM  500,000.00 - RM   510,000.00'
+    510000 -  550000 = '45)ABOVE RM  510,000.00 - RM   550,000.00'
+    550000 -  600000 = '46)ABOVE RM  550,000.00 - RM   600,000.00'
+    600000 -  700000 = '47)ABOVE RM  600,000.00 - RM   700,000.00'
+    700000 -  800000 = '48)ABOVE RM  700,000.00 - RM   800,000.00'
+    800000 -  850000 = '49)ABOVE RM  800,000.00 - RM   850,000.00'
+    850000 -  860000 = '50)ABOVE RM  850,000.00 - RM   860,000.00'
+    860000 -  900000 = '51)ABOVE RM  860,000.00 - RM   900,000.00'
+    900000 - 1000000 = '52)ABOVE RM  900,000.00 - RM 1,000,000.00'
+   1000000 - 1100000 = '53)ABOVE RM1,000,000.00 - RM 1,100,000.00'
+   1100000 - 1200000 = '54)ABOVE RM1,100,000.00 - RM 1,200,000.00'
+   1200000 - 1300000 = '55)ABOVE RM1,200,000.00 - RM 1,300,000.00'
+   1300000 - 1400000 = '56)ABOVE RM1,300,000.00 - RM 1,400,000.00'
+   1400000 - 1500000 = '57)ABOVE RM1,400,000.00 - RM 1,500,000.00'
+   1500000 - 1600000 = '58)ABOVE RM1,500,000.00 - RM 1,600,000.00'
+   1600000 - 1700000 = '59)ABOVE RM1,600,000.00 - RM 1,700,000.00'
+   1700000 - 1800000 = '60)ABOVE RM1,700,000.00 - RM 1,800,000.00'
+   1800000 - 1900000 = '61)ABOVE RM1,800,000.00 - RM 1,900,000.00'
+   1900000 - 2000000 = '62)ABOVE RM1,900,000.00 - RM 2,000,000.00'
+   2000000 - 3000000 = '63)ABOVE RM2,000,000.00 - RM 3,000,000.00'
+   3000000 - 4000000 = '64)ABOVE RM3,000,000.00 - RM 4,000,000.00'
+   4000000 - 5000000 = '65)ABOVE RM4,000,000.00 - RM 5,000,000.00'
+   5000000 -10000000 = '66)ABOVE RM5,000,000.00 - RM10,000,000.00'
+  10000000 - HIGH    = '67)                ABOVE RM 10,000,000.00';
+
+  VALUE SA3PRG
+       LOW -<        0 = '01)NEGATIVE BALANCE                      '
+                     0 = '02)ZERO BALANCE                          '
+         0 <-        5 = '03)ABOVE RM        0.00 - RM         5.00'
+         5 <-       10 = '04)ABOVE RM        5.00 - RM        10.00'
+        10 <-       50 = '05)ABOVE RM       10.00 - RM        50.00'
+        50 <-      100 = '06)ABOVE RM       50.00 - RM       100.00'
+       100 <-      500 = '07)ABOVE RM      100.00 - RM       500.00'
+       500 <-     1000 = '08)ABOVE RM      500.00 - RM     1,000.00'
+      1000 <-     1500 = '09)ABOVE RM    1,000.00 - RM     1,500.00'
+      1500 <-     2000 = '10)ABOVE RM    1,500.00 - RM     2,000.00'
+      2000 <-     2500 = '11)ABOVE RM    2,000.00 - RM     2,500.00'
+      2500 <-     3000 = '12)ABOVE RM    2,500.00 - RM     3,000.00'
+      3000 <-     3500 = '13)ABOVE RM    3,000.00 - RM     3,500.00'
+      3500 <-     4000 = '14)ABOVE RM    3,500.00 - RM     4,000.00'
+      4000 <-     4500 = '15)ABOVE RM    4,000.00 - RM     4,500.00'
+      4500 <-     5000 = '16)ABOVE RM    4,500.00 - RM     5,000.00'
+      5000 <-     6000 = '17)ABOVE RM    5,000.00 - RM     6,000.00'
+      6000 <-     7000 = '18)ABOVE RM    6,000.00 - RM     7,000.00'
+      7000 <-     8000 = '19)ABOVE RM    7,000.00 - RM     8,000.00'
+      8000 <-     9000 = '20)ABOVE RM    8,000.00 - RM     9,000.00'
+      9000 <-    10000 = '21)ABOVE RM    9,000.00 - RM    10,000.00'
+     10000 <-    15000 = '22)ABOVE RM   10,000.00 - RM    15,000.00'
+     15000 <-    20000 = '23)ABOVE RM   15,000.00 - RM    20,000.00'
+     20000 <-    25000 = '24)ABOVE RM   20,000.00 - RM    25,000.00'
+     25000 <-    30000 = '25)ABOVE RM   25,000.00 - RM    30,000.00'
+     30000 <-    35000 = '26)ABOVE RM   30,000.00 - RM    35,000.00'
+     35000 <-    40000 = '27)ABOVE RM   35,000.00 - RM    40,000.00'
+     40000 <-    45000 = '28)ABOVE RM   40,000.00 - RM    45,000.00'
+     45000 <-    50000 = '29)ABOVE RM   45,000.00 - RM    50,000.00'
+     50000 <-    55000 = '30)ABOVE RM   50,000.00 - RM    55,000.00'
+     55000 <-    60000 = '31)ABOVE RM   55,000.00 - RM    60,000.00'
+     60000 <-    65000 = '32)ABOVE RM   60,000.00 - RM    65,000.00'
+     65000 <-    70000 = '33)ABOVE RM   65,000.00 - RM    70,000.00'
+     70000 <-    75000 = '34)ABOVE RM   70,000.00 - RM    75,000.00'
+     75000 <-    80000 = '35)ABOVE RM   75,000.00 - RM    80,000.00'
+     80000 <-    85000 = '36)ABOVE RM   80,000.00 - RM    85,000.00'
+     85000 <-    90000 = '37)ABOVE RM   85,000.00 - RM    90,000.00'
+     90000 <-    95000 = '38)ABOVE RM   90,000.00 - RM    95,000.00'
+     95000 <-   100000 = '39)ABOVE RM   95,000.00 - RM   100,000.00'
+    100000 <-   150000 = '40)ABOVE RM  100,000.00 - RM   150,000.00'
+    150000 <-   200000 = '41)ABOVE RM  150,000.00 - RM   200,000.00'
+    200000 <-   300000 = '42)ABOVE RM  200,000.00 - RM   300,000.00'
+    300000 <-   350000 = '43)ABOVE RM  300,000.00 - RM   350,000.00'
+    350000 <-   360000 = '44)ABOVE RM  350,000.00 - RM   360,000.00'
+    360000 <-   500000 = '45)ABOVE RM  360,000.00 - RM   500,000.00'
+    500000 <-   510000 = '46)ABOVE RM  500,000.00 - RM   510,000.00'
+    510000 <-   550000 = '47)ABOVE RM  510,000.00 - RM   550,000.00'
+    550000 <-   850000 = '48)ABOVE RM  550,000.00 - RM   850,000.00'
+    850000 <-   860000 = '49)ABOVE RM  850,000.00 - RM   860,000.00'
+    860000 <-  1000000 = '50)ABOVE RM  860,000.00 - RM  1000,000.00'
+   1000000 <-  2000000 = '51)ABOVE RM 1000,000.00 - RM  2000,000.00'
+   2000000 <-  3000000 = '52)ABOVE RM 2000,000.00 - RM  3000,000.00'
+   3000000 <-  4000000 = '53)ABOVE RM 3000,000.00 - RM  4000,000.00'
+   4000000 <-  5000000 = '54)ABOVE RM 4000,000.00 - RM  5000,000.00'
+   5000000 <- 10000000 = '55)ABOVE RM 5000,000.00 - RM10,000,000.00'
+  10000000 <- HIGH     = '56)ABOVE RM 10,000,000.00                ';
+
+  VALUE PROFNORM
+       LOW -    5000 = '1)UP TO RM 5,000.00'
+      5000 -   10000 = '2)UP TO RM10,000.00'
+     10000 -   30000 = '3)UP TO RM30,000.00'
+     30000 -   50000 = '4)UP TO RM50,000.00'
+     50000 -   75000 = '5)UP TO RM75,000.00'
+     75000 -   HIGH  = '6)ABOVE RM75,000.00';
+
+  VALUE SEXNORM
+       LOW -   12    = '1)BELOW 12 YRS'
+       12  -   18    = '2)12 - 18 YRS'
+       18  -   50    = '3)18 - 50 YRS'
+       50  -   HIGH  = '4)50 YRS AND ABOVE';
+
+  VALUE PROFYAA
+       LOW -     500 = '1)BELOW RM   500.00'
+       500 -    2000 = '2)UP TO RM 2,000.00'
+      2000 -    5000 = '3)UP TO RM 5,000.00'
+      5000 -   10000 = '4)UP TO RM10,000.00'
+     10000 -   30000 = '5)UP TO RM30,000.00'
+     30000 -   50000 = '6)UP TO RM50,000.00'
+     50000 -   75000 = '7)UP TO RM75,000.00'
+     75000 -   HIGH  = '8)ABOVE RM75,000.00';
+
+  VALUE SEXYW
+       LOW -   12    = '1)BELOW 12 YRS'
+       12  -   18    = '2)12 - 18 YRS';
+
+  VALUE PROFPLUS
+       LOW -    2000 = '1)UP TO RM 2,000.00'
+      2000 -    5000 = '1)UP TO RM 5,000.00'
+      5000 -   10000 = '2)UP TO RM10,000.00'
+     10000 -   30000 = '3)UP TO RM30,000.00'
+     30000 -   50000 = '4)UP TO RM50,000.00'
+     50000 -   75000 = '5)UP TO RM75,000.00'
+     75000 -   HIGH  = '6)ABOVE RM75,000.00';
+
+  VALUE PROFWISE
+       LOW -    5000 = '1)UP TO RM 5,000.00'
+      5000 -   10000 = '2)UP TO RM10,000.00'
+     10000 -   20000 = '3)UP TO RM20,000.00'
+     20000 -   30000 = '4)UP TO RM30,000.00'
+     30000 -   50000 = '5)UP TO RM50,000.00'
+     50000 -   HIGH  = '6)ABOVE RM50,000.00';
+
+  VALUE SDNAME
+   200  = 'PLUS SAVING'
+   201  = 'STAFF'
+   202  = 'YOUNG ACHIEVER'
+   203  = '50 PLUS'
+   204  = 'AL-WADIAH'
+   205  = 'BASIC SAVING'
+   206  = 'BASIC 55 SAVING'
+   208  = 'PB BRIGHT STAR SA'
+   210  = 'PB MYSALARY SA'
+   212  = 'WISE'
+   213  = 'PB SAVELINK'
+   214  = 'BESTARI SAVING'
+   215  = 'STAFF WADIAH'
+   216  = 'PB UNIONPAY SA'
+   227  = 'STAFF MONEYPLUS SA'
+   228  = 'MONEYPLUS SA'
+   480  = 'GIA'
+   481  = 'STAFF GIA';
+
+  VALUE $RACE
+   '0'  = 'OTHERS'
+   '1'  = 'MALAY'
+   '2'  = 'CHINESE'
+   '3'  = 'INDIAN'
+   OTHER = 'OTHERS';
+
+   VALUE CADPRG
+     1000 = ' 1)         RM0 -     RM1,000'
+     2000 = ' 2)     RM1,001 -     RM2,000'
+     2500 = ' 3)     RM2,001 -     RM2,500'
+   3000,5000 = ' 4)     RM2,501 -     RM5,000'
+    10000 = ' 5)     RM5,001 -    RM10,000'
+    20000 = ' 6)    RM10,001 -    RM20,000'
+    30000 = ' 7)    RM20,001 -    RM30,000'
+    40000 = ' 8)    RM30,001 -    RM40,000'
+    50000 = ' 9)    RM40,001 -    RM50,000'
+  75000,100000 = '10)   RM50,001 -   RM100,000'
+   150000 = '11)  RM100,001 -   RM150,000'
+   200000 = '12)  RM150,001 -   RM200,000'
+   250000 = '13)  RM200,001 -   RM250,000'
+   500000 = '14)  RM250,001 -   RM500,000'
+  1000000 = '15)  RM500,001 - RM1,000,000'
+  2000000 = '16)RM1,000,001 - RM2,000,000'
+  3000000 = '17)RM2,000,001 - RM3,000,000'
+  4000000 = '18)RM3,000,001 - RM4,000,000'
+  5000000 = '19)RM4,000,001 - RM5,000,000'
+  OTHER   = '20)RM5,000,001 AND ABOVE';
+
+   VALUE ICADPRG
+     1000,2000  = ' 1)     BELOW  RM2,000'
+     2500,3000  = ' 2) RM2,000 -  RM3,000'
+     5000       = ' 3) RM3,000 -  RM5,000'
+    10000       = ' 4) RM5,000 -  RM10,000'
+    20000,30000 = ' 5) RM10,000 - RM30,000'
+    40000,50000 = ' 6) RM30,000 - RM50,000'
+    75000       = ' 7) RM50,000 - RM75,000'
+    100000      = ' 8) RM75,000 - RM100,000'
+    150000      = ' 9) RM100,000 -  RM150,000'
+    200000      = '10) RM150,000 -  RM200,000'
+    OTHER       = '11) RM200,000 AND ABOVE';
+
+
+   VALUE $CPARTYF
+    '01' = '01'      /* BANK NEGARA MALAYSIA                     */
+    '02' = '10'      /* COMMERCIAL BANKS                         */
+    '03' = '10'      /* ISLAMIC BANKS                            */
+    '04' = '20'      /* SUBSIDIARY STOCKBROKING COMPANIES        */
+    '05' = '20'      /* ASSOCIATE STOCKBROKING COMPANIES         */
+    '06' = '20'      /* OTHER STOCKBROKING COMPANIES             */
+    '10' = '10'      /* DOMESTIC BANKING INSTITUTIONS            */
+    '11' = '10'      /* FINANCE COMPANIES                        */
+    '12' = '10'      /* MERCHANT BANKS                           */
+    '13' = '20'      /* DISCOUNT HOUSES                          */
+    '15' = '20'      /* DOMESTIC NON-BANK ENTITIES               */
+    '17' = '20'      /* CAGAMAS BERHAD                           */
+    '20' = '20'      /* DOMESTIC NON-BANK FINANCIAL INSTITUTIONS */
+    '30' = '20'      /* DOMESTIC OTHER NBFI                      */
+    '32' = '20'      /* CREDIT CARD COMPANIES                    */
+    '33' = '20'      /* DEVELOPMENT FINANCE INSTITUTIONS         */
+    '34' = '20'      /* BUILDING SOCIETIES                       */
+    '35' = '20'      /* CO-OPERATIVE SOCIETIES                   */
+    '36' = '20'      /* STOCKBROKING COMPANIES                   */
+    '37' = '20'      /* COMMODITY BROKERS                        */
+    '38' = '20'      /* CREDIT & LEASING COMPANIES               */
+    '39' = '20'      /* UNIT TRUST COMPANIES                     */
+    '40' = '20'      /* INSURANCE AND INSURANCE RELATED COMPANIES*/
+    '50' = '60'      /* RESIDENTS/DOMESTIC ENTITIES              */
+    '57' = '60'      /* PETRONAS                                 */
+    '59' = '60'      /* OTHER GOVERNMENT CONTROLLED DBE NIE      */
+    '60' = '60'      /* DOMESTIC BUSINESS ENTERPRISES (DBE)      */
+    '61' = '60'      /* BUMIPUTRA CONTROLLED DBE                 */
+    '62' = '60'      /* NON-BUMIPUTRA CONTROLLED DBE             */
+    '63' = '60'      /* NON-RESIDENT CONTROLLED DBE              */
+    '64' = '60'      /* GOVERNMENT CONTROLLED DBE                */
+    '65' = '60'      /* SMALL MEDIUM INDUSTRIES (SMI)            */
+    '66' = '60'      /* BUMIPUTRA CONTROLLED SMI                 */
+    '67' = '60'      /* NON-BUMIPUTRA CONTROLLED SMI             */
+    '68' = '60'      /* NON-RESIDENT CONTROLLED SMI              */
+    '69' = '60'      /* GOVERNMENT CONTROLLED SMI                */
+    '70' = '70'      /* GOVERNMENT                               */
+    '71' = '70'      /* FEDERAL GOVERNMENT                       */
+    '72' = '70'      /* STATE GOVERNMENT                         */
+    '73' = '70'      /* LOCAL GOVERNMENT                         */
+    '74' = '70'      /* STATUTORY AUTHORITIES                    */
+    '75' = '60'      /* NFPE                                     */
+    '76' = '76'      /* INDIVIDUALS                              */
+    '77' = '76'      /* BUMIPUTRA                                */
+    '78' = '76'      /* NON-BUMIPUTRA                            */
+    '79' = '79'      /* DOMESTIC OTHER ENTITIES NIE              */
+    '80' = '80'      /* NON-RESIDENTS/FOREIGN ENTITIES           */
+    '81' = '80'      /* FOREIGN BANKING INSTITUTIONS             */
+    '85' = '80'      /* FOREIGN NON-BANK ENTITIES                */
+    '86' = '80'      /* FOREIGN BUSINESS ENTERPRISES             */
+    '90' = '80'      /* FOREIGN GOVERNMENTS                      */
+    '91' = '80'      /* FOREIGN CENTRAL BANKS                    */
+    '92' = '80'      /* FRGN DIPLOMATIC REPRESENTATION IN M'SIA  */
+    '95' = '80'      /* FOREIGN INDIVIDUALS                      */
+    '96' = '80'      /* FOREIGNERS EMPLOYED/STUDYING IN M'SIA    */
+    '98' = '80'      /* FOREIGN NON-COMMERCIAL INTERNATIONAL     */
+                     /* ORGANIZATION IN M'SIA                    */
+    '99' = '80'      /* FOREIGN OTHER ENTITIES NIE               */
+     OTHER = '76' ;
+
+   VALUE $CPARTY
+     '01' = 'BANK NEGARA MALAYSIA'
+     '10' = 'DOMESTIC BANKING INSTITUTION'
+     '20' = 'DOMESTIC NON-BANK FI'
+     '60' = 'DOMESTIC BUSINESS ENTERPRISES'
+     '70' = 'GOVERNMENT'
+     '76' = 'INDIVIDUALS'
+     '79' = 'DOMESTIC OTHER ENTITIES NIE'
+     '80' = 'NON RESIDENTS/FOREIGN ENTITIES';
+
+   VALUE $PURPOSE
+     '1'  = 'PERSONAL'
+     '2'  = 'JOINT'
+     '4'  = 'PERSONAL'  /* IS A STAFF A/C BUT STATES AS PERSONAL  */
+     OTHER= 'OTHERS  ';
+
+   VALUE CARANGED
+     2000  = ' 1)         BELOW RM2,000'
+     3000  = ' 2)     RM2,000 - RM3,000'
+     5000  = ' 3)     RM3,000 - RM5,000'
+    10000  = ' 4)    RM5,000 - RM10,000'
+    30000  = ' 5)   RM10,000 - RM30,000'
+    50000  = ' 6)   RM30,000 - RM50,000'
+    75000  = ' 7)   RM50,000 - RM75,000'
+   100000  = ' 8)  RM75,000 - RM100,000'
+   150000  = ' 9) RM100,000 - RM150,000'
+   200000  = '10) RM150,000 - RM200,000'
+   200001  = '11) RM200,000 AND ABOVE  ';
+
+   VALUE PROD
+     150 = 'ACE ACCOUNT'
+     160 = 'AL-WADIAH CURRENT A/C';
+
+   VALUE AGEDESC
+     0         = 'WITHOUT BIRTHDATE'
+     &AGEBELOW = 'BELOW 12 YEARS'
+     &AGELIMIT = '12 TO BELOW 18 YEARS'
+     &MAXAGE   = '18 AND ABOVE';
+
+   VALUE $STATE
+     'A' = 'PERAK'
+     'B' = 'SELANGOR'
+     'C' = 'PAHANG'
+     'D' = 'KELANTAN'
+     'J' = 'JOHOR'
+     'K' = 'KEDAH'
+     'L' = 'LABUAN'
+     'M' = 'MELAKA'
+     'N' = 'NEGERI SEMBILAN'
+     'P' = 'PULAU PINANG'
+     'Q' = 'SARAWAK'
+     'R' = 'PERLIS'
+     'S' = 'SABAH'
+     'T' = 'TERENGGANU'
+     'W' = 'WILAYAH PERSEKUTUAN';
+
+   VALUE FDPROD
+    340 = '1 MONTH'
+    341 = '3 MONTHS'
+    342 = '6 MONTHS'
+    343 = '9 MONTHS'
+    344 = '12 MONTHS'
+    345 = '15 MONTHS'
+    346 = '18 MONTHS'
+    347 = '21 MONTHS'
+    348 = '24 MONTHS'
+    349 = '36 MONTHS'
+    350 = '48 MONTHS'
+    351 = '60 MONTHS'
+    OTHER = ' ';
+
+   INVALUE IBWRNGE
+      LOW - 10000  = 10000
+    10000 - 30000  = 30000
+    30000 - 50000  = 50000
+    50000 - 75000  = 75000
+    75000 - 100000 = 100000
+   100000 - HIGH   = 100001;
+
+   INVALUE CARANGE
+      LOW -  2000  = 2000
+     2000 - 3000   = 3000
+     3000 - 5000   = 5000
+     5000 - 10000  = 10000
+    10000 - 30000  = 30000
+    30000 - 50000  = 50000
+    50000 - 75000  = 75000
+    75000 - 100000 = 100000
+   100000 - 150000 = 150000
+   150000 - 200000 = 200000
+   200000 - HIGH   = 200001;
+
+   INVALUE ISARANGE
+      LOW - 1000   = 1000
+     1000 - 5000   = 5000
+     5000 - 25000  = 25000
+    25000 - 50000  = 50000
+    50000 - HIGH   = 50001;
+
+   VALUE ISARANGD
+     1000  = ' 1)       BELOW RM1,000'
+     5000  = ' 2)   RM1,000 - RM5,000'
+    25000  = ' 3)  RM5,000 - RM25,000'
+    50000  = ' 4) RM25,000 - RM50,000'
+    50001  = ' 5) RM50,000 AND ABOVE ';
+
+   VALUE IWSRNGE
+       LOW  -<  3001 =' 1) UP TO   RM  3,000'
+       3001 -< 10001 =' 2) UP TO   RM 10,000'
+      10001 -< 30001 =' 3) UP TO   RM 30,000'
+      30001 -< 50001 =' 4) UP TO   RM 50,000'
+      50001 -< 75001 =' 5) UP TO   RM 75,000'
+      75001 -<100001 =' 6) UP TO   RM100,000'
+     100001 - HIGH   =' 7) ABOVE RM100,000  ';
+
+   VALUE IWSRNGX
+       LOW  -   5000 =' 1) FIRST RM  5,000'
+       5000 -  10000 =' 2) NEXT  RM  5,000'
+      10000 -  50000 =' 3) NEXT  RM 40,000'
+      50000 - 150000 =' 4) NEXT  RM100,000'
+     150000 - 350000 =' 5) NEXT  RM200,000'
+     350000 - 650000 =' 6) NEXT  RM300,000'
+     650000 -1200000 =' 6) NEXT  RM550,000'
+    1200000 - HIGH   =' 7) THEREAFTER     ';
+
+   VALUE IBWSRNGD
+       LOW  -< 10001 =' 1) UP TO   RM 10,000'
+      10001 -< 30001 =' 2) UP TO   RM 30,000'
+      30001 -< 50001 =' 3) UP TO   RM 50,000'
+      50001 -< 75001 =' 4) UP TO   RM 75,000'
+      75001 -<100001 =' 5) UP TO   RM100,000'
+     100001 - HIGH   =' 6) ABOVE RM100,000  ';
+
+   PICTURE HUNDRED
+     LOW - <0  = '0,000,009.99' (PREFIX='-' MULT=1)
+     0-HIGH    = '0,000,009.99' (MULT=1);
+
+   PICTURE THOUSAND
+     LOW - <0 = '0,000,000,009' (PREFIX='-' MULT=.001)
+     0-HIGH   = '0,000,000,009' (MULT=.001);
+
+   PICTURE MILLION
+     LOW - <0 = '0,000,000,009' (PREFIX='-' MULT=.000001)
+     0-HIGH   = '0,000,000,009' (MULT=.000001);
+
+   VALUE LNPOGRP
+
+     002,003,022,046,053,056,120,129,136,169,
+     170,173,196,226,232,252,262,802,811,818,284,
+     285,291
+                         ='01-SELANGOR/WILAYAH REG.   I'
+
+     015,029,040,041,066,083,096,097,101,103,118,128,
+     141,151,195,197,248,269,701,812,821,822
+                         ='02-SELANGOR/WILAYAH REG.  II'
+
+     018,019,035,036,081,124,125,131,135,145,148,
+     162,167,180,220,241,267,280,292,295,815,816
+                         ='03-SELANGOR/WILAYAH REG. III'
+
+     007,037,052,059,061,079,087,089,091,093,102,105,110,
+     144,147,174,176,216,217,222,234,286,287,290,804,805
+                         ='04-SOUTHERN REGION I       '
+
+     005,009,049,051,067,071,076,080,085,095,123,137,146,
+     152,158,207,208,209,210,244,245,251,809,823
+                         ='05-CENTRAL REGION           '
+
+     032,050,058,090,130,175,183,184,185,186,189,190,
+     191,192,193,194,259,813,273,274,275,281
+                         ='06-SARAWAK REGION           '
+
+     033,044,055,062,072,112,115,140,142,143,149,161,228,
+     803,278,276,282,283
+                         ='07-SABAH REGION             '
+
+     004,016,017,021,024,028,039,045,047,063,064,065,075,
+     111,156,160,165,172,224,231,242,247,254,800,807
+                         ='08-SOUTHERN REGION II       '
+
+     006,010,034,054,070,074,077,086,104,107,114,126,
+     150,159,171,205,238,258,265,266,806,808,817,704
+                         ='09-NORTHERN REGION I        '
+
+     008,013,014,030,048,106,113,116,117,139,233,237,239,
+     257,260,261,263,264,819,277,703
+                         ='10-EAST COAST REGION        '
+
+     026,038,094,122,138,153,155,157,163,168,178,
+     179,198,225,230,270,296,814,820,279,288,289,702
+                         ='11-SELANGOR/WILAYAH REG.  IV'
+
+     023,027,042,057,060,068,088,108,121,154,164,177,204,
+     206,211,249,256,801,824,011,243
+                         ='12-NORTHERN REGION II       '
+
+     020,025,031,043,069,073,078,092,109,127,133,199,201,
+     202,203,221,235,240,268,293,294
+                         ='13-SELANGOR/WILAYAH REG.   V'
+     OTHER               ='99-OTHER';
+
