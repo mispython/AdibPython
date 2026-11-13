@@ -1,88 +1,55 @@
-#!/usr/bin/env python3
-"""
-Deep diagnostic — verify the file, function, and behavior on real data.
-Run as: python3 /tmp/deep_diag.py
-"""
-import sys
-import os
-import inspect
-import traceback
+======================================================================
+1. WHICH FILE IS ACTUALLY BEING IMPORTED
+======================================================================
+  module file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMHPFS.py
+  file mtime:  Fri Nov 13 15:17:40 2026
+  file size:   46,561 bytes
 
-EIBM_PATH_DIR = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS"
-if EIBM_PATH_DIR not in sys.path:
-    sys.path.insert(0, EIBM_PATH_DIR)
+======================================================================
+2. WHICH FUNCTION IS DEFINED IN THE IMPORTED MODULE
+======================================================================
+  has parse_sas_date:    True
+  has parse_z11_to_date: False
 
-print("=" * 70)
-print("1. WHICH FILE IS ACTUALLY BEING IMPORTED")
-print("=" * 70)
-for mod_name in list(sys.modules):
-    if mod_name == 'EIBMHPFS' or mod_name.startswith('EIBMHPFS.'):
-        del sys.modules[mod_name]
+  --- Source of parse_sas_date ---
+  def parse_sas_date(val) -> Optional[date]:
+      """Parse a date from a SAS7BDAT column.
+  
+      Handles:
+        - SAS numeric dates (days since 1960-01-01): 14633 -> 2000-01-20
+        - Python date objects (passed through)
+        - DDMMYY8 strings with YEARCUTOFF=1950
+        - Null / NaN -> None
+        - Garbage numeric values outside 0..60000 -> None
+      """
+      if val is None:
+          return None
+      if isinstance(val, float) and val != val:      # NaN
+          return None
+      if isinstance(val, date):
+          return val
+      if isinstance(val, (int, float)):
+          try:
+              days = int(val)
+              if days < 0 or days > 60000:
 
-try:
-    import EIBMHPFS
-except Exception:
-    traceback.print_exc()
-    sys.exit(1)
+======================================================================
+3. DOES THE FUNCTION ACTUALLY WORK ON SAS DATES
+======================================================================
+  parse_sas_date(14633       ) = 2000-01-24
+  parse_sas_date(23197       ) = 2023-07-06
+  parse_sas_date(14435.0     ) = 1999-07-10
+  parse_sas_date(0           ) = 1960-01-01
+  parse_sas_date(None        ) = None
 
-print(f"  module file: {EIBMHPFS.__file__}")
-print(f"  file mtime:  {__import__('time').ctime(os.path.getmtime(EIBMHPFS.__file__))}")
-print(f"  file size:   {os.path.getsize(EIBMHPFS.__file__):,} bytes")
+  Expected: 14633 -> 2000-01-20, 23197 -> 2023-07-05, 14435.0 -> 1999-07-11
+            If any show 'None' for the numeric values, the fix is NOT loaded.
 
-print()
-print("=" * 70)
-print("2. WHICH FUNCTION IS DEFINED IN THE IMPORTED MODULE")
-print("=" * 70)
-print(f"  has parse_sas_date:    {hasattr(EIBMHPFS, 'parse_sas_date')}")
-print(f"  has parse_z11_to_date: {hasattr(EIBMHPFS, 'parse_z11_to_date')}")
+======================================================================
+4. OTHER COPIES OF EIBMHPFS.py ON THE FILESYSTEM
+======================================================================
 
-if hasattr(EIBMHPFS, 'parse_sas_date'):
-    print()
-    print("  --- Source of parse_sas_date ---")
-    try:
-        src = inspect.getsource(EIBMHPFS.parse_sas_date)
-        for line in src.splitlines()[:20]:
-            print(f"  {line}")
-    except Exception:
-        traceback.print_exc()
 
-print()
-print("=" * 70)
-print("3. DOES THE FUNCTION ACTUALLY WORK ON SAS DATES")
-print("=" * 70)
-if hasattr(EIBMHPFS, 'parse_sas_date'):
-    for v in [14633, 23197, 14435.0, 0, None]:
-        try:
-            print(f"  parse_sas_date({v!r:12}) = {EIBMHPFS.parse_sas_date(v)}")
-        except Exception as e:
-            print(f"  parse_sas_date({v!r:12}) RAISED {type(e).__name__}: {e}")
-    print()
-    print("  Expected: 14633 -> 2000-01-20, 23197 -> 2023-07-05, 14435.0 -> 1999-07-11")
-    print("            If any show 'None' for the numeric values, the fix is NOT loaded.")
-elif hasattr(EIBMHPFS, 'parse_z11_to_date'):
-    print("  >>> parse_z11_to_date is STILL in the module (old broken version)")
-    for v in [14633, 23197]:
-        try:
-            print(f"  parse_z11_to_date({v!r}) = {EIBMHPFS.parse_z11_to_date(v)}")
-        except Exception as e:
-            print(f"  parse_z11_to_date({v!r}) RAISED {type(e).__name__}: {e}")
-
-print()
-print("=" * 70)
-print("4. OTHER COPIES OF EIBMHPFS.py ON THE FILESYSTEM")
-print("=" * 70)
-import subprocess
-try:
-    result = subprocess.run(
-        ["find", "/sas", "/opt", "/home", "/tmp", "-name", "EIBMHPFS*.py",
-         "-type", "f", "2>/dev/null"],
-        capture_output=True, text=True, timeout=30,
-    )
-    print(result.stdout)
-except Exception as e:
-    print(f"  find failed: {e}")
-
-print()
-print("=" * 70)
-print("DONE")
-print("=" * 70)
+======================================================================
+DONE
+======================================================================
