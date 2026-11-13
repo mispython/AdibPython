@@ -4,12 +4,12 @@ Faithful port of original SAS EIBDDEPE program.
 
 Performance notes:
 - DuckDB reads Parquet with predicate pushdown.
-- All transformations are vectorized (no map_elements on 8.8M rows).
+- All transforms are vectorized (no map_elements on 8.8M rows).
 - Format lookups (SAPROD, CAPROD, FDPRODD, ODPROD, S1RANGE, S2RANGE, $RACE)
   are compiled once into Polars lookup DataFrames / when-then chains.
-- Branch arrays (SA{}, CA{}, HDA{}, CAI{}, ...) are computed in a single
-  group_by pass instead of 10+ Python loops.
-- SAS outputs are written via SASPy (unchanged from SAS business logic).
+- Branch arrays computed in a single group_by pass.
+- DYDP (8.8M rows) is written via PROC IMPORT (CSV -> SAS) for speed.
+  All smaller summary files continue via SASPy df2sd.
 """
 
 import duckdb
@@ -32,6 +32,10 @@ BASE_OUT  = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDDEPE'
 MIS_PATH  = f'{BASE_OUT}/MIS'
 MISQ_PATH = f'{BASE_OUT}/MISQ'
 TEMP_PATH = f'{BASE_OUT}/TEMP'
+
+# Scratch directory for the DYDP CSV (fast local storage preferred)
+SCRATCH_DIR = TEMP_PATH
+DYDP_CSV = f'{SCRATCH_DIR}/DYDP_import.csv'
 
 for p in (MIS_PATH, MISQ_PATH, TEMP_PATH):
     os.makedirs(p, exist_ok=True)
@@ -82,21 +86,18 @@ def days_in_month(year, month):
     else: return 31
 
 # ============================================================================
-# COMPILE FORMAT LOOKUP TABLES (once) — replace map_elements with joins
+# COMPILE FORMAT LOOKUP TABLES (once)
 # ============================================================================
 
-def _rules_to_lookup(format_name, library, default, numeric=True):
-    """Extract simple int->str mappings from a PBB format library."""
+def _rules_to_lookup(format_name, library):
     rules = library.FORMATS[format_name]['rules']
     keys, vals = [], []
     for lo, hi, exlo, exhi, label, _opts in rules:
         if isinstance(lo, int) and isinstance(hi, int) and lo == hi:
-            keys.append(lo)
-            vals.append(label)
+            keys.append(lo); vals.append(label)
     return pl.DataFrame({'PRODUCT': keys, format_name: vals})
 
 def _build_odprod_lookup():
-    """ODPROD: int -> str, built from PBBLNFMT rules."""
     rules = PBBLNFMT.FORMATS['ODPROD']['rules']
     keys, vals = [], []
     for lo, hi, exlo, exhi, label, _opts in rules:
@@ -104,18 +105,14 @@ def _build_odprod_lookup():
             keys.append(lo); vals.append(label)
     return pl.DataFrame({'PRODUCT': keys, 'ODPROD': vals})
 
-# Lookup DataFrames (built once)
-SAPROD_DF  = _rules_to_lookup('SAPROD',  PBBDPFMT, '42120')
-CAPROD_DF  = _rules_to_lookup('CAPROD',  PBBDPFMT, '42110')
-FDPRODD_DF = _rules_to_lookup('FDPRODD', PBBDPFMT, '42130')
+SAPROD_DF  = _rules_to_lookup('SAPROD',  PBBDPFMT)
+CAPROD_DF  = _rules_to_lookup('CAPROD',  PBBDPFMT)
+FDPRODD_DF = _rules_to_lookup('FDPRODD', PBBDPFMT)
 ODPROD_DF  = _build_odprod_lookup()
 
-SAPROD_DEFAULT  = '42120'
-CAPROD_DEFAULT  = '42110'
-FDPRODD_DEFAULT = '42130'
-ODPROD_DEFAULT  = '34180'
+SAPROD_DEFAULT, CAPROD_DEFAULT = '42120', '42110'
+FDPRODD_DEFAULT, ODPROD_DEFAULT = '42130', '34180'
 
-# MVTACE / MVTDEP / DDMOVE as Polars when/then chains
 def build_mvrange_expr(col='MOVEMENT'):
     absm = pl.col(col).abs()
     ace = (
@@ -152,12 +149,10 @@ def build_ddmove_expr(col='MOVEMENT_ADJ'):
          .otherwise(10000001)
     )
 
-# S1RANGE / S2RANGE bounds (from PBBDPFMT, same thresholds used in SAS)
 S1_BOUNDS = list(PBBDPFMT._S1RANGE_BOUNDS) + [PBBDPFMT._S1RANGE_HIGH]
 S2_BOUNDS = list(PBBDPFMT._S2RANGE_BOUNDS) + [PBBDPFMT._S2RANGE_HIGH]
 
 def build_range_expr(col, bounds):
-    """Vectorized INVALUE: pick first bound >= value (bisect_left)."""
     c = pl.col(col)
     expr = pl.lit(float(bounds[-1]))
     for b in reversed(bounds[:-1]):
@@ -165,7 +160,7 @@ def build_range_expr(col, bounds):
     return expr
 
 # ============================================================================
-# READ PARQUET VIA DUCKDB (push SAS WHERE filters down)
+# READ PARQUET VIA DUCKDB
 # ============================================================================
 
 print("\nReading DPTRBL Parquet via DuckDB...")
@@ -179,7 +174,6 @@ df = con.execute(f"""
 con.close()
 print(f"  Loaded {len(df):,} filtered records")
 
-# Report date
 reptdate = None
 for col in ['TBDATE', 'REPTDATE', 'REPTDT']:
     if col in df.columns:
@@ -201,7 +195,6 @@ print(f"  DDMV dedupe target (REPTDATE - 31): {rdate3}")
 
 print("\nEnriching (vectorized)...")
 
-# --- BRANCH fix + MOVEMENT + DYDPBAL + REPTDATE
 df = df.with_columns([
     pl.when(pl.col('BRANCH') == 132).then(168).otherwise(pl.col('BRANCH')).alias('BRANCH'),
     (pl.col('CREDIT') - pl.col('DEBIT')).alias('MOVEMENT'),
@@ -209,7 +202,6 @@ df = df.with_columns([
     pl.lit(reptdate).alias('REPTDATE'),
 ])
 
-# --- OPENDT year (vectorized) and ACCYTD
 df = df.with_columns(
     pl.col('OPENDT').cast(pl.String).str.replace_all(r'\.', '')
       .str.slice(0, 8).str.strptime(pl.Date, '%Y%m%d', strict=False).dt.year()
@@ -219,7 +211,6 @@ df = df.with_columns(
       .then(1).otherwise(0).alias('ACCYTD')
 ).drop('OPEN_YEAR')
 
-# --- PRODCD: 4 hash joins (saprod, caprod, fdprodd, odprod), then when/then pick
 df = (
     df
     .join(SAPROD_DF,  on='PRODUCT', how='left')
@@ -241,12 +232,10 @@ df = df.with_columns(
       .alias('PRODCD')
 ).drop(['SAPROD', 'CAPROD', 'FDPRODD', 'ODPROD'])
 
-# --- DPTYPE
 df = df.with_columns(
     pl.when(pl.col('DEPTYPE') == 'S').then(pl.lit('S')).otherwise(pl.lit('D')).alias('DPTYPE')
 )
 
-# --- MVRANGE
 df = df.with_columns(build_mvrange_expr('MOVEMENT').alias('MVRANGE'))
 
 print(f"  Enriched: {len(df):,} records")
@@ -282,7 +271,6 @@ is_weekly_or_monthend = (reptday in [8, 15, 22]) or (reptday == mth)
 if is_weekly_or_monthend:
     savg = df.filter((pl.col('DEPTYPE') == 'S') & (pl.col('CURBAL') >= 0))
 
-    # AGE (vectorized)
     savg = savg.with_columns(
         pl.col('BDATE').cast(pl.String).str.replace_all(r'\.', '')
           .str.slice(0, 8).str.strptime(pl.Date, '%Y%m%d', strict=False).alias('BDATE_DT')
@@ -318,27 +306,20 @@ else:
     savg = pl.DataFrame([])
 
 # ============================================================================
-# BRANCH SUMS + TOTALS — one group_by pass, then pivot in Python dicts
+# BRANCH SUMS + TOTALS — single group_by pass
 # ============================================================================
 
 print("\nAggregating branch totals (single pass)...")
 
-# Overdraft side first: build ODPROD for TOTOVFT filter (SAS uses ODPROD on CURBAL<0)
-# After negation, CURBAL > 0. TOTOVFT counts only PRODCD in ('34180','34240','34380').
 od = df.filter((pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') < 0))
 
-# All branch accumulators defined as Polars expressions over a single group_by.
-# Matching the SAS ARRAY {} adds: SA, SACAI, SAI(=SACAI), SNO, MBS, MBSNO,
-# CA, HDA, CAI, CNO, CAIG, CGNO, CAIH, CHNO.
 branch_agg = df.group_by('BRANCH').agg([
-    # Savings side
     pl.col('CURBAL').filter((pl.col('DEPTYPE') == 'S') & (pl.col('PRODCD') == '42120')).sum().alias('SA'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE') == 'S') & (pl.col('PRODCD') == '42320')).sum().alias('SACAI'),
     pl.len().filter((pl.col('DEPTYPE') == 'S') & (pl.col('PRODCD') == '42320')).alias('SNO'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE') == 'S') & (pl.col('PRODCD') == '42320') & (pl.col('PRODUCT') == 214)).sum().alias('MBS'),
     pl.len().filter((pl.col('DEPTYPE') == 'S') & (pl.col('PRODCD') == '42320') & (pl.col('PRODUCT') == 214)).alias('MBSNO'),
 
-    # Demand positive side
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42110')).sum().alias('CA'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42180')).sum().alias('HDA'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42310')).sum().alias('CAI_pos'),
@@ -348,7 +329,6 @@ branch_agg = df.group_by('BRANCH').agg([
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63,163]))).sum().alias('CAIH_pos'),
     pl.len().filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63,163]))).alias('CHNO_pos'),
 
-    # Overdraft side (negative CURBAL, SAS adds these to CAI/CAIH)
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42310') & (pl.col('CURBAL') < 0)).sum().alias('CAI_neg'),
     pl.len().filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42310') & (pl.col('CURBAL') < 0)).alias('CNO_neg'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42310') & (pl.col('PRODUCT').is_in([61,161])) & (pl.col('CURBAL') < 0)).sum().alias('CAIG_neg'),
@@ -357,13 +337,12 @@ branch_agg = df.group_by('BRANCH').agg([
     pl.len().filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63,163])) & (pl.col('CURBAL') < 0)).alias('CHNO_neg'),
 ])
 
-# Compose the SAS array totals from the single-pass group_by
 def _dict(colname):
     return dict(zip(branch_agg['BRANCH'].to_list(), branch_agg[colname].to_list()))
 
 SA_branch   = _dict('SA')
 SACAI_branch= _dict('SACAI')
-SAI_branch  = dict(SACAI_branch)  # SAS: SAI==SACAI
+SAI_branch  = dict(SACAI_branch)
 SNO_branch  = _dict('SNO')
 MBS_branch  = _dict('MBS')
 MBSNO_branch= _dict('MBSNO')
@@ -384,13 +363,8 @@ CNO_branch  = {
     for k in branch_agg['BRANCH'].to_list()
 }
 
-# ============================================================================
-# TOTALS (SAS KEEP list on DYPOSN)
-# ============================================================================
-
 def safe_sum(s): return float(s) if s is not None else 0.0
 
-# Pre-compute TOTOVFT (ODPROD-mapped) using vectorized join
 od_with_odprod = (
     od.select(['PRODUCT', 'CURBAL'])
       .join(ODPROD_DF, on='PRODUCT', how='left')
@@ -420,7 +394,6 @@ totals = {
 
 dyposn = pl.DataFrame([{'REPTDATE': reptdate, **totals}])
 
-# DYIBU
 all_branches = sorted(set().union(*[
     set(d.keys()) for d in [SAI_branch, CAI_branch, CAIG_branch, CAIH_branch,
                             SNO_branch, CNO_branch, CGNO_branch, CHNO_branch,
@@ -455,7 +428,6 @@ dybrdp = dydp.filter(
     pl.col('DYDPBAL').sum().alias('BALANCE')
 ).select(['BRANCH', 'DPTYPE', 'REPTDATE', 'BALANCE'])
 
-# DYDDCR (vectorized DDMOVE)
 dyddcr_base = dydp.filter(
     (pl.col('DPTYPE') == 'D') & (~pl.col('PRODUCT').is_in(ACE_PRODUCTS)) &
     (pl.col('PRODCD') != '42310') & (pl.col('PRODUCT') != 72) & (pl.col('CURBAL') >= 0)
@@ -536,11 +508,56 @@ def append_ddmv_sas(df_new):
     sas.df2sd(pdf_new, table='DDMV', libref=SAS_LIB_MISQ, replace=False)
     print(f"  ✓ MISQ.DDMV (appended, {len(df_new):,})")
 
+# ============================================================================
+# OPTION A: DYDP via PROC IMPORT (CSV -> SAS)
+# ============================================================================
+
+def save_dydp_via_proc_import(df_polars, csv_path):
+    """DYDP (8.8M rows): write CSV, then PROC IMPORT inside SAS."""
+    if len(df_polars) == 0:
+        print("  ⚠ DYDP: No data"); return
+    # Polars write_csv is fast (vectorized)
+    df_polars.write_csv(csv_path)
+    print(f"  ✓ CSV written: {csv_path} ({len(df_polars):,} rows)")
+
+    # Force SAS to drop the existing TEMP.DYDP (matches SAS %MISAPPD day-01 logic;
+    # for non-day-01 runs DYDP is a temp work file, so overwriting is fine)
+    sas.submit(f"""
+        proc datasets lib={SAS_LIB_TEMP} nolist;
+          delete DYDP;
+        run;
+
+        proc import datafile="{csv_path}"
+             out={SAS_LIB_TEMP}.DYDP
+             dbms=csv
+             replace;
+          getnames=yes;
+          guessingrows=max;
+        run;
+    """)
+    print(f"  ✓ {SAS_LIB_TEMP}.DYDP created via PROC IMPORT")
+
+    # Clean up the scratch CSV
+    try:
+        os.remove(csv_path)
+        print(f"  ✓ Removed scratch CSV: {csv_path}")
+    except OSError as e:
+        print(f"  ⚠ Could not remove {csv_path}: {e}")
+
+# ============================================================================
+# SAVE ALL OUTPUTS
+# ============================================================================
+
 print("\nSaving SAS datasets...")
-save_sas(dydp, SAS_LIB_TEMP, 'DYDP')
+
+# DYDP: 8.8M rows -> PROC IMPORT path
+save_dydp_via_proc_import(dydp, DYDP_CSV)
+
+# SAVG: weekly/month-end only, via df2sd (small)
 if is_weekly_or_monthend and len(savg) > 0:
     save_sas(savg, SAS_LIB_TEMP, 'SAVG')
 
+# All monthly files via df2sd (small aggregates)
 upsert_sas(dyposn, SAS_LIB_MIS, f'DYPOSN{reptmon:02d}')
 upsert_sas(dymvnt, SAS_LIB_MIS, f'DYMVNT{reptmon:02d}')
 upsert_sas(dyibu,  SAS_LIB_MIS, f'DYIBU{reptmon:02d}')
