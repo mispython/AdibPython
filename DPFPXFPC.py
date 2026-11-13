@@ -1,8 +1,31 @@
-import pyreadstat
-_, meta = pyreadstat.read_sas7bdat(
-    "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBWHP01/loan104.sas7bdat",
-    metadataonly=True,
-)
-for c in meta.column_names:
-    if 'iss' in c.lower() or 'date' in c.lower() or 'dte' in c.lower():
-        print(c)
+ASSMDATE
+APPRDATE
+BLDATE
+OLDNOTEBLDATE
+CLOSEDTE
+FISSPURP
+ISSUEDT
+EXPRDATE
+FISSPORI
+INTSTDTE
+CPNSTDTE
+VALUEDTE
+DLVDATE
+LMOENDDATE
+LMOSTDATE
+MNIAPDTE
+MOENDDTE
+MOSTDTE
+NUM_REPO_ORDER_ISSUE
+REPO_ORDER_ISSUE_DT
+TIA_TAG_DATE
+TIA_UTAG_DATE
+RR_APPR_DATE
+LEGAL_NOTICE_ISSUE_DT
+RR_APPL_DATE
+AKPK_MATRIX_DATE
+COURT_ORDER_UPDATE_DT
+RR_UNTAG_DATE
+DEATHDATE
+SM_DATE
+VARSTDTE
