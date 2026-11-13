@@ -1,2539 +1,92 @@
-#!/usr/bin/env python3
-"""
-Program : PBBDPFMT.py
-Purpose : Python conversion of the SAS include PBBDPFMT (PROC FORMAT library
-          for deposit products, customer codes, branch/state codes and balance
-          / maturity buckets) used across multiple SAS programs.
+"""PBMISFMT: reusable conversion of the original SAS include.
 
-Formats converted (SAS name -> function):
-    SADENOM -> sadenom_format      SAPROD   -> saprod_format
-    FDDENOM -> fddenom_format      FDPROD   -> fdprod_format
-    FDPRODD -> fdprodd_format      FDPRD    -> fdprd_format
-    FCYTERM -> fcyterm_format      CADENOM  -> cadenom_format
-    CAPROD  -> caprod_format       DPCUSTCD -> dpcustcd_format
-    SACUSTCD-> sacustcd_format     FDCUSTCD -> fdcustcd_format
-    IFDCUSCD-> ifdcuscd_format     DDCUSTCD -> ddcustcd_format
-    STATECD -> statecd_format      FDORGMT  -> fdorgmt_format
-    FDRMMT  -> fdrmmt_format       RMFDORGMT-> rmfdorgmt_format
-    SDRANGE / S1RANGE / S2RANGE / DDRANGE -> sdrange_format / s1range_format /
-                                              s2range_format / ddrange_format
-    $RACE   -> race_format         BRANCHCD -> branchcd_format
+Usage from another job:
+    import PBMISFMT
+    names = PBMISFMT.available_formats()
+    result = PBMISFMT.put(value, names[0])
+    results = PBMISFMT.apply_format(values, names[0])
 
-Two calling styles are supported by this one module (both are kept so that
-every program already converted against either earlier version keeps working):
+Original macro names are module constants and are also in MACROS.
+Original format names are in FORMATS; named functions omit only the SAS $ prefix.
+Keep imports qualified because different libraries can define the same names.
+Run this file with --list, or FORMAT VALUE, for command-line lookups.
 
-    Style 1 (function per format):
-        from PBBDPFMT import saprod_format, fdprod_format, statecd_format
-        saprod_format(200)                 # '42120'
-        apply_format('SAPROD', 200)        # '42120'
-
-    Style 2 (SAS-like, generic):
-        import PBBDPFMT
-        PBBDPFMT.SAPROD(200)               # '42120'
-        PBBDPFMT.put(200, 'SAPROD.')       # '42120'
-        PBBDPFMT.apply_format(values, 'SAPROD')   # list / pandas / polars Series
-        PBBDPFMT.available_formats()
-        PBBDPFMT.FORMATS, PBBDPFMT.MACROS, PBBDPFMT.get_rules('SAPROD')
-
-    Command line:
-        python PBBDPFMT.py --list
-        python PBBDPFMT.py SAPROD 200
-        python PBBDPFMT.py --selfcheck
-
-SAS behaviour that is reproduced:
-    * OTHER also catches missing values (None / NaN), e.g. SADENOM(.) = 'D'.
-    * LOW does not include missing values, so a missing value in a range format
-      without OTHER (FDORGMT, FDRMMT, RMFDORGMT) is displayed as '.'.
-    * A value that matches nothing in a VALUE format without OTHER is displayed
-      as the value itself (RMFDORGMT).
-    * An INVALUE with no match returns missing (None), e.g. FCYTERM.
-    * Overlapping ranges use the first listed match.
-    * Character labels are returned without trailing blanks.
-
-TAKE NOTE : ANY AMENDMENTS TO PRODUCTS MAPPING, THESE FORMATS
-ARE AFFECTED : SADENOM, SAPROD (SAVINGS DEPOSITS)
-               FDDENOM, FDPROD (FIXED DEPOSITS)
-               CDDENOM, CAPROD (CURRENT ACCOUNTS)
-
-AMENDMENT  : 11/05/04
-DONE BY    : RHA - A497
-REASON : TO ADD & REMAP PRODUCT 182(STAFF AL-WADIAH CA)
-         AND 166(CASH LINE FACILITY) IN FISS RDAL REPORT
-         PRODUCT 166 -REMAP FRM BNM BIC CODE '42110' TO
-                      '42310'
-SMR 2006-411 MAA3 15-05-06 MERGER 212->165, 229->151
-SMR 2006-866 MAA3 15-07-06 MERGER 223->024
-SMR 2006-1145 NPH 08-09-06 MERGE BRANCH 246 -> 146
-SMR 2010-3206 AAB 10-01-11 MERGE BRANCH 200 -> 122
-SMR 2006-1296 TGX 16-10-06 UNIT TRUST FD(368-372)
-SMR 2007-0989 RHA 27-07-07 NEW BRANCH (BBT -268)
-SMR 2007-1535 RHA 24-12-07 NEW BRANCH (MKA -269)
-SMR 2008-0820 MAA3 1-08-08 NEW BRANCH (BPI -270)
-SMR 2009-0679 HHH  9-07-09 NEW BRANCH (LHA -273)
-SMR 2009-0785 HHH 21-08-09 NEW BRANCH (JPI -278)
-SMR 2010-1070 NRA 15-04-10 NEW BRANCH (PTJ -279)
-SMR 2010-1462 AAB 12-08-10 NEW BRANCH (KDA -280)
-SMR 2010-2450 AAB 07-01-11 NEW BRANCH (PLT -281)
-SMR 2010-3952 AAB 11-02-11 NEW BRANCH (PSE -283)
-SMR 2010-4187 AAB 14-03-11 NEW BRANCH (PTT -282)
-SMR 2012-2172 AAB 18-09-12 NEW BRANCH (BSP -284)
-SMR 2012-2172 CWK 05-10-12 NEW BRANCH (BMC -285)
-SMR 2012-2172 CWK 09-11-12 NEW BRANCH (BMC -286)
-SMR 2011-1889 SKP 21-10-11 NEW FCY PRODUCT 440-444
-SMR 2011-3893 SKP          WOF PRODUCT 32,33
-SMR 2012-1088 CWK          OD  PRODUCT 133,134
-SMR 2012-3575 SKP          NEW RMFD PRODUCT 300,INTPLAN 399
-SMR 2013-34   JKA 15-02-13 NEW BRANCH (SUA-287)
-SMR 2013-1407 JKA 16-07-13 NEW BRANCH (SPT-288)
-SMR 2013-1408 NFJ 29-08-13 NEW BRANCH (TEE-289)
-SMR 2013-502  MFM 13-03-13 NEW OD  PRODUCT 184
-SMR 2013-2100 SKP          NEW BRANCH (IPJ-702)
-SMR 2014-83   RST 22-01-14 NEW INTEREST PLAN 747, 748
-SMR 2014-85   NFJ 29-01-14 REMOVE INTEREST PLAN 640-659
-SMR 2014-40   NFJ 07-02-14 NEW BRANCH (TDY-290)
-SMR 2014-367  RST 25-02-14 NEW INTEREST PLAN 749, 750
-SMR 2014-1932 SKP          NEW INTEREST PLAN 778,779
-SMR 2014-1973 SKP          NEW INTEREST PLAN 862,863
-SMR 2014-2223 TBC 18-09-14 NEW INTEREST PLAN 860,861
-SMR 2014-2587 NFJ 28-10-14 NEW INT PLAN 854,855,858,859
-SMR 2015-1588 TBC 10-06-15 NEW INT PLAN 850,851,852,853
-SMR 2015-1190 TBC 23-05-15 NEW OD PRODUCT 185,186
-SMR 2015-1842 HHH 06-07-15 NEW INT PLAN 891,892,893,894
-SMR 2015-2841 NNR 21-10-15 NEW INT PLAN 333,334,335,336
-SMR 2015-2679 TBC 28-10-15 NEW OD PRODUCT 72 413
-SMR 2015-2790 LAC 19-11-15 NEW INT PLAN 895,896,897,898
-SMR 2016-579  TBC 12-05-16 NEW OD PRODUCT 73
-SMR 2016-1134 TBC 01-08-16 NEW SA PRODUCT 210
-SMR 2016-2765 IFA 15-08-16 NEW SA PRODUCT 218
-SMR 2016-2771 CWK 15-08-16 NEW CA PRODUCT 92
-SMR 2016-2905 NFJ 09-08-16 UPD INTPLAN 778,779,862,863,
-                               895,337,338,339
-SMR 2016-4627 TBC 14-12-16 RM CA 20 AND FCYCA 420:431
-    2016-4623              RM CA 21 AND FCYCA 450:454
-SMR 2016-3894 TBC 09-11-16 PB UNION PAY PRODUCT 216
-SMR 2017-65   CWK 23-01-17 NEW CA PRODUCT 77,78
-SMR 2016-1621 MFM 21-02-17 NEW CA PRODUCT 40
-SMR 2017-2496 TBC 20-06-17 EXCLUDE PRODUCT 482
-SMR 2017-2401 TBC 22-06-17 FD & TDI 985,986,987,988
-SMR 2017-2150 TBC 22-06-17 STEPUP FD/FD-I 968:984
-SMR 2017-4237 SAM 07-11-17 FD RUSH FD/FD-I 900,901,902,993
-SMR 2017-1646/1645 IFA 22-11-17 NEW BRANCH 292,291
-SMR 2018-0138 SAM 19-01-18 NEW CA PRODUCT 42,43
-SMR 2018-0254 SAM 25-01-18 PLUS FD 895,337,904,905,
-                                   994,995,996,997
-                           & TDI   338,339,599,659,
-                                   229,230,231,232
-SMR 2018-2875 TBC 24-07-18 UPDATE INTPLAN 438
-SMR 2018-3988 TBC 27-09-18 INTPLAN 379,380,381,382
-SMR 2018-40   TBC 07-11-18 FCYCA 432:434
-SMR 2018-3434 IFA 14-12-18 NEW BRANCH (BJL -296)
-SMR 2019-1150 TBC 21-03-19 INTPLAN 447,540,541,559,568
-SMR 2019-1148 TBC 22-03-19 INTPLAN 475,481,542,543,555 &557
-SMR 2019-0098 IFA 22-07-19 CST(187) MERGE WITH MIRI(050)
-SMR 2019-3347 IFA 03-09-19 INT PLAN 575 PB RCB CAMPAIGN
-SMR 2019-3358 skp 26-09-19 INT PLAN 575 PB RCB CAMPAIGN
-SMR 2017-4296 IFA 23-11-17 ISLAMIC NEW CA PRODUCT 45
-SMR 2020-2060 IFA 23-06-20 INT PLAN 575 RCB CENTRE
+Parity limits: overlapping ranges use first-listed match, without SAS FUZZ;
+character ranges use Unicode ordering. PICTURE padding/overflow and special
+numeric missing codes are not fully reproduced. Validate against production SAS.
 """
 
 import argparse
 import math
-import sys
-from bisect import bisect_left
-from copy import deepcopy
-from typing import Dict, List, Optional, Set, Tuple
-
-
-# ============================================================================
-# SMALL HELPERS (SAS missing-value and BEST12. emulation)
-# ============================================================================
-
-def missing(value) -> bool:
-    """True for None / NaN / pandas NA (SAS numeric or character missing)."""
-    if value is None:
-        return True
-    try:
-        return bool(value != value)
-    except (TypeError, ValueError):
-        return True
-
-
-def best12(value) -> str:
-    """Approximate SAS BEST12. for numbers that match no format rule."""
-    if float(value).is_integer() and abs(value) < 1e12:
-        return str(int(value))
-    return format(value, '.12g')
-
-
-# ============================================================================
-# MACRO VARIABLE EQUIVALENTS
-# ============================================================================
-
-# %LET ACE=(40,42,43,150,151,152,181);  /* ACE PRODUCTS CODES */
-ACE: Set[int] = {40, 42, 43, 150, 151, 152, 181}
-
-# %LET FCY=(350,351,...,362); /*EIBWFCWH*/
-FCY: Set[int] = {350, 351, 352, 353, 354, 355, 356, 357, 358, 360, 361, 362}
-
-# %LET CURX=(050,051,055,056,057,058,060,064,065,068,069,167,169,168,
-#            085,086,087,088,089,066,067,070,071,073,096,097,061,090,
-#            091,092,093,094,095,100,101,102,106,108,109,110,111,112,
-#            113,114,115,116,117,118,119,120,121,122,123,124,125,133,
-#            134,135,137,138,170,150,151,152,153,154,155,156,157,158,
-#            159,160,161,162,163,164,165,166,174,175,176,177,178,179,
-#            180,181,182,183,189,190,191,192,193,194,195,196,197,198,
-#            081,082,083,084,184,185,186,131,132,187,188,020,021,077,
-#            040,041,042,043,078,074,35,36,37,38,39,46,47,48,49,75,
-#            076,023,024,025,045,026,027,013,014,015,016,017,018,019,
-#            003,004,005,006,007,008,009,010,011,012,022,081);
-CURX: Set[int] = {
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-    20, 21, 22, 23, 24, 25, 26, 27, 35, 36, 37, 38, 39, 40, 41, 42, 43,
-    45, 46, 47, 48, 49, 50, 51, 55, 56, 57, 58, 60, 61, 62, 63, 64,
-    65, 66, 67, 68, 69, 70, 71, 73, 74, 75, 76, 77, 78, 81, 82, 83, 84, 85,
-    86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 100, 101, 102, 106, 108,
-    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123,
-    124, 125, 131, 132, 133, 134, 135, 137, 138, 150, 151, 152, 153, 154, 155,
-    156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170,
-    174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188,
-    189, 190, 191, 192, 193, 194, 195, 196, 197, 198,
-}
-
-# Aliases (names used by programs converted earlier)
-ACE_PRODUCTS: Set[int] = ACE
-FCY_PRODUCTS: Set[int] = FCY
-CURX_PRODUCTS: Set[int] = CURX
-
-
-# ============================================================================
-# FORMAT: SADENOM - SA DENOMINATION OF ISLAMIC OR DOMESTIC
-# ============================================================================
-
-_SADENOM_ISLAMIC: Set[int] = {204, 207, 214, 215, 218, 220, 221, 222, 223}
-
-
-def sadenom_format(product_code: Optional[int]) -> str:
-    """
-    SADENOM: savings product code -> 'I' (Islamic) or 'D' (Domestic).
-    OTHER = 'D' also applies to missing values.
-    """
-    if missing(product_code):
-        return 'D'
-    return 'I' if product_code in _SADENOM_ISLAMIC else 'D'
-
-
-# ============================================================================
-# FORMAT: SAPROD - SAVINGS PRODUCT CODE -> BNM CODE
-# ============================================================================
-
-_SAPROD_MAPPINGS: Dict[int, str] = {
-    100: 'N',      # GIRO              PFB 207
-    126: 'N',      # PFB REMITTANCES BC NORM
-    127: 'N',      # PFB - SHARE PUBLIC
-    128: 'N',      # PFB - BC - SHARE BUMI
-    129: 'N',      # PFB - DD
-    140: 'N',      # SI-CLEARING ACCOUNT-PFB
-    141: 'N',      # ATM-PISA CLEARING ACCT-PFB
-    142: 'N',      # ATM-LOAN CLEARING ACCT-PFB
-    200: '42120',  # NORMAL SAVINGS
-    201: '42120',  # STAFF SAVINGS
-    202: '42120',  # YOUNG ACHIEVER ACCOUNT
-    203: '42120',  # 50 PLUS SAVINGS
-    204: '42320',  # ISLAMIC BANKING AL-WADIAH
-    205: '42120',  # BASIC SAVING A/C
-    206: '42120',  # BASIC 55 SAVING A/C
-    207: '42120',  # AL WADIAH SAVINGS
-    208: '42120',  # PB BRIGHT STAR
-    210: '42120',  # PB MYSALARY
-    211: 'N',      # ATM-FD CLRG.      PFB 211
-    212: '42120',  # WISE
-    213: '42120',  # PB SAVELINK
-    214: '42320',  # MUDHARABAH SAVINGS
-    215: '42320',  # ALWADIAH SAVINGS (STAFF)
-    216: '42120',  # PB UNIONPAY SAVINGS
-    218: '42120',  # PB MYSALARY SAVINGS ACCOUNT-I
-    220: '42120',  # (CM) SAVINGS ACC-I
-    221: '42120',  # (CM) BASIC SA-I
-    222: '42120',  # (CM) PB MYSALARY SA-I
-    223: '42120',  # (CM) FORU2SAVE SA-I
-    227: '42120',  # MONEYPLUS SA (STAFF)
-    228: '42120',  # MONEYPLUS SA
-    297: 'N',      # UMA1
-    298: 'N',      # UMA3
-    480: 'N',      # PB GOLD INVESTMENT
-    481: 'N',      # PB GOLD INVESTMENT -STAFF
-    482: 'N',      # CORP GOLD INVESTMENT ACCOUNT
-    483: 'N',      # EGOLD INVESTMENT ACCOUNT (NON-STAFF)
-    484: 'N',      # EGOLD INVESTMENT ACCOUNT (STAFF)
-}
-_SAPROD_OTHER = '42120'  # ALL OTHER SAVING CODES
-
-
-def saprod_format(product_code: Optional[int]) -> str:
-    """SAPROD: savings product code -> BNM code (OTHER = '42120')."""
-    if missing(product_code):
-        return _SAPROD_OTHER
-    return _SAPROD_MAPPINGS.get(product_code, _SAPROD_OTHER)
-
-
-# ============================================================================
-# FORMAT: FDDENOM - FD DENOMINATION OF ISLAMIC OR DOMESTIC
-# ============================================================================
-
-_FDDENOM_ISLAMIC_RANGES: List[Tuple[int, int]] = [
-    (229, 232), (272, 283), (334, 336), (338, 339), (340, 359),
-    (379, 382), (386, 394), (453, 459), (461, 469), (542, 544),
-    (580, 593), (595, 599), (603, 607), (609, 611), (620, 627),
-    (640, 659), (660, 719), (726, 731), (736, 740), (780, 839),
-    (851, 853), (856, 863), (893, 894), (896, 897), (902, 903),
-    (914, 940), (941, 967), (987, 988), (991, 993),
-]
-
-_FDDENOM_ISLAMIC_SINGLES: Set[int] = {
-    422, 424, 426, 428, 475, 481, 487, 489, 491, 493, 495, 497, 499,
-    555, 557, 575, 777,
-}
-
-
-def fddenom_format(product_code: Optional[int]) -> str:
-    """
-    FDDENOM: FD product code -> 'I' (Islamic) or 'D' (Domestic).
-    OTHER = 'D' also applies to missing values.
-    """
-    if missing(product_code):
-        return 'D'
-    is_islamic = (
-        product_code in _FDDENOM_ISLAMIC_SINGLES
-        or any(start <= product_code <= end for start, end in _FDDENOM_ISLAMIC_RANGES)
-    )
-    return 'I' if is_islamic else 'D'
-
-
-# ============================================================================
-# FORMAT: FDPROD - FIXED DEPOSIT PRODUCT (INTEREST PLAN) -> BNM CODE
-# ============================================================================
-
-_FDPROD_MAPPINGS: Dict[int, str] = {
-    229: '42133',  # PB FD / TD-I - 3-MONTHS NON-STAFF (INDV)
-    230: '42133',  # PB FD / TD-I - 3-MONTHS STAFF
-    231: '42133',  # PB FD / TD-I - 8-MONTHS NON-STAFF (INDV)
-    232: '42133',  # PB FD / TD-I - 8-MONTHS STAFF
-    233: '42130',  # EFD - 1 MTH
-    234: '42130',  # EFD - 2 MTH
-    235: '42130',  # PB EFD NORMAL - 3 MONTHS
-    236: '42130',  # EFD - 4 MTH
-    237: '42130',  # EFD - 5 MTH
-    238: '42130',  # PB EFD NORMAL - 6 MONTHS
-    239: '42130',  # EFD - 7 MTH
-    240: '42130',  # EFD - 8 MTH
-    241: '42130',  # EFD - 9 MTH
-    242: '42130',  # EFD - 10 MTH
-    243: '42130',  # EFD - 11 MTH
-    244: '42130',  # EFD - 12 MTH
-    245: '42130',  # EFD - 13 MTH
-    246: '42130',  # EFD - 14 MTH
-    247: '42130',  # EFD - 15 MTH
-    248: '42130',  # EFD - 16 MTH
-    249: '42130',  # EFD - 17 MTH
-    250: '42130',  # EFD - 18 MTH
-    251: '42130',  # EFD - 19 MTH
-    252: '42130',  # EFD - 20 MTH
-    253: '42130',  # EFD - 21 MTH
-    254: '42130',  # EFD - 22 MTH
-    255: '42130',  # EFD - 23 MTH
-    256: '42130',  # EFD - 24 MTH
-    257: '42130',  # EFD - 36 MTH
-    258: '42130',  # EFD - 48 MTH
-    259: '42130',  # EFD - 60 MTH
-    260: '42130',  # FD GOLDEN 50 - 1 MTH
-    261: '42130',  # FD GOLDEN 50 - 2 MTH
-    262: '42130',  # FD GOLDEN 50 - 3 MTH
-    263: '42130',  # FD GOLDEN 50 - 4 MTH
-    264: '42130',  # FD GOLDEN 50 - 5 MTH
-    265: '42130',  # FD GOLDEN 50 - 6 MTH
-    266: '42130',  # FD GOLDEN 50 - 7 MTH
-    267: '42130',  # FD GOLDEN 50 - 8 MTH
-    268: '42130',  # FD GOLDEN 50 - 9 MTH
-    269: '42130',  # FD GOLDEN 50 - 10 MTH
-    270: '42130',  # FD GOLDEN 50 - 11 MTH
-    271: '42130',  # FD GOLDEN 50 - 12 MTH
-    272: '42133',  # FD SHORT-TERM TD-I - 30 DAYS
-    273: '42133',  # FD SHORT-TERM TD-I - 31-60 DAYS
-    274: '42133',  # FD SHORT-TERM TD-I - 61-90 DAYS
-    275: '42133',  # FD SHORT-TERM TD-I - 91-120 DAYS
-    276: '42133',  # FD SHORT-TERM TD-I - 121-150 DAYS
-    277: '42133',  # FD SHORT-TERM TD-I - 151-180 DAYS
-    278: '42133',  # FD SHORT-TERM TD-I - 181-210 DAYS
-    279: '42133',  # FD SHORT-TERM TD-I - 211-240 DAYS
-    280: '42133',  # FD SHORT-TERM TD-I - 241-270 DAYS
-    281: '42133',  # FD SHORT-TERM TD-I - 271-300 DAYS
-    282: '42133',  # FD SHORT-TERM TD-I - 301-330 DAYS
-    283: '42133',  # FD SHORT-TERM TD-I - 331-366 DAYS
-    284: '42130',  # PLUS FD - 30 DAYS
-    285: '42130',  # PLUS FD - 31 - 60 DAYS
-    286: '42130',  # PLUS FD - 61 - 90 DAYS
-    287: '42130',  # PLUS FD - 91 - 120 DAYS
-    288: '42130',  # PLUS FD - 121 - 150 DAYS
-    289: '42130',  # PLUS FD - 151 - 180 DAYS
-    290: '42130',  # PLUS FD - 181 - 210 DAYS
-    291: '42130',  # PLUS FD - 211 - 240 DAYS
-    292: '42130',  # PLUS FD - 241 - 270 DAYS
-    293: '42130',  # PLUS FD - 271 - 300 DAYS
-    294: '42130',  # PLUS FD - 301 - 330 DAYS
-    295: '42130',  # PLUS FD - 331 - 365/366 DAYS
-    300: '42130',  # NORMAL FD - 1 MONTH
-    301: '42130',  # NORMAL FD - 3 MONTHS
-    302: '42130',  # NORMAL FD - 6 MONTHS
-    303: '42130',  # NORMAL FD - 9 MONTHS
-    304: '42130',  # NORMAL FD - 12 MONTHS
-    305: '42130',  # NORMAL FD - 15 MONTHS
-    306: '42130',  # NORMAL FD - 18 MONTHS
-    307: '42130',  # NORMAL FD - 21 MONTHS
-    308: '42130',  # NORMAL FD - 24 MONTHS
-    309: '42130',  # NORMAL FD - 36 MONTHS
-    310: '42130',  # NORMAL FD - 48 MONTHS
-    311: '42130',  # EFD NON-STAFF
-    312: '42130',  # EFD STAFF
-    313: '42130',  # FD BONUS - 4 MONTHS
-    314: '42130',  # NORMAL FD - 5 MONTHS
-    315: '42130',  # NORMAL FD - 7 MONTHS
-    316: '42130',  # NORMAL FD - 8 MONTHS
-    317: '42130',  # NORMAL FD - 10 MONTHS
-    318: '42130',  # NORMAL FD - 11 MONTHS
-    319: '42130',  # NORMAL FD - 27 MONTHS
-    320: '42130',  # FD LIFE - 1 MONTHS
-    321: '42130',  # FD LIFE - 3 MONTHS
-    322: '42130',  # FD LIFE - 6 MONTHS
-    323: '42130',  # FD LIFE - 9 MONTHS
-    324: '42130',  # FD LIFE - 12 MONTHS
-    325: '42130',  # FD LIFE - 15 MONTHS
-    326: '42130',  # FD LIFE - 18 MONTHS
-    327: '42130',  # FD LIFE - 21 MONTHS
-    328: '42130',  # FD LIFE - 24 MONTHS
-    329: '42130',  # FD LIFE - 36 MONTHS
-    330: '42130',  # FD LIFE - 48 MONTHS
-    331: '42130',  # FD LIFE - 60 MONTHS
-    332: '42130',  # FD LIFE - 2 MONTH-PFB
-    333: '42130',  # FD BONUS - 4 MONTHS
-    334: '42133',  # PB eTDi - 3 MONTHS
-    335: '42133',  # PB eTDi - 6 MONTHS
-    336: '42133',  # PB eTDi - 9 MONTHS
-    337: '42130',  # PLUS FD STAFF (6MTH)
-    338: '42133',  # TDI REWARD - 6 MONTHS(N-STAFF)
-    339: '42133',  # TDI REWARD - 6 MONTHS(STAFF)
-    340: '42132',  # FD MUDH - 1 MONTH
-    341: '42132',  # FD MUDH - 3 MONTHS
-    342: '49999',  # TERM INVESTMENT ACCT-I (3 MTH)
-    343: '42132',  # FD MUDH - 9 MONTHS
-    344: '42132',  # FD MUDH - 12 MONTHS
-    345: '49999',  # TERM INVESTMENT ACCT-I (6 MTH)
-    346: '42132',  # FD MUDH - 18 MONTHS
-    347: '42132',  # FD MUDH - 21 MONTHS
-    348: '49999',  # TERM INVESTMENT ACCT-I (9 MTH)
-    349: '42132',  # FD MUDH - 36 MONTHS
-    350: '42132',  # FD MUDH - 48 MONTHS
-    351: '42132',  # FD MUDH - 60 MONTHS
-    352: '42132',  # FD MUDH - 2 MONTHS
-    353: '42132',  # FD MUDH - 4 MONTHS
-    354: '42132',  # FD MUDH - 5 MONTHS
-    355: '42132',  # FD MUDH - 7 MONTHS
-    356: '42132',  # FD MUDH - 8 MONTHS
-    357: '42132',  # FD MUDH - 10 MONTHS
-    358: '42132',  # FD MUDH - 11 MONTHS
-    359: '42132',  # FD MUDH - 27 MONTHS
-    360: '42130',  # FD GOLDEN 50 - 15 MTH
-    361: '42130',  # FD GOLDEN 50 - 18 MTH
-    362: '42130',  # FD GOLDEN 50 - 21 MTH
-    363: '42130',  # FD GOLDEN 50 - 24 MTH
-    364: '42130',  # FD GOLDEN 50 - 36 MTH
-    365: '42130',  # FD GOLDEN 50 - 48 MTH
-    366: '42130',  # FD GOLDEN 50 - 60 MTH
-    368: '42130',  # PB RCB PREMIER -  6 MTH
-    369: '42130',  # UNIT TRUST FD-3 MTH
-    370: '42130',  # UNIT TRUST FD-6 MTH
-    371: '42130',  # PB RCB PREMIER - 12 MTH
-    372: '42130',  # UNIT TRUST FD-12 MTHS
-    373: '42130',  # PB RCB PREMIER -  6 MTH
-    374: '42130',  # PB RCB PREMIER - 12 MTH
-    375: '42130',  # PB FD / TD-I - 3-MONTHS NON-STAFF (INDV)
-    376: '42130',  # PB FD / TD-I - 3-MONTHS STAFF
-    377: '42130',  # PB FD / TD-I - 8-MONTHS NON-STAFF (INDV)
-    378: '42130',  # PB FD / TD-I - 8-MONTHS STAFF
-    379: '42133',  # PB SPECIAL2 TD-I NON STAFF - 6 MONTHS
-    380: '42133',  # PB SPECIAL2 TD-I STAFF - 6 MONTHS
-    381: '42133',  # PB RCB FD / TD-I - 3-MTHS NON-STAFF (INDV)
-    382: '42133',  # PB RCB FD / TD-I - 8-MTHS NON-STAFF (INDV)
-    383: '42130',  # PB 3-MONTH RCB FD/TD-I - 03 MONTHS
-    384: '42130',  # PB RCB PREMIER FD - 12 MONTHS
-    385: '42130',  # PLUS FD  - 15 MONTHS
-    386: '42133',  # PB 3-MONTH RCB FD/TD-I - 03 MONTHS
-    387: '42133',  # PB RCB PREMIER TD-I - 12 MONTHS
-    388: '42133',  # PB RCB PREMIER HY TD-I N-STAFF R5:1  6MTH
-    389: '42133',  # PB RCB PREMIER HY TD-I N-STAFF R5:1 12MTH
-    390: '42133',  # PB RCB PREMIER HY TD-I N-STAFF R2:1  6MTH
-    391: '42133',  # PB RCB PREMIER HY TD-I N-STAFF R2:1 12MTH
-    392: '42133',  # TD-I - 03 MONTHS
-    393: '42133',  # TD-I - 06 MONTHS
-    394: '42133',  # TD-I - 12 MONTHS
-    395: '42130',  # TWIN HAPPINESS FD CAMPAIGN - 12 MTH
-    396: '42130',  # FD PB WONDER- 7 MONTHS
-    397: '42130',  # TWIN HAPPINESS FD CAMPAIGN - 12 MTH-STAFF
-    398: '42130',  # FD PB WONDER- 7 MTHS-STAFF
-    399: '42130',  # PB FORTUNE-6 MONTHS
-    400: '42130',  # NORMAL FD - 1 MONTH (S)
-    401: '42130',  # NORMAL FD - 3 MONTHS (S)
-    402: '42130',  # NORMAL FD - 6 MONTHS (S)
-    403: '42130',  # NORMAL FD - 9 MONTHS (S)
-    404: '42130',  # NORMAL FD - 12 MONTHS (S)
-    405: '42130',  # NORMAL FD - 15 MONTHS (S)
-    406: '42130',  # NORMAL FD - 18 MONTHS (S)
-    407: '42130',  # NORMAL FD - 21 MONTHS (S)
-    408: '42130',  # NORMAL FD - 24 MONTHS (S)
-    409: '42130',  # NORMAL FD - 36 MONTHS (S)
-    410: '42130',  # NORMAL FD - 48 MONTHS (S)
-    411: '42130',  # NORMAL FD - 60 MONTHS (S)
-    412: '42130',  # NORMAL FD - 2 MONTHS (S)
-    413: '42130',  # FD  BONUS  - 4 MONTHS
-    414: '42130',  # NORMAL FD - 5 MONTHS (S)
-    415: '42130',  # NORMAL FD - 7 MONTHS (S)
-    416: '42130',  # NORMAL FD - 8 MONTHS (S)
-    417: '42130',  # NORMAL FD - 10 MONTHS (S)
-    418: '42130',  # NORMAL FD - 11 MONTHS (S)
-    419: '42130',  # NORMAL FD - 27 MONTHS (S)
-    420: '42130',  # FD LIFE  - 1 MONTH   (S)
-    421: '42630',  # CNY - 1 MTH  CATEGORY  I
-    422: '42133',  # PB eTDi NORMAL - 3 MONTHS
-    423: '42630',  # CNY - 3 MTHS CATEGORY  I
-    424: '42133',  # PB eTDi NORMAL STAFF - 3 MONTHS
-    425: '42630',  # CNY - 6 MTHS CATEGORY  I
-    426: '42133',  # PB eTDi NORMAL - 6 MONTHS
-    427: '42630',  # CNY -12 MTHS CATEGORY  I
-    428: '42133',  # PB eTDi NORMAL STAFF - 6 MONTHS
-    429: '42630',  # SWISS FRANC (CHF) 1MTH
-    430: '42630',  # SWISS FRANC (CHF) 3MTH
-    431: '42630',  # SWISS FRANC (CHF) 6MTH
-    432: '42630',  # SWISS FRANC (CHF) 12MTH
-    433: '42630',  # THAI BAHT (THB) 1MTH
-    434: '42630',  # THAI BAHT (THB) 3MTH
-    435: '42630',  # THAI BAHT (THB) 6MTH
-    436: '42630',  # THAI BAHT (THB) 12MTH
-    437: '42630',  # PB FCY FD POWER(CAD) 1MTH
-    438: '42130',  # PB JOURNEY GOLDEN SAVERS2 - 50FD - 3-MTH
-    439: '42630',  # ZAR  1 MONTH CAT II
-    440: '42630',  # ZAR  3 MONTHS CAT I
-    441: '42630',  # ZAR  3 MONTHS CAT II
-    442: '42630',  # ZAR  6 MONTHS CAT I
-    443: '42630',  # ZAR  6 MONTHS CAT II
-    444: '42630',  # ZAR 12 MONTHS CAT I
-    445: '42130',  # PB FD BONANZA - 3 MONTH
-    446: '42630',  # CAD 12 MONTHS CAT I
-    447: '42130',  # PB PB RCB TOP RATE FD CAMPAIGN
-    448: '42130',  # PB EFD  -  3 MONTH  (S)
-    449: '42130',  # PB EFD  -  6 MONTH  (S)
-    450: '42130',  # PB EFD  -  9 MONTH  (S)
-    451: '42130',  # PB EFD  -  12 MONTH  (S)
-    452: '42130',  # PB EFD  -  15 MONTH  (S)
-    453: '42132',  # FD MUDH  -  6 MONTH  (S)
-    454: '42132',  # FD MUDH  -  7 MONTH  (S)
-    455: '42132',  # FD MUDH  -  8 MONTH  (S)
-    456: '42132',  # FD MUDH  -  9 MONTH  (S)
-    457: '42132',  # FD MUDH  - 10 MONTH  (S)
-    458: '42132',  # FD MUDH  - 11 MONTH  (S)
-    459: '42132',  # FD MUDH  - 12 MONTH  (S)
-    460: '42130',  # FD GOLDEN 50 - 15 MTH (S)
-    461: '42132',  # FD MUDH  - 13 MONTH  (S)
-    462: '42132',  # FD MUDH  - 14 MONTH  (S)
-    463: '42132',  # FD MUDH  - 15 MONTH  (S)
-    464: '42132',  # FD MUDH  - 18 MONTH  (S)
-    465: '42132',  # FD MUDH  - 21 MONTH  (S)
-    466: '42132',  # FD MUDH  - 24 MONTH  (S)
-    467: '42132',  # FD MUDH  - 36 MONTH  (S)
-    468: '42132',  # FD MUDH  - 48 MONTH  (S)
-    469: '42132',  # FD MUDH  - 60 MONTH  (S)
-    470: '42630',  # FD FCY USD* - 1 MONTH(S)
-    471: '42630',  # FD FCY USD  - 1 MONTH(S)
-    472: '42630',  # FD FCY USD* - 3 MONTH(S)
-    473: '42630',  # FD FCY USD  - 3 MONTH(S)
-    474: '42630',  # FD FCY USD* - 6 MONTH(S)
-    475: '42133',  # PB RCB TOP RATE TD-I-NON-STAFF - 3 MONTH(S)
-    476: '42630',  # FD FCY GBP* - 1 MONTH(S)
-    477: '42630',  # FD FCY GBP  - 1 MONTH(S)
-    478: '42630',  # FD FCY GBP* - 3 MONTH(S)
-    479: '42630',  # FD FCY GBP  - 3 MONTH(S)
-    480: '42630',  # FD FCY GBP* - 6 MONTH(S)
-    481: '42133',  # PB RCB TOP RATE TD-I-NON-STAFF - 6 MONTH(S)
-    482: '42630',  # FD FCY AUD* - 1 MONTH(S)
-    483: '42630',  # FD FCY AUD  - 1 MONTH(S)
-    484: '42630',  # FD FCY AUD* - 3 MONTH(S)
-    485: '42630',  # FD FCY AUD  - 3 MONTH(S)
-    486: '42630',  # FD FCY AUD* - 6 MONTH(S)
-    487: '42133',  # PB eTDi NORMAL - 9 MONTHS
-    488: '42630',  # FD FCY SGD* - 1 MONTH(S)
-    489: '42133',  # PB eTDi NORMAL STAFF - 9 MONTHS
-    490: '42630',  # FD FCY SGD* - 3 MONTH(S)
-    491: '42133',  # PB eTDi - 3 MONTHS
-    492: '42630',  # FD FCY SGD* - 6 MONTH(S)
-    493: '42133',  # PB eTDi - 6 MONTHS
-    494: '42630',  # FD FCY JPY* - 1 MONTH(S)
-    495: '42133',  # PB eTDi - 9 MONTHS
-    496: '42630',  # FD FCY JPY* - 3 MONTH(S)
-    497: '42133',  # PB eTDi - 12 MONTHS
-    498: '42630',  # FD FCY JPY* - 6 MONTH(S)
-    499: '42133',  # PB eTDi - 15 MONTHS
-    500: '42130',  # NORMAL FD - 30 MONTHS
-    501: '42130',  # NORMAL FD - 33 MONTHS
-    502: '42130',  # NORMAL FD - 39 MONTHS
-    503: '42130',  # NORMAL FD - 42 MONTHS
-    504: '42130',  # NORMAL FD - 45 MONTHS
-    505: '42130',  # NORMAL FD - 51 MONTHS
-    506: '42130',  # NORMAL FD - 54 MONTHS
-    507: '42130',  # NORMAL FD - 57 MONTHS
-    508: '42130',  # NORMAL FD - 13 MONTHS
-    509: '42130',  # NORMAL FD - 14 MONTHS
-    510: '42130',  # NORMAL FD - 16 MONTHS
-    511: '42130',  # NORMAL FD - 17 MONTHS
-    512: '42130',  # NORMAL FD - 19 MONTHS
-    513: '42130',  # NORMAL FD - 20 MONTHS
-    514: '42130',  # NORMAL FD - 22 MONTHS
-    515: '42130',  # NORMAL FD - 23 MONTHS
-    516: '42130',  # NORMAL FD - 25 MONTHS
-    517: '42130',  # NORMAL FD - 26 MONTHS
-    518: '42130',  # NORMAL FD - 28 MONTHS
-    519: '42130',  # NORMAL FD - 29 MONTHS
-    520: '42130',  # NORMAL FD - 31 MONTHS
-    521: '42130',  # NORMAL FD - 32 MONTHS
-    522: '42130',  # NORMAL FD - 34 MONTHS
-    523: '42130',  # NORMAL FD - 35 MONTHS
-    524: '42130',  # NORMAL FD - 37 MONTHS
-    525: '42130',  # NORMAL FD - 38 MONTHS
-    526: '42130',  # NORMAL FD - 40 MONTHS
-    527: '42130',  # NORMAL FD - 41 MONTHS
-    528: '42130',  # NORMAL FD - 43 MONTHS
-    529: '42130',  # NORMAL FD - 44 MONTHS
-    530: '42130',  # NORMAL FD - 46 MONTHS
-    531: '42130',  # NORMAL FD - 47 MONTHS
-    532: '42130',  # NORMAL FD - 49 MONTHS
-    533: '42130',  # NORMAL FD - 50 MONTHS
-    534: '42130',  # NORMAL FD - 52 MONTHS
-    535: '42130',  # NORMAL FD - 53 MONTHS
-    536: '42130',  # NORMAL FD - 55 MONTHS
-    537: '42130',  # NORMAL FD - 56 MONTHS
-    538: '42130',  # NORMAL FD - 58 MONTHS
-    539: '42130',  # NORMAL FD - 59 MONTHS
-    540: '42130',  # PB JOURNEY JUNIOR SAVERS 3-4M(NS,NON-APP)
-    541: '42130',  # PB JOURNEY JUNIOR SAVERS 3-4M(NS,APP USR)
-    542: '42133',  # PB TOP RATE TD-I NON-STAFF - 3 MONTH(S)
-    543: '42133',  # PB TOP RATE TD-I STAFF - 3 MONTH(S)
-    544: '42133',  # PIBB 13-MTH TERM DEPOSIT-I CAMP STAFF
-    545: '42130',  # PB INSURE REWARDS CAMPAIGN
-    546: '42130',  # PB INSURE REWARDS CAMPAIGN
-    547: '42130',  # PB INSURE REWARDS CAMPAIGN
-    548: '42630',  # FD FCY EUR* - 1 MONTH(S)
-    550: '42630',  # FD FCY EUR* - 3 MONTH(S)
-    551: '42130',  # PB RCB INVITATION (6-MTH) -NON STAFF(INDV)
-    552: '42630',  # FD FCY EUR* - 6 MONTH(S)
-    553: '42130',  # PB JOURNEY GOLDEN SAVERS2 - 50FD - 6-MTH
-    554: '42630',  # FD FCY HKD* - 1 MONTH(S)
-    555: '42133',  # PB TOP RATE TD-I NON-STAFF - 6 MONTH(S)
-    556: '42630',  # FD FCY HKD* - 3 MONTH(S)
-    557: '42133',  # PB TOP RATE TD-I STAFF - 6 MONTH(S)
-    558: '42630',  # FD FCY HKD* - 6 MONTH(S)
-    559: '42130',  # PB JOURNEY GOLDEN SAVERS2 - 50FD - 9-MTH
-    560: '42630',  # FD FCY USD  - 12 MONTH(S)
-    561: '42630',  # FD FCY GBP  - 12 MONTH(S)
-    562: '42630',  # FD FCY AUD  - 12 MONTH(S)
-    563: '42630',  # FD FCY SGD  - 12 MONTH(S)
-    564: '42630',  # FD FCY JPY  - 12 MONTH(S)
-    565: '42630',  # FD FCY EUR  - 12 MONTH(S)
-    566: '42630',  # FD FCY HKD  - 12 MONTH(S)
-    567: '42630',  # FD FCY NZG  - 1 MONTH(S) CAT I
-    568: '42130',  # PB JJS 2(6 MTH)-NON STAFF(INDV)
-    569: '42630',  # FD FCY NZG  - 3 MONTH(S) CAT I
-    570: '42130',  # PB EFD NORMAL - 9 MONTHS
-    571: '42630',  # FD FCY NZG  - 6 MONTH(S) CAT I
-    572: '42130',  # PB EFD NORMAL STAFF - 9 MONTHS
-    573: '42630',  # FD FCY NZG  - 12 MONTH(S)
-    574: '42630',  # CAD  1 MONTHS CAT I
-    575: '42133',  # PIBB 13-MTH TERM DEPOSIT-I CAMP N-STAFF
-    576: '42630',  # CAD  3 MONTHS CAT I
-    577: '42130',  # PB ENTERPRISE FD 6 MONTHS
-    578: '42630',  # CAD  6 MONTHS CAT I
-    579: '42630',  # CAD  6 MONTHS CAT II
-    580: '42132',  # FD MUDH  - 30 MONTHS
-    581: '42132',  # FD MUDH  - 33 MONTHS
-    582: '42132',  # FD MUDH  - 39 MONTHS
-    583: '42132',  # FD MUDH  - 42 MONTHS
-    584: '42132',  # FD MUDH  - 45 MONTHS
-    585: '42132',  # FD MUDH  - 51 MONTHS
-    586: '42132',  # FD MUDH  - 54 MONTHS
-    587: '42132',  # FD MUDH  - 57 MONTHS
-    588: '42132',  # FD MUDH  - 13 MONTHS
-    589: '42132',  # FD MUDH  - 14 MONTHS
-    590: '42132',  # FD MUDH  - 16 MONTHS
-    591: '42132',  # FD MUDH  - 17 MONTHS
-    592: '42132',  # FD MUDH  - 19 MONTHS
-    593: '42132',  # FD MUDH  - 20 MONTHS
-    594: '42130',  # PB JOURNEY GOLDEN SAVERS 3-50FD 3M
-    595: '42132',  # FD MUDH  - 23 MONTHS
-    596: '42132',  # FD MUDH  - 25 MONTHS
-    597: '42133',  # TDI
-    598: '42133',  # TDI
-    599: '42133',  # TDI NONSTAFF (12MTH)
-    600: '42130',  # NORMAL FD - 30 MONTHS (S)
-    601: '42130',  # NORMAL FD - 33 MONTHS (S)
-    602: '42130',  # NORMAL FD - 39 MONTHS (S)
-    603: '42133',  # UT+3M TD-i (2:1)
-    604: '42133',  # UT+8M TD-i (2:1)
-    605: '42133',  # UT+3M TD-i (5:1)
-    606: '42133',  # UT+8M TD-i (5:1)
-    607: '42133',  # ExcelLink+3M TD-i (2:1)
-    608: '42130',  # NORMAL FD - 13 MONTHS (S)
-    609: '42133',  # ExcelLink+8M TD-i (2:1)
-    610: '42133',  # ExcelLink+3M TD-i (5:1)
-    611: '42133',  # ExcelLink+8M TD-i (5:1)
-    612: '42130',  # NORMAL FD - 19 MONTHS (S)
-    613: '42130',  # NORMAL FD - 20 MONTHS (S)
-    614: '42130',  # NORMAL FD - 22 MONTHS (S)
-    615: '42130',  # NORMAL FD - 23 MONTHS (S)
-    616: '42130',  # NORMAL FD - 25 MONTHS (S)
-    617: '42130',  # NORMAL FD - 26 MONTHS (S)
-    618: '42130',  # NORMAL FD - 28 MONTHS (S)
-    619: '42130',  # NORMAL FD - 29 MONTHS (S)
-    620: '42133',  # UT+3M TD-i (2:1)
-    621: '42133',  # UT+8M TD-i (2:1)
-    622: '42133',  # UT+3M TD-i (5:1)
-    623: '42133',  # UT+8M TD-i (5:1)
-    624: '42133',  # ExcelLink+3M TD-i (2:1)
-    625: '42133',  # ExcelLink+8M TD-i (2:1)
-    626: '42133',  # ExcelLink+3M TD-i (5:1)
-    627: '42133',  # ExcelLink+8M TD-i (5:1)
-    628: '42130',  # NORMAL FD - 43 MONTHS (S)
-    629: '42130',  # NORMAL FD - 44 MONTHS (S)
-    630: '42130',  # NORMAL FD - 46 MONTHS (S)
-    631: '42130',  # NORMAL FD - 47 MONTHS (S)
-    632: '42130',  # NORMAL FD - 49 MONTHS (S)
-    633: '42130',  # NORMAL FD - 50 MONTHS (S)
-    634: '42130',  # NORMAL FD - 52 MONTHS (S)
-    635: '42130',  # NORMAL FD - 53 MONTHS (S)
-    636: '42130',  # NORMAL FD - 55 MONTHS (S)
-    637: '42130',  # NORMAL FD - 56 MONTHS (S)
-    638: '42130',  # NORMAL FD - 58 MONTHS (S)
-    639: '42130',  # NORMAL FD - 59 MONTHS (S)
-    640: '42133',  # FD STAFF TD-I 1 MONTH(S)
-    641: '42133',  # FD STAFF TD-I 2 MONTH(S)
-    642: '42133',  # FD STAFF TD-I 3 MONTH(S)
-    643: '42133',  # FDI BONUS  - 4 MONTHS
-    644: '42133',  # FD STAFF TD-I 5 MONTH(S)
-    645: '42133',  # FD STAFF TD-I 6 MONTH(S)
-    646: '42133',  # FD STAFF TD-I 7 MONTH(S)
-    647: '42133',  # FD STAFF TD-I 8 MONTH(S)
-    648: '42133',  # FD STAFF TD-I 9 MONTH(S)
-    649: '42133',  # FD STAFF TD-I 10 MONTH(S)
-    650: '42133',  # FD STAFF TD-I 11 MONTH(S)
-    651: '42133',  # FD STAFF TD-I 12 MONTH(S)
-    652: '42133',  # FD STAFF TD-I 15 MONTH(S)
-    653: '42133',  # FD STAFF TD-I 18 MONTH(S)
-    654: '42133',  # FD STAFF TD-I 21 MONTH(S)
-    655: '42133',  # FD STAFF TD-I 24 MONTH(S)
-    656: '42133',  # FD STAFF TD-I 36 MONTH(S)
-    657: '42133',  # FD STAFF TD-I 48 MONTH(S)
-    658: '42133',  # FD STAFF TD-I 60 MONTH(S)
-    659: '42133',  # TDI STAFF (12MTH)
-    660: '42132',  # FD MUDH  - 1     PFB 340
-    661: '42132',  # FD MUDH  - 2         341
-    662: '42132',  # FD MUDH  - 3         342
-    663: '42132',  # FD MUDH  - 4         343
-    664: '42132',  # FD MUDH  - 5         344
-    665: '42132',  # FD MUDH  - 6         342
-    666: '42132',  # FD MUDH  - 7         342
-    667: '42132',  # FD MUDH  - 8         342
-    668: '42132',  # FD MUDH  - 9         343
-    669: '42132',  # FD MUDH  - 10        343
-    670: '42132',  # FD MUDH  - 11        343
-    671: '42132',  # FD MUDH  - 12        344
-    672: '42132',  # FD MUDH  - 13        344
-    673: '42132',  # FD MUDH  - 14        344
-    674: '42132',  # FD MUDH  - 15        345
-    675: '42132',  # FD MUDH  - 16        345
-    676: '42132',  # FD MUDH  - 17        345
-    677: '42132',  # FD MUDH  - 18        346
-    678: '42132',  # FD MUDH  - 19        346
-    679: '42132',  # FD MUDH  - 20        346
-    680: '42132',  # FD MUDH  - 21        347
-    681: '42132',  # FD MUDH  - 22        348
-    682: '42132',  # FD MUDH  - 23        348
-    683: '42132',  # FD MUDH  - 24        348
-    684: '42132',  # FD MUDH  - 25        348
-    685: '42132',  # FD MUDH  - 26        348
-    686: '42132',  # FD MUDH  - 27        348
-    687: '42132',  # FD MUDH  - 28        348
-    688: '42132',  # FD MUDH  - 29        348
-    689: '42132',  # FD MUDH  - 30        348
-    690: '42132',  # FD MUDH  - 31        348
-    691: '42132',  # FD MUDH  - 32        348
-    692: '42132',  # FD MUDH  - 33        348
-    693: '42132',  # FD MUDH  - 34        348
-    694: '42132',  # FD MUDH  - 35        348
-    695: '42132',  # FD MUDH  - 36        349
-    696: '42132',  # FD MUDH  - 37        349
-    697: '42132',  # FD MUDH  - 38        349
-    698: '42132',  # FD MUDH  - 39        349
-    699: '42132',  # FD MUDH  - 40        349
-    700: '42132',  # FD MUDH  - 41        349
-    701: '42132',  # FD MUDH  - 42        349
-    702: '42132',  # FD MUDH  - 43        349
-    703: '42132',  # FD MUDH  - 44        349
-    704: '42132',  # FD MUDH  - 45        349
-    705: '42132',  # FD MUDH  - 46        349
-    706: '42132',  # FD MUDH  - 47        349
-    707: '42132',  # FD MUDH  - 48        350
-    708: '42132',  # FD MUDH  - 49        350
-    709: '42132',  # FD MUDH  - 50        350
-    710: '42132',  # FD MUDH  - 51        350
-    711: '42132',  # FD MUDH  - 52        350
-    712: '42132',  # FD MUDH  - 53        350
-    713: '42132',  # FD MUDH  - 54        350
-    714: '42132',  # FD MUDH  - 55        350
-    715: '42132',  # FD MUDH  - 56        350
-    716: '42132',  # FD MUDH  - 57        350
-    717: '42132',  # FD MUDH  - 58        350
-    718: '42132',  # FD MUDH  - 59        350
-    719: '42132',  # FD MUDH  - 60        351
-    720: '42130',  # POWERINVEST FD   CAMPAIGN R2:1  3MTH
-    721: '42130',  # POWERINVEST FD   CAMPAIGN R2:1  6MTH
-    722: '42130',  # POWERINVEST FD   CAMPAIGN R2:1 12MTH
-    723: '42130',  # POWERINVEST FD   CAMPAIGN R5:1  3MTH
-    724: '42130',  # POWERINVEST FD   CAMPAIGN R5:1  6MTH
-    725: '42130',  # POWERINVEST FD   CAMPAIGN R5:1 12MTH
-    726: '42133',  # POWERINVEST TD-I CAMPAIGN R2:1  3MTH
-    727: '42133',  # POWERINVEST TD-I CAMPAIGN R2:1  6MTH
-    728: '42133',  # POWERINVEST TD-I CAMPAIGN R2:1 12MTH
-    729: '42133',  # POWERINVEST TD-I CAMPAIGN R5:1  3MTH
-    730: '42133',  # POWERINVEST TD-I CAMPAIGN R5:1  6MTH
-    731: '42133',  # POWERINVEST TD-I CAMPAIGN R5:1 12MTH
-    732: '42130',  # PB PREMIER HY FD   N-STAFF R2:1  6MTH
-    733: '42130',  # PB PREMIER HY FD   N-STAFF R2:1 12MTH
-    734: '42130',  # PB PREMIER HY FD   N-STAFF R5:1  6MTH
-    735: '42130',  # PB PREMIER HY FD   N-STAFF R5:1 12MTH
-    736: '42133',  # PB PREMIER HY TD-I N-STAFF R2:1  6MTH
-    737: '42133',  # PB PREMIER HY TD-I N-STAFF R2:1 12MTH
-    738: '42133',  # PB PREMIER HY TD-I N-STAFF R5:1  6MTH
-    739: '42133',  # PB PREMIER HY TD-I N-STAFF R5:1 12MTH
-    740: '42133',  # RCB ELITE - 12
-    741: '42130',  # PB PROSPERITY RATES -  3 MONTHS
-    742: '42130',  # PB PROSPERITY RATES -  6 MONTHS
-    743: '42130',  # PB PROSPERITY RATES -  9 MONTHS
-    744: '42130',  # PB PROSPERITY RATES - 12 MONTHS
-    745: '42130',  # PB SUPER FD RATES (NON-STAFF)- 1 MONTH(S)
-    746: '42130',  # PB SUPER FD RATES (STAFF)    - 1 MONTH(S)
-    747: '42130',  # PB SUPER FD RATES (NON-STAFF)- 1 MONTH(S)
-    748: '42130',  # PB SUPER FD RATES (STAFF)    - 1 MONTH(S)
-    749: '42130',  # PB RCB FD / TD-I - 3-MTHS NON-STAFF (INDV)
-    750: '42130',  # PB RCB FD / TD-I - 8-MTHS NON-STAFF (INDV)
-    751: '42630',  # FD FCY USD* -  1 MONTH(S)
-    752: '42630',  # FD FCY USD* -  3 MONTH(S)
-    753: '42630',  # FD FCY USD* -  6 MONTH(S)
-    754: '42630',  # FD FCY USD* - 12 MONTH(S)
-    755: '42630',  # FD FCY GBP* -  1 MONTH(S)
-    756: '42630',  # FD FCY USD* -  1 MONTH(S)
-    757: '42630',  # FD FCY USD* -  3 MONTH(S)
-    758: '42630',  # FD FCY USD* -  6 MONTH(S)
-    759: '42630',  # FD FCY GBP* -  1 MONTH(S)
-    760: '42630',  # FD FCY GBP* -  3 MONTH(S)
-    761: '42630',  # FD FCY GBP* -  6 MONTH(S)
-    762: '42630',  # FD FCY AUD* -  1 MONTH(S)
-    763: '42630',  # FD FCY AUD* -  3 MONTH(S)
-    764: '42630',  # FD FCY AUD* -  6 MONTH(S)
-    765: '42630',  # FD FCY EUR* -  6 MONTH(S)
-    766: '42630',  # FD FCY EUR* - 12 MONTH(S)
-    767: '42630',  # FD FCY NZD* -  1 MONTH(S)
-    768: '42630',  # FD FCY NZD* -  3 MONTH(S)
-    769: '42630',  # FD FCY NZD* -  6 MONTH(S)
-    770: '42630',  # FD FCY NZD* - 12 MONTH(S)
-    771: '42630',  # FD FCY CNY* -  1 MONTH(S)
-    772: '42630',  # FD FCY CNY* -  3 MONTH(S)
-    773: '42630',  # FD FCY CNY* -  6 MONTH(S)
-    774: '42630',  # FD FCY CNY* - 12 MONTH(S)
-    775: '42130',  # PB 3-MONTH FD/TD-I - 3 MONTH(S)
-    776: '42130',  # PB 3-MONTH FD/TD-I(STAFF) - 3 MONTH(S)
-    777: '42133',  # PB 3-MONTH FD/TD-I - 3 MONTH(S)
-    778: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    779: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    780: '42133',  # FD TD-I & TD-I FI - 1 MONTH(S)
-    781: '42133',  # FD TD-I & TD-I FI - 2 MONTH(S)
-    782: '42133',  # FD TD-I & TD-I FI - 3 MONTH(S)
-    783: '42133',  # FDI BONUS  - 4 MONTHS
-    784: '42133',  # FD TD-I & TD-I FI - 5 MONTH(S)
-    785: '42133',  # FD TD-I & TD-I FI - 6 MONTH(S)
-    786: '42133',  # FD TD-I & TD-I FI - 7 MONTH(S)
-    787: '42133',  # FD TD-I & TD-I FI - 8 MONTH(S)
-    788: '42133',  # FD TD-I & TD-I FI - 9 MONTH(S)
-    789: '42133',  # FD TD-I & TD-I FI - 10 MONTH(S)
-    790: '42133',  # FD TD-I & TD-I FI - 11 MONTH(S)
-    791: '42133',  # FD TD-I & TD-I FI - 12 MONTH(S)
-    792: '42133',  # FD TD-I & TD-I FI - 13 MONTH(S)
-    793: '42133',  # FD TD-I & TD-I FI - 14 MONTH(S)
-    794: '42133',  # FD TD-I & TD-I FI - 15 MONTH(S)
-    795: '42133',  # FD TD-I & TD-I FI - 16 MONTH(S)
-    796: '42133',  # FD TD-I & TD-I FI - 17 MONTH(S)
-    797: '42133',  # FD TD-I & TD-I FI - 18 MONTH(S)
-    798: '42133',  # FD TD-I & TD-I FI - 19 MONTH(S)
-    799: '42133',  # FD TD-I & TD-I FI - 20 MONTH(S)
-    800: '42133',  # FD TD-I & TD-I FI - 21 MONTH(S)
-    801: '42133',  # FD TD-I & TD-I FI - 22 MONTH(S)
-    802: '42133',  # FD TD-I & TD-I FI - 23 MONTH(S)
-    803: '42133',  # FD TD-I & TD-I FI - 24 MONTH(S)
-    804: '42133',  # FD TD-I & TD-I FI - 25 MONTH(S)
-    805: '42133',  # FD TD-I & TD-I FI - 26 MONTH(S)
-    806: '42133',  # FD TD-I & TD-I FI - 27 MONTH(S)
-    807: '42133',  # FD TD-I & TD-I FI - 28 MONTH(S)
-    808: '42133',  # FD TD-I & TD-I FI - 29 MONTH(S)
-    809: '42133',  # FD TD-I & TD-I FI - 30 MONTH(S)
-    810: '42133',  # FD TD-I & TD-I FI - 31 MONTH(S)
-    811: '42133',  # FD TD-I & TD-I FI - 32 MONTH(S)
-    812: '42133',  # FD TD-I & TD-I FI - 33 MONTH(S)
-    813: '42133',  # FD TD-I & TD-I FI - 34 MONTH(S)
-    814: '42133',  # FD TD-I & TD-I FI - 35 MONTH(S)
-    815: '42133',  # FD TD-I & TD-I FI - 36 MONTH(S)
-    816: '42133',  # FD TD-I & TD-I FI - 37 MONTH(S)
-    817: '42133',  # FD TD-I & TD-I FI - 38 MONTH(S)
-    818: '42133',  # FD TD-I & TD-I FI - 39 MONTH(S)
-    819: '42133',  # FD TD-I & TD-I FI - 40 MONTH(S)
-    820: '42133',  # FD TD-I & TD-I FI - 41 MONTH(S)
-    821: '42133',  # FD TD-I & TD-I FI - 42 MONTH(S)
-    822: '42133',  # FD TD-I & TD-I FI - 43 MONTH(S)
-    823: '42133',  # FD TD-I & TD-I FI - 44 MONTH(S)
-    824: '42133',  # FD TD-I & TD-I FI - 45 MONTH(S)
-    825: '42133',  # FD TD-I & TD-I FI - 46 MONTH(S)
-    826: '42133',  # FD TD-I & TD-I FI - 47 MONTH(S)
-    827: '42133',  # FD TD-I & TD-I FI - 48 MONTH(S)
-    828: '42133',  # FD TD-I & TD-I FI - 49 MONTH(S)
-    829: '42133',  # FD TD-I & TD-I FI - 50 MONTH(S)
-    830: '42133',  # FD TD-I & TD-I FI - 51 MONTH(S)
-    831: '42133',  # FD TD-I & TD-I FI - 52 MONTH(S)
-    832: '42133',  # FD TD-I & TD-I FI - 53 MONTH(S)
-    833: '42133',  # FD TD-I & TD-I FI - 54 MONTH(S)
-    834: '42133',  # FD TD-I & TD-I FI - 55 MONTH(S)
-    835: '42133',  # FD TD-I & TD-I FI - 56 MONTH(S)
-    836: '42133',  # FD TD-I & TD-I FI - 57 MONTH(S)
-    837: '42133',  # FD TD-I & TD-I FI - 58 MONTH(S)
-    838: '42133',  # FD TD-I & TD-I FI - 59 MONTH(S)
-    839: '42133',  # FD TD-I & TD-I FI - 60 MONTH(S)
-    850: '42130',  # PLUS FD NEW RCB SIGN-UP - 4 MONTH(S)
-    851: '49999',  # TERM INVESTMENT ACCT-I (3 MTH)
-    852: '49999',  # TERM INVESTMENT ACCT-I (6 MTH)
-    853: '49999',  # TERM INVESTMENT ACCT-I (9 MTH)
-    854: '42130',  # PLUS FD CAMPAIGN NON-STAFF - 3 MONTH(S)
-    855: '42130',  # PLUS FD CAMPAIGN STAFF - 3 MONTH(S)
-    856: '42133',  # PB TD-I REWARD CAMPAIGN (NON-STAFF)
-    857: '42133',  # PB TD-I REWARD CAMPAIGN (STAFF)
-    858: '42133',  # FD TD-I NON-STAFF - 3 MONTH(S)
-    859: '42133',  # FD TD-I STAFF - 3 MONTH(S)
-    860: '42133',  # PB FD RUSH CAMPAIGN NON-STAFF - 4 MONTH(S)
-    861: '42133',  # PB FD RUSH CAMPAIGN STAFF     - 4 MONTH(S)
-    862: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    863: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    864: '42130',  # EFD STAFF            - 1 MTH
-    865: '42130',  # EFD STAFF            - 2 MTH
-    866: '42130',  # PB EFD NORMAL STAFF  - 3 MONTHS
-    867: '42130',  # EFD STAFF            - 4 MTH
-    868: '42130',  # EFD STAFF            - 5 MTH
-    869: '42130',  # PB EFD NORMAL STAFF  - 6 MONTHS
-    870: '42130',  # EFD STAFF            - 7 MTH
-    871: '42130',  # EFD STAFF            - 8 MTH
-    872: '42130',  # EFD STAFF            - 9 MTH
-    873: '42130',  # EFD STAFF            - 10 MTH
-    874: '42130',  # EFD STAFF            - 11 MTH
-    875: '42130',  # EFD STAFF            - 12 MTH
-    876: '42130',  # EFD STAFF            - 13 MTH
-    877: '42130',  # EFD STAFF            - 14 MTH
-    878: '42130',  # EFD STAFF            - 15 MTH
-    879: '42130',  # EFD STAFF            - 16 MTH
-    880: '42130',  # EFD STAFF            - 17 MTH
-    881: '42130',  # EFD STAFF            - 18 MTH
-    882: '42130',  # EFD STAFF            - 19 MTH
-    883: '42130',  # EFD STAFF            - 20 MTH
-    884: '42130',  # EFD STAFF            - 21 MTH
-    885: '42130',  # EFD STAFF            - 22 MTH
-    886: '42130',  # EFD STAFF            - 23 MTH
-    887: '42130',  # EFD STAFF            - 24 MTH
-    888: '42130',  # EFD STAFF            - 36 MTH
-    889: '42130',  # EFD STAFF            - 48 MTH
-    890: '42130',  # EFD STAFF            - 60 MTH
-    891: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    892: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    893: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    894: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    895: '42130',  # PLUS FD NONSTAFF (6MTH)
-    896: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    897: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    898: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    899: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    900: '42130',  # PB JOURNEY GOLDEN SAVERS 3-50FD 6M
-    901: '42130',  # PB JOURNEY GOLDEN SAVERS 3-50FD 9M
-    902: '42133',  # PB TD-I REWARD CAMPAIGN - NON STAFF(3MTH)
-    903: '42133',  # PB 3-MONTH FD/TD-I(STAFF) - 3 MONTH(S)
-    904: '42130',  # PLUS FD NONSTAFF (12MTH)
-    905: '42130',  # PLUS FD STAFF  (12MTH)
-    914: '42133',  # PB ETD-I NON-STAFF   - 1  MONTH
-    915: '42133',  # PB ETD-I NON-STAFF   - 2  MONTH
-    916: '42133',  # PB ETD-I NON-STAFF   - 3  MONTH
-    917: '42133',  # PB ETD-I NON-STAFF   - 4  MONTH
-    918: '42133',  # PB ETD-I NON-STAFF   - 5  MONTH
-    919: '42133',  # PB ETD-I NON-STAFF   - 6  MONTH
-    920: '42133',  # PB ETD-I NON-STAFF   - 7  MONTH
-    921: '42133',  # PB ETD-I NON-STAFF   - 8  MONTH
-    922: '42133',  # PB ETD-I NON-STAFF   - 9  MONTH
-    923: '42133',  # PB ETD-I NON-STAFF   - 10 MONTH
-    924: '42133',  # PB ETD-I NON-STAFF   - 11 MONTH
-    925: '42133',  # PB ETD-I NON-STAFF   - 12 MONTH
-    926: '42133',  # PB ETD-I NON-STAFF   - 13 MONTH
-    927: '42133',  # PB ETD-I NON-STAFF   - 14 MONTH
-    928: '42133',  # PB ETD-I NON-STAFF   - 15 MONTH
-    929: '42133',  # PB ETD-I NON-STAFF   - 16 MONTH
-    930: '42133',  # PB ETD-I NON-STAFF   - 17 MONTH
-    931: '42133',  # PB ETD-I NON-STAFF   - 18 MONTH
-    932: '42133',  # PB ETD-I NON-STAFF   - 19 MONTH
-    933: '42133',  # PB ETD-I NON-STAFF   - 20 MONTH
-    934: '42133',  # PB ETD-I NON-STAFF   - 21 MONTH
-    935: '42133',  # PB ETD-I NON-STAFF   - 22 MONTH
-    936: '42133',  # PB ETD-I NON-STAFF   - 23 MONTH
-    937: '42133',  # PB ETD-I NON-STAFF   - 24 MONTH
-    938: '42133',  # PB ETD-I NON-STAFF   - 36 MONTH
-    939: '42133',  # PB ETD-I NON-STAFF   - 48 MONTH
-    940: '42133',  # PB ETD-I NON-STAFF   - 60 MONTH
-    941: '42133',  # PB ETD-I STAFF       - 1  MONTH
-    942: '42133',  # PB ETD-I STAFF       - 2  MONTH
-    943: '42133',  # PB ETD-I STAFF       - 3  MONTH
-    944: '42133',  # PB ETD-I STAFF       - 4  MONTH
-    945: '42133',  # PB ETD-I STAFF       - 5  MONTH
-    946: '42133',  # PB ETD-I STAFF       - 6  MONTH
-    947: '42133',  # PB ETD-I STAFF       - 7  MONTH
-    948: '42133',  # PB ETD-I STAFF       - 8  MONTH
-    949: '42133',  # PB ETD-I STAFF       - 9  MONTH
-    950: '42133',  # PB ETD-I STAFF       - 10 MONTH
-    951: '42133',  # PB ETD-I STAFF       - 11 MONTH
-    952: '42133',  # PB ETD-I STAFF       - 12 MONTH
-    953: '42133',  # PB ETD-I STAFF       - 13 MONTH
-    954: '42133',  # PB ETD-I STAFF       - 14 MONTH
-    955: '42133',  # PB ETD-I STAFF       - 15 MONTH
-    956: '42133',  # PB ETD-I STAFF       - 16 MONTH
-    957: '42133',  # PB ETD-I STAFF       - 17 MONTH
-    958: '42133',  # PB ETD-I STAFF       - 18 MONTH
-    959: '42133',  # PB ETD-I STAFF       - 19 MONTH
-    960: '42133',  # PB ETD-I STAFF       - 20 MONTH
-    961: '42133',  # PB ETD-I STAFF       - 21 MONTH
-    962: '42133',  # PB ETD-I STAFF       - 22 MONTH
-    963: '42133',  # PB ETD-I STAFF       - 23 MONTH
-    964: '42133',  # PB ETD-I STAFF       - 24 MONTH
-    965: '42133',  # PB ETD-I STAFF       - 36 MONTH
-    966: '42133',  # PB ETD-I STAFF       - 48 MONTH
-    967: '42133',  # PB ETD-I STAFF       - 60 MONTH
-    968: '42130',  # PB EFD CAMPAIGN - 3 MONTHS
-    969: '42130',  # PB EFD CAMPAIGN - 6 MONTHS
-    970: '42130',  # PB EFD CAMPAIGN - 9 MONTHS
-    971: '42130',  # PB EFD VIA FPX CAMPAIGN 4 MONTHS
-    972: '42130',  # PB EFD VIA FPX 1 MONTHS (NON-STAFF)
-    973: '42130',  # PB EFD VIA FPX 2 MONTHS (NON-STAFF)
-    974: '42130',  # PB EFD VIA FPX 3 MONTHS (NON-STAFF)
-    975: '42130',  # PB EFD CAMPAIGN - 18 MONTHS
-    976: '42130',  # PB EFD CAMPAIGN - 19 MONTHS
-    977: '42130',  # PB EFD CAMPAIGN - 20 MONTHS
-    978: '42130',  # PB EFD CAMPAIGN - 21 MONTHS
-    979: '42130',  # PB EFD CAMPAIGN - 22 MONTHS
-    980: '42130',  # PB EFD CAMPAIGN - 23 MONTHS
-    981: '42130',  # PB EFD CAMPAIGN - 24 MONTHS
-    982: '42130',  # PB EFD CAMPAIGN - 36 MONTHS
-    983: '42130',  # PB EFD CAMPAIGN - 48 MONTHS
-    984: '42130',  # PB EFD CAMPAIGN - 60 MONTHS
-    985: '42130',  # PB SUPER FIXED DEPOSIT - NON-STAFF(12MTH)
-    986: '42130',  # PB SUPER FIXED DEPOSIT - STAFF(12MTH)
-    987: '42133',  # PB TD-I - NON-STAFF(12MTH)
-    988: '42133',  # PB TD-I - STAFF(12MTH)
-    989: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    990: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    991: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    992: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
-    993: '42133',  # PB TD-I REWARD CAMPAIGN - STAFF(3MTH)
-    994: '42130',  # PLUS FD NONSTAFF (6MTH)
-    995: '42130',  # PB JOURNEY GOLDEN ASSIST-50FD-3MTH-NSTAFF
-    996: '42130',  # PB JOURNEY GOLDEN ASSIST-50FD-6MTH-NSTAFF
-    997: '42130',  # PB JOURNEY GOLDEN ASSIST-50FD-9MTH-NSTAFF
-}
-_FDPROD_OTHER = '42130'  # ALL OTHER FD CODES
-
-
-def fdprod_format(product_code: Optional[int]) -> str:
-    """FDPROD: FD product (interest plan) code -> BNM code (OTHER = '42130')."""
-    if missing(product_code):
-        return _FDPROD_OTHER
-    return _FDPROD_MAPPINGS.get(product_code, _FDPROD_OTHER)
-
-
-# ============================================================================
-# FORMAT: FDPRODD - FD PRODUCT (SIMPLIFIED / ALTERNATIVE)
-# ============================================================================
-
-_FDPRODD_MAPPINGS: Dict[int, str] = {
-    300: '42130',  # FD NORMAL
-    301: '42130',  # FD LIFE
-    302: '42132',  # FD AL MUDHARABAH
-    303: '42130',  # FD GOLDEN 50
-    311: '42130',  # PB EFD
-    312: '42130',  # PB EFD
-    313: '42133',  # PB ETD-I (NON-STAFF)
-    314: '42133',  # PB ETD-I (STAFF)
-    315: '42132',  # FD ISTISMAR
-    316: '42133',  # FD TERM (TD-I)
-    393: '42133',  # FD TERM (TD-I FI)
-    394: '42132',  # FD ISTISMAR
-}
-_FDPRODD_OTHER = '42130'  # OTHERS, IF ANY
-
-
-def fdprodd_format(product_code: Optional[int]) -> str:
-    """FDPRODD: simplified FD product mapping (OTHER = '42130')."""
-    if missing(product_code):
-        return _FDPRODD_OTHER
-    return _FDPRODD_MAPPINGS.get(product_code, _FDPRODD_OTHER)
-
-
-# ============================================================================
-# FORMAT: FDPRD - FD PRODUCT TYPE ('N' NORMAL, 'L' LIFE, 'M' MGIA/MUDHARABAH)
-# ============================================================================
-
-_FDPRD_NORMAL_RANGES: List[Tuple[int, int]] = [
-    (300, 319), (400, 419), (368, 394), (500, 539), (600, 639), (741, 744),
-]
-_FDPRD_NORMAL_SINGLES: Set[int] = {445}
-_FDPRD_LIFE_RANGES: List[Tuple[int, int]] = [(320, 339), (420, 428), (540, 547)]
-_FDPRD_MGIA_RANGES: List[Tuple[int, int]] = [
-    (340, 359), (453, 459), (461, 469), (580, 599), (660, 740),
-]
-
-
-def fdprd_format(product_code: Optional[int]) -> str:
-    """
-    FDPRD: classify FD products into type codes.
-        'N' : FD NORMAL   (300-319, 400-419, 368-394, 500-539, 600-639,
-                           741-744, 445)
-        'L' : FD LIFE     (320-339, 420-428, 540-547)
-        'M' : FD MGIA     (340-359, 453-459, 461-469, 580-599) and
-              FD MGIA-PFB (660-740)
-        ' ' : OTHER (also missing)
-    """
-    if missing(product_code):
-        return ' '
-    if (product_code in _FDPRD_NORMAL_SINGLES
-            or any(a <= product_code <= b for a, b in _FDPRD_NORMAL_RANGES)):
-        return 'N'
-    if any(a <= product_code <= b for a, b in _FDPRD_LIFE_RANGES):
-        return 'L'
-    if any(a <= product_code <= b for a, b in _FDPRD_MGIA_RANGES):
-        return 'M'
-    return ' '
-
-
-# ============================================================================
-# INVALUE: FCYTERM - FCY TERM (MONTHS) BASED ON INTEREST PLAN
-# ============================================================================
-
-_FCYTERM_1_MONTH: Set[int] = {
-    470, 471, 476, 477, 482, 483, 488, 494, 548, 554,
-    429, 433, 437, 421, 567, 574, 439, 751, 755, 756, 759,
-    762, 767, 771,
-}
-
-_FCYTERM_3_MONTHS: Set[int] = {
-    472, 473, 478, 479, 484, 485, 490, 496, 550, 551, 556,
-    569, 576, 440, 441, 423, 752, 757, 760, 763, 768, 772,
-    430, 434,
-}
-
-_FCYTERM_6_MONTHS: Set[int] = {
-    474, 480, 486, 492, 498, 552, 553, 558,
-    571, 578, 579, 442, 443, 425, 753, 761, 764, 765, 769, 773,
-    431, 435, 758,
-}
-
-_FCYTERM_12_MONTHS: Set[int] = {
-    444, 446, 545, 546, 547, 560, 561, 562, 563, 564, 565, 566,
-    573, 427, 754, 766, 770, 774, 432, 436,
-}
-
-
-def fcyterm_format(intplan_code: Optional[int]) -> Optional[int]:
-    """
-    FCYTERM invalue: FCY interest plan code -> term in months (1, 3, 6, 12).
-    Returns None (SAS missing) when the code matches no rule.
-    """
-    if missing(intplan_code):
-        return None
-    if intplan_code in _FCYTERM_1_MONTH:
-        return 1
-    if intplan_code in _FCYTERM_3_MONTHS:
-        return 3
-    if intplan_code in _FCYTERM_6_MONTHS:
-        return 6
-    if intplan_code in _FCYTERM_12_MONTHS:
-        return 12
-    return None
-
-
-# ============================================================================
-# FORMAT: CADENOM - CA DENOMINATION OF ISLAMIC OR DOMESTIC
-# ============================================================================
-
-_CADENOM_ISLAMIC: Set[int] = {
-    7, 8, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 32, 33,
-    45, 46, 47, 48, 49, 60, 61, 62, 63, 64, 66, 67, 70, 71, 73, 74,
-    75, 76, 80, 81, 92, 93, 96, 97, 160, 161, 162, 163, 164, 165, 166,
-    167, 168, 169, 182, 183, 184, 185, 186, 187, 188, 321,
-}
-
-
-def cadenom_format(product_code: Optional[int]) -> str:
-    """
-    CADENOM: current account product code -> 'I' (Islamic) or 'D' (Domestic).
-    OTHER = 'D' also applies to missing values.
-    """
-    if missing(product_code):
-        return 'D'
-    return 'I' if product_code in _CADENOM_ISLAMIC else 'D'
-
-
-# ============================================================================
-# FORMAT: CAPROD - CURRENT ACCOUNT PRODUCT CODE -> BNM CODE
-# ============================================================================
-
-_CAPROD_MAPPINGS: Dict[int, str] = {
-    3:   '42110',  # OD/GGSM2
-    4:   '42110',  # OD/GGSM2-FOCUS
-    5:   '42110',  # CLF-I BAE GOVERN.GUARANTEE SCM MADANI
-    6:   '42110',  # CLF-I BAE GOVERN.GUARANTEE SCM MADANI-FOCUS
-    7:   '42110',  # CLF-i/PGGS-i(NEW FINANCING)
-    8:   '42110',  # CLF-i/PGGS-i(ADDITIONAL WORKING CAPITAL)
-    9:   '42110',  # PGGS-NEW FINACING
-    10:  '42110',  # PGGS-ADDITIONAL WORKING CAPITAL
-    11:  '42110',  # OD/GGSM
-    12:  '42110',  # OD/GGSM-FOCUS
-    13:  '42110',  # BAE CASH LINE FACILITY-I (BAE CLF-i)
-    14:  '42110',  # CLF-I/ BAE BNM SME AES-I (FLD)
-    15:  '42110',  # CASHLINE FACILITY-I/ SWIFT
-    16:  '42110',  # CASHLINE FACILITY-I/ SWIFT EXTRA
-    17:  '42110',  # CLF-I/ BAE BNM SME AES-I
-    18:  '42110',  # CLF-I/ WCGS-I EXPORT
-    19:  '42110',  # CLF-I/ WCGS-I WOMEN
-    20:  '42110',  # CLF-I/ BAE GGSM2
-    21:  '42110',  # CLF-I/ BAE GGSM2-Focus
-    22:  '42110',  # CLF-I BOOSTER(CASH LINE FACILITY-I BOOSTER)
-    23:  '42110',  # (CM) PCA-I
-    24:  '42110',  # (CM) PCA-I ENTERPRISE
-    25:  '42110',  # (CM) CURRENT ACC-I
-    26:  '42110',  # OD/WCGS EXPORT
-    27:  '42110',  # OD/WCGS IMPORT
-    30:  '34180',  # OD WRITE OFF (RETAIL)
-    31:  '34180',  # OD WRITE OFF (CORPORATE)
-    32:  '34180',  # RETAIL CLF-I WRITE OFF
-    33:  '34180',  # CORP CLF-I WRITE OFF
-    34:  '34240',  # RETAIL PB SHARE LINK WRITE OFF
-    35:  '42110',  # BNM SME(FLD)
-    36:  '42110',  # WCGS START-UP
-    37:  '42110',  # BNM SME
-    38:  '42110',  # BNM AGRICULTURAL
-    39:  '42110',  # BNM DISASTER RELIEF
-    40:  '42110',  # ACE ENTERPRISE
-    41:  '42110',  # CASH MANAGEMENT COLLECTION ACCOUNT
-    42:  '42110',  # PREMIER ACE-NORMAL
-    43:  '42110',  # PREMIER ACE-EXTERNAL
-    45:  '42110',  # COMM MURABAHAH CASH LINE FAC(CM CLF-I)
-    46:  '42110',  # CASH LINE FACILITY-I/WCGS-I START UP
-    47:  '42110',  # CASH LINE FACILITY-I/BNM SME
-    48:  '42110',  # CASH LINE FACILITY-I/BNM SME AGRICULTURAL
-    49:  '42110',  # CASH LINE FACILITY-I/BNM DISASTER RELIEF
-    50:  '42110',  # CORP NORMAL CURRENT ACCOUNT
-    51:  '42110',  # CORP GOVERNMENT ACCOUNT
-    52:  '42110',  # CORP EXTERNAL ACCOUNT
-    53:  '42180',  # CORP HOUSING DEVELOPER
-    54:  '42110',  # CORP BLOCK DISCOUNT
-    55:  '42110',  # CORP SWIFT
-    56:  '42110',  # CORP OCP
-    57:  '42110',  # CORP OD/OC
-    58:  '42110',  # CORP SMILAX OD
-    59:  '42110',  # CORP LOCAL CHEQUE PURCHASED
-    60:  '42310',  # CORP AL-WADIAH CURRENT A/C
-    61:  '42310',  # CORP AL-WADIAH GOVERNMENT
-    62:  '42310',  # CORP AL-WADIAH EXTERNAL A/C
-    63:  '42180',  # CORP AL-WADIAH HOUSING DEV
-    64:  '42310',  # CORP AL-WADIAH OUTWARD CHEQUE PURCHASE
-    65:  '42110',  # CORP OD/OC
-    66:  '42110',  # CURRENT ACCOUNT BY FI-I (NPB)
-    67:  '42110',  # CURRENT ACCOUNT BY FI-I (PB)
-    68:  '42110',  # CURRENT ACCOUNT BY FIN. INST. (NIB)
-    69:  '42110',  # CURRENT ACCOUNT BY FIN. INST. (IB)
-    70:  '42110',  # CORP CLF-I
-    71:  '42110',  # CORP PLUS CLF-I
-    72:  '42199',  # CURRENT A/C BY COMMERCIAL FI (NIB)
-    73:  '42110',  # CLF-I/NEF2
-    74:  '42310',  # CASH MANAGEMENT COLLECTION ACCOUNT-I
-    75:  '42110',  # CLF/APGS-I
-    76:  '42110',  # CLF/IPGS-I
-    77:  '42110',  # SHARELINK INDIVIDUAL
-    78:  '42110',  # CORPORATE SHARELINK
-    79:  '42199',  # UMA3
-    80:  '42199',  # UMA3
-    81:  '42110',  # EPLUS CA (NORMAL)
-    82:  '42110',  # EPLUS CA (EXTERNAL)
-    83:  '42110',  # EPLUS CA (STAFF)
-    84:  '42110',  # EPLUS CA (STAFF REL)
-    85:  '42110',  # OD PB TRADEPLUS (SME)
-    86:  '42110',  # OD PB TRADEPLUS (LARGE ENTERPRISES)
-    87:  '42110',  # WORKING CAPITAL GUARANTEE SCHEME
-    88:  '42110',  # INDUS RESTRUC LN GUARANTEE SCHEME (IRLGS)
-    89:  '42110',  # MAH SING OVERDRAFT
-    90:  '42110',  # BASIC CURRENT A/C
-    91:  '42110',  # BASIC 55 CURRENT A/C
-    92:  '42110',  # PCA-I ENTERPRISE
-    93:  '42110',  # AL WADIAH CURRENT
-    94:  '42110',  # WORKING CAPITAL GUARANTEE SCHEME-I
-    95:  '42110',  # INDUSTRY RESTRUCT. LOAN GUARANTEE SCHEME-I
-    96:  '42110',  # MUDHARABAH CURRENT
-    97:  '42110',  # MUDHARABAH CURRENT ACCT-I (S)
-    98:  'N',      # RM DEMAND DEPOSIT
-    100: '42110',  # NORMAL CURRENT ACCOUNT
-    101: '42110',  # GOVERNMENT ACCOUNT
-    102: '42110',  # EXTERNAL ACCOUNT
-    103: '42180',  # HOUSING DEVELOPER
-    104: '43110',  # VOSTRO LOCAL
-    105: '43110',  # VOSTRO FOREIGN
-    106: '42110',  # STAFF CURRENT ACCOUNT
-    107: 'N',      # PBCS
-    108: '42110',  # CGC
-    109: '42110',  # SLS
-    110: '42110',  # BLOCK DISCOUNT
-    111: '42110',  # R/C
-    112: '42110',  # PGS
-    113: '42110',  # SHARE MARGIN
-    114: '42110',  # NEF
-    115: '42110',  # PAS
-    116: '42110',  # HRS
-    117: '42110',  # AUSTRALIAN
-    118: '42110',  # CAIS
-    119: '42110',  # HOS (<25K - 100K)
-    120: '42110',  # HOS (>100K - 200K)
-    121: '42110',  # HICOM SHARE
-    122: '42110',  # SFFS
-    123: '42110',  # PETRONAS
-    124: '42110',  # OCP
-    125: '42110',  # OD/OC
-    126: 'N',      # NORMAL BANKERS CHEQUE
-    127: 'N',      # MIDF BANKERS CHEQUE
-    128: 'N',      # MIH BANKERS CHEQUE
-    129: 'N',      # DD NORMAL
-    130: 'N',      # USD C/A
-    131: '42110',  # GBP C/A
-    132: '42110',  # AUD C/A
-    133: '42110',  # PB SHARELINK - NON MARGIN
-    134: '42110',  # CORPORATE SHARELINK - NON MARGIN
-    135: '42110',  # EMC CODO DEALERS
-    136: 'N',      # HKD C/A
-    137: '42110',  # 5 HOME PLAN OD LEGEL FEE
-    138: '42110',  # MORE PLAN OD LEGEL FEE
-    139: 'N',      # HP COLLECTION ACCOUNT
-    140: 'N',      # SI-CLEARING ACCOUNT
-    141: 'N',      # ATM-PISA CLEARING ACCT
-    142: 'N',      # ATM-LOAN CLEARING ACCT
-    143: 'N',      # ATM-FD CLEARING ACCT
-    144: 'N',      # DD SHARE PUBLIC
-    145: 'N',      # DD SHARE BUMI
-    146: 'N',      # IBT COLLECTION ACCT
-    147: 'N',      # HO INTERBANK SETTLEMENT A/C
-    148: 'N',      # INTERBANK GIRO & MEPS CASH COLL
-    149: 'N',      # BNM BONDS COLLECTION ACCOUNT
-    150: '42110',  # ACE NORMAL
-    151: '42110',  # ACE STAFF
-    152: '42110',  # ACE EXTERNAL
-    153: '42110',  # OD LIFE EXTERNAL
-    154: '42110',  # MORE PLAN
-    155: '42110',  # 5 HOME PLAN
-    156: '42110',  # PB CURRENTLINK
-    157: '42110',  # EXTERNAL PB CURRENTLINK
-    158: '42110',  # STAFF PB CURRENTLINK
-    159: '42110',  # GLOBAL OD/OC - RETAIL
-    160: '42310',  # AL-WADIAH CURRENT A/C
-    161: '42310',  # AL-WADIAH GOVERNMENT
-    162: '42310',  # AL-WADIAH EXTERNAL A/C
-    163: '42180',  # AL-WADIAH HOUSING DEV
-    164: '42310',  # AL-WADIAH STAFF A/C
-    165: '42310',  # AL-WADIAH OCP
-    166: '42110',  # CASH LINE FACILITY
-    167: '42110',  # CLF-I BAE ENHANCER-I
-    168: '42110',  # PLUS CASH LINE FAC-I
-    169: '42110',  # CLF-I MURABAHAH ENHANCER-I
-    170: '42110',  # CASH LINE FACILITY-1
-    171: 'N',      # MYR OVERNIGHT A/C
-    172: 'N',      # MYR OVERNIGHT A/C
-    173: 'N',      # MYR OVERNIGHT A/C
-    174: '42110',  # SHARE SERVICES A/C
-    175: '42110',  # SHARE MARGIN  A/C
-    176: '42110',  # SMILAX OD
-    177: '42110',  # PBB SHARELINK SETTLEMENT A/C
-    178: '42110',  # PBB SHARELINK CORP.
-    180: '42110',  # STAFF REL - NORMAL C/A
-    181: '42110',  # STAFF REL - ACE A/C
-    182: '42310',  # STAFF REL - AL WADIAH
-    183: '42110',  # CASH LINE FACILITY-I (SSME)
-    184: '42110',  # CASH LINE FACILITY-I (UNIFLEX-I)
-    185: '42110',  # CLF-I SERVICES SECTOR (SSGS-I)
-    186: '42110',  # CLF-I FLOOD RELIEF FINANCIANG (FRFGS-I)
-    187: '42110',  # CLF-I FSMI2 - FREE LEGAL DOCUMENTATION
-    188: '42110',  # CLF-I FSMI2 - NON FREE LEGAL DOCUMENTATION
-    190: '42110',  # OD SME PORTFOLIO G'TEE CGC
-    191: '42110',  # LOCAL CHEQUE PURCHASED
-    192: '42110',  # MORE PLAN FIXED 3
-    193: '42110',  # MORE PLAN FIXED 5
-    194: '42110',  # 5 HOME PLAN FIXED 3
-    195: '42110',  # 5 HOME PLAN FIXED 5
-    196: '42110',  # SWIFT PLAN FREE LEGAL DOC
-    197: '42110',  # WORKING CAPITAL FOR CAR DEALERS
-    198: '42110',  # FINANCE/REFINANCING PRIME CUSTOMERS
-    320: 'N',      # RETAIL NEGOTIABLE INSTRUMENTS OF DEPOSIT
-    321: 'N',      # RETAIL NEGOTIABLE ISLAMIC DEBT CERTIFICATE
-    400: '42610',  # USD CURRENT ACCOUNT
-    401: '42610',  # GBP CURRENT ACCOUNT
-    402: '42610',  # AUD CURRENT ACCOUNT
-    403: '42610',  # SGD CURRENT ACCOUNT
-    404: '42610',  # JPY CURRENT ACCOUNT
-    405: '42610',  # CNY CURRENT ACCOUNT
-    406: '42610',  # HKD CURRENT ACCOUNT
-    407: '42610',  # EUR CURRENT ACCOUNT
-    408: '42610',  # CHF CURRENT ACCOUNT
-    409: '42610',  # NZD CURRENT ACCOUNT
-    410: '42610',  # THB CURRENT ACCOUNT
-    411: '42610',  # CAD CURRENT ACCOUNT
-    413: '42699',  # USD BY COMMERCIAL FI (IB)
-    420: '42610',  # USD TRADE
-    421: '42610',  # GBP TRADE
-    422: '42610',  # AUD TRADE
-    423: '42610',  # SGD TRADE
-    424: '42610',  # JPY TRADE
-    425: '42610',  # CNY TRADE
-    426: '42610',  # HKD TRADE
-    427: '42610',  # EUR TRADE
-    428: '42610',  # CHF TRADE
-    429: '42610',  # NZD TRADE
-    430: '42610',  # THB TRADE
-    431: '42610',  # CAD TRADE
-    432: '42610',  # THB SUB SNA -TRADE
-    433: '42610',  # IDR SUB SNA -TRADE
-    434: '42610',  # THB SUB SNA - INVESTMENT
-    440: '42610',  # USD QARDH CURRENT ACCOUNT-I
-    441: '42610',  # GBP QARDH CURRENT ACCOUNT-I
-    442: '42610',  # AUD QARDH CURRENT ACCOUNT-I
-    443: '42610',  # EUR QARDH CURRENT ACCOUNT-I
-    444: '42610',  # NZD QARDH CURRENT ACCOUNT-I
-    450: '42610',  # USD QCA-I TRADE
-    451: '42610',  # GBP QCA-I TRADE
-    452: '42610',  # AUD QCA-I TRADE
-    453: '42610',  # EUR QCA-I TRADE
-    454: '42610',  # NZD QCA-I TRADE
-    473: 'N',      # COLLECTION ACCT
-    474: 'N',      # COLLECTION ACCT
-    475: 'N',      # COLLECTION ACCT
-    476: 'N',      # COLLECTION ACCT
-    477: 'N',      # COLLECTION ACCT
-    478: 'N',      # COLLECTION ACCT
-    479: 'N',      # COLLECTION ACCT
-    549: 'N',      # GENERAL MASTER COLLECTION
-    550: 'N',      # MYR MASTER NOTE
-}
-_CAPROD_OTHER = '42110'
-
-
-def caprod_format(product_code: Optional[int]) -> str:
-    """CAPROD: current account product code -> BNM code (OTHER = '42110')."""
-    if missing(product_code):
-        return _CAPROD_OTHER
-    return _CAPROD_MAPPINGS.get(product_code, _CAPROD_OTHER)
-
-
-# ============================================================================
-# CUSTOMER CODE FORMATS: DPCUSTCD, SACUSTCD, FDCUSTCD, IFDCUSCD, DDCUSTCD
-# All five formats list the same customer-code keys. Each maps a key to a
-# 2-character BNM customer code; the tables below state, per format, which keys
-# map to something other than themselves (verified against the SAS VALUE
-# statements). Keys not listed fall to OTHER ('78' for DPCUSTCD, SACUSTCD,
-# FDCUSTCD, IFDCUSCD; '79' for DDCUSTCD).
-# ============================================================================
-
-_CUSTCD_DESC: Dict[int, str] = {
-    1: 'BANK NEGARA MALAYSIA',
-    2: 'COMMERCIAL BANKS',
-    3: 'ISLAMIC BANKS',
-    4: 'SUBSIDIARY STOCKBROKING COMPANIES',
-    5: 'ASSOCIATE STOCKBROKING COMPANIES',
-    6: 'OTHER STOCKBROKING COMPANIES',
-    10: 'DOMESTIC BANKING INSTITUTIONS',
-    11: 'FINANCE COMPANIES',
-    12: 'MERCHANT BANKS',
-    13: 'DISCOUNT HOUSES',
-    15: 'DOMESTIC NON-BANK ENTITIES',
-    17: 'CAGAMAS BERHAD',
-    20: 'DOMESTIC NON-BANK FINANCIAL INSTITUTIONS',
-    30: 'DOMESTIC OTHER NBFI',
-    31: 'SAVINGS INSTITUTIONS',
-    32: 'CREDIT CARD COMPANIES',
-    33: 'DEVELOPMENT FINANCE INSTITUTIONS',
-    34: 'BUILDING SOCIETIES',
-    35: 'CO-OPERATIVE SOCIETIES',
-    36: 'STOCKBROKING COMPANIES',
-    37: 'COMMODITY BROKERS',
-    38: 'CREDIT & LEASING COMPANIES',
-    39: 'UNIT TRUST COMPANIES',
-    40: 'INSURANCE AND INSURANCE RELATED COMPANIES',
-    41: 'DBE - BUMI CONTROLLED SME - MICRO',
-    42: 'DBE - BUMI CONTROLLED SME - SMALL',
-    43: 'DBE - BUMI CONTROLLED SME - MEDIUM',
-    44: 'DBE - NON-BUMI CONTROLLED SME - MICRO',
-    45: 'REHABILITATION INSTITUTIONS',
-    46: 'DBE - NON-BUMI CONTROLLED SME - SMALL',
-    47: 'DBE - NON-BUMI CONTROLLED SME - MEDIUM',
-    48: 'DBE - NON-RESIDENT CONTROL SME - MICRO',
-    49: 'DBE - NON-RESIDENT CONTROL SME - SMALL',
-    51: 'DBE - NON-RESIDENT CONTROL SME - MEDIUM',
-    52: 'DBE - GOVERNMENT CONTROLLED SME - MICRO',
-    53: 'DBE - GOVERNMENT CONTROLLED SME - SMALL',
-    54: 'DBE - GOVERNMENT CONTROLLED SME - MEDIUM',
-    50: 'RESIDENTS/DOMESTIC ENTITIES',
-    57: 'PETRONAS',
-    59: 'OTHER GOVERNMENT CONTROLLED DBE NIE',
-    60: 'DOMESTIC BUSINESS ENTERPRISES (DBE)',
-    61: 'BUMIPUTRA CONTROLLED DBE',
-    62: 'NON-BUMIPUTRA CONTROLLED DBE',
-    63: 'NON-RESIDENT CONTROLLED DBE',
-    64: 'GOVERNMENT CONTROLLED DBE',
-    65: 'SMALL MEDIUM INDUSTRIES (SMI)',
-    66: 'BUMIPUTRA CONTROLLED SMI',
-    67: 'NON-BUMIPUTRA CONTROLLED SMI',
-    68: 'NON-RESIDENT CONTROLLED SMI',
-    69: 'GOVERNMENT CONTROLLED SMI',
-    70: 'GOVERNMENT',
-    71: 'FEDERAL GOVERNMENT',
-    72: 'STATE GOVERNMENT',
-    73: 'LOCAL GOVERNMENT',
-    74: 'STATUTORY AUTHORITIES',
-    75: 'NFPE',
-    76: 'INDIVIDUALS',
-    77: 'BUMIPUTRA',
-    78: 'NON-BUMIPUTRA',
-    79: 'DOMESTIC OTHER ENTITIES NIE',
-    80: 'NON-RESIDENTS/FOREIGN ENTITIES',
-    81: 'FOREIGN BANKING INSTITUTIONS',
-    82: 'AFFILIATES ABROAD',
-    83: 'G7 COUNTRIES',
-    84: 'FOREIGN BANKS IN OTHER COUNTRIES',
-    85: 'FOREIGN NON-BANK ENTITIES',
-    86: 'FOREIGN BUSINESS ENTERPRISES',
-    87: 'FOREIGN BUSINESS ENTERPRISES - MICRO',
-    88: 'FOREIGN BUSINESS ENTERPRISES - SMALL',
-    89: 'FOREIGN BUSINESS ENTERPRISES - MEDIUM',
-    90: 'FOREIGN GOVERNMENTS',
-    91: 'FOREIGN CENTRAL BANKS',
-    92: "FRGN DIPLOMATIC REPRESENTATION IN M'SIA",
-    95: 'FOREIGN INDIVIDUALS',
-    96: "FOREIGNERS EMPLOYED/STUDYING IN M'SIA",
-    98: "FOREIGN NON-COMMERCIAL INTERNATIONAL ORGANIZATION IN M'SIA",
-    99: 'FOREIGN OTHER ENTITIES NIE',
-}
-
-_CUSTCD_KEYS: Tuple[int, ...] = tuple(_CUSTCD_DESC)
-
-
-def _custcd_table(overrides: Dict[int, str]) -> Dict[int, str]:
-    """Identity mapping ('01', '02', ...) for every key, with per-format overrides."""
-    table = {key: f'{key:02d}' for key in _CUSTCD_KEYS}
-    table.update(overrides)
-    return table
-
-
-# DPCUSTCD: every key maps to itself.
-_DPCUSTCD_MAPPINGS: Dict[int, str] = _custcd_table({})
-
-# SACUSTCD
-_SACUSTCD_MAPPINGS: Dict[int, str] = _custcd_table({
-    1: '30', 2: '30', 3: '30',            # BNM / COMMERCIAL / ISLAMIC BANKS
-    10: '30', 11: '30', 12: '30', 13: '30',
-    15: '78',
-    17: '30', 20: '30',
-    36: '06',                             # STOCKBROKING COMPANIES
-    50: '78',
-    57: '78', 59: '78',
-    60: '78', 61: '78', 62: '78', 63: '78', 64: '78', 65: '78', 66: '78',
-    67: '78', 68: '78', 69: '78', 70: '78', 71: '78', 72: '78', 73: '78',
-    74: '78', 75: '78', 76: '78',
-    80: '86', 81: '86', 82: '86', 83: '86', 84: '86', 85: '86', 86: '86',
-})
-
-# FDCUSTCD (IFDCUSCD is identical)
-_FDCUSTCD_MAPPINGS: Dict[int, str] = _custcd_table({
-    10: '02',
-    15: '62',
-    20: '30',
-    36: '06',
-    50: '78',
-    60: '62',
-    65: '67',
-    70: '71',
-    76: '78',
-    80: '86',
-    81: '84',
-    85: '86',
-})
-
-# DDCUSTCD
-_DDCUSTCD_MAPPINGS: Dict[int, str] = _custcd_table({
-    2: '30', 3: '30',
-    10: '30', 11: '30',
-    15: '62',
-    20: '30',
-    36: '06',
-    50: '78',
-    60: '62',
-    65: '44', 66: '41', 67: '44', 68: '48', 69: '52',
-    70: '71',
-    76: '78',
-    80: '86', 81: '86', 82: '86', 83: '86', 84: '86', 85: '86', 86: '86',
-})
-
-_DPCUSTCD_OTHER = '78'
-_SACUSTCD_OTHER = '78'
-_FDCUSTCD_OTHER = '78'
-_DDCUSTCD_OTHER = '79'
-
-
-def dpcustcd_format(cust_code: Optional[int]) -> str:
-    """DPCUSTCD: customer code -> 2-character BNM code (OTHER = '78')."""
-    if missing(cust_code):
-        return _DPCUSTCD_OTHER
-    return _DPCUSTCD_MAPPINGS.get(cust_code, _DPCUSTCD_OTHER)
-
-
-def sacustcd_format(cust_code: Optional[int]) -> str:
-    """SACUSTCD: customer code -> 2-character BNM code (OTHER = '78')."""
-    if missing(cust_code):
-        return _SACUSTCD_OTHER
-    return _SACUSTCD_MAPPINGS.get(cust_code, _SACUSTCD_OTHER)
-
-
-def fdcustcd_format(cust_code: Optional[int]) -> str:
-    """FDCUSTCD: customer code -> 2-character BNM code (OTHER = '78')."""
-    if missing(cust_code):
-        return _FDCUSTCD_OTHER
-    return _FDCUSTCD_MAPPINGS.get(cust_code, _FDCUSTCD_OTHER)
-
-
-def ifdcuscd_format(cust_code: Optional[int]) -> str:
-    """IFDCUSCD: same mapping as FDCUSTCD (OTHER = '78')."""
-    return fdcustcd_format(cust_code)
-
-
-def ddcustcd_format(cust_code: Optional[int]) -> str:
-    """DDCUSTCD: customer code -> 2-character BNM code (OTHER = '79')."""
-    if missing(cust_code):
-        return _DDCUSTCD_OTHER
-    return _DDCUSTCD_MAPPINGS.get(cust_code, _DDCUSTCD_OTHER)
-
-
-# ============================================================================
-# FORMAT: STATECD - BRANCH CODE -> STATE CODE
-# ============================================================================
-
-_STATECD_MAPPINGS: Dict[int, str] = {
-    1:   'W',  # HEAD OFFICE (HOE)
-    2:   'W',  # JALAN SULTAN SULAIMAN (JSS)
-    3:   'W',  # JALAN RAJA CHULAN (JRC)
-    4:   'M',  # MELAKA (MLK)
-    5:   'A',  # IPOH MAIN OFFICE (IMO)
-    6:   'P',  # P. PINANG (PPG)
-    7:   'J',  # JOHOR BAHRU (JBU)
-    8:   'C',  # KUANTAN (KTN)
-    9:   'A',  # JALAN YANG KALSOM (JYK)
-    10:  'K',  # ALOR SETAR (ASR)
-    11:  'K',  # GURUN (GRN)
-    12:  'D',  # PASIR PUTEH (PPH)
-    13:  'D',  # KOTA BHARU (KBU)
-    14:  'D',  # TANAH MERAH (TMH)
-    15:  'W',  # KEPONG (KPG)
-    16:  'N',  # NILAI (NLI)
-    17:  'N',  # TAMPIN (TPN)
-    18:  'B',  # PJ NEW TOWN (PJN)
-    19:  'B',  # DAMANSARA UTAMA (DUA)
-    20:  'B',  # TAMAN CHI LIUNG (TCL)
-    21:  'J',  # BATU PAHAT (BPT)
-    22:  'B',  # SEMENYIH (SMY)
-    23:  'A',  # KEMUNTING (KMT)
-    24:  'N',  # RASAH (RSH)
-    25:  'B',  # SHAH ALAM (SAM)
-    26:  'W',  # SERI PETALING (SPG)
-    27:  'P',  # NIBONG TEBAL (NTL)
-    28:  'J',  # MUAR (MUA)
-    29:  'W',  # JALAN RAJA LAUT (JRL)
-    30:  'T',  # K. TRENGGANU (KTU)
-    31:  'B',  # SEKINCHAN (SKC)
-    32:  'Q',  # KUCHING (KCG)
-    33:  'S',  # KOTA KINABALU (KKU)
-    34:  'R',  # KANGAR (KGR)
-    35:  'B',  # SERI SETIA (SSA)
-    36:  'B',  # SS2 (SS2)
-    37:  'J',  # TMN SENTOSA (TSA)
-    38:  'W',  # JALAN KELANG LAMA (JKL)
-    39:  'N',  # KUALA KELAWANG (KKG)
-    40:  'W',  # JALAN SG BESI (JSB)
-    41:  'W',  # JALAN IPOH (JIH)
-    42:  'P',  # BUKIT MERTAJAM (BMM)
-    43:  'B',  # BANTING (BTG)
-    44:  'S',  # TAWAU (TWU)
-    45:  'N',  # SEREMBAN (SRB)
-    46:  'B',  # AMPANG (APG)
-    47:  'J',  # SEGAMAT (SGM)
-    48:  'C',  # MENTAKAB (MTK)
-    49:  'A',  # JELAPANG (JLP)
-    50:  'Q',  # MIRI (MRI)
-    51:  'A',  # SERI MANJUNG (SMG)
-    52:  'J',  # ULU TIRAM (UTM)
-    53:  'W',  # TMN MALURI (TMI)
-    54:  'P',  # BANDAR BAYAN BARU (BBB)
-    55:  'L',  # LABUAN
-    56:  'B',  # KAJANG (KJG)
-    57:  'K',  # SUNGAI PETANI (SPI)
-    58:  'Q',  # SIBU (SBU)
-    59:  'J',  # PONTIAN KECIL (PKL)
-    60:  'P',  # BAGAN AJAM (BAM)
-    61:  'J',  # KULAI (KLI)
-    62:  'S',  # SANDAKAN (SDK)
-    63:  'N',  # GEMAS (GMS)
-    64:  'N',  # PORT DICKSON (PDN)
-    65:  'N',  # BAHAU (BHU)
-    66:  'W',  # BUKIT DAMANSARA (BDA)
-    67:  'A',  # CHEMOR (CMR)
-    68:  'P',  # SIMPANG AMPAT (SAT)
-    69:  'B',  # BATANG KALI (BKI)
-    70:  'K',  # POKOK SENA (PSA)
-    71:  'C',  # BRINCHANG (BCG)
-    72:  'S',  # PAPAR (PPR)
-    73:  'B',  # SUNGAI PELEK (SPK)
-    74:  'K',  # SIK (SIK)
-    75:  'J',  # CHAAH (CAH)
-    76:  'A',  # PANTAI REMIS (PRS)
-    77:  'K',  # PULAU LANGKAWI (PLI)
-    78:  'B',  # SUBANG JAYA (SJA)
-    79:  'J',  # MASAI (MSI)
-    80:  'A',  # MENGLEMBU (MLB)
-    81:  'B',  # SUNGAI BULOH (SBH)
-    82:  'D',  # MACHANG (MCG)
-    83:  'W',  # JALAN BUKIT BINTANG (JBB)
-    84:  'D',  # PASIR MAS (PMS)
-    85:  'A',  # SUNGAI SIPUT (SST)
-    86:  'K',  # CHANGLUN (CLN)
-    87:  'J',  # MERSING (MSG)
-    88:  'K',  # KULIM (KUM)
-    89:  'J',  # TAMPOI (TPI)
-    90:  'Q',  # BINTULU (BTL)
-    91:  'J',  # KLUANG (KUG)
-    92:  'B',  # KLANG (KLG)
-    93:  'J',  # ENDAU (EDU)
-    94:  'W',  # SETAPAK (STP)
-    95:  'A',  # TELUK INTAN (TIN)
-    96:  'B',  # SERI GOMBAK (SGK)
-    97:  'W',  # JALAN TUN H S LEE (HSL)
-    98:  'J',  # TMN CENTURY (TCY)
-    # 101   = 'W'         KAMPUNG BARU (KBR)   -- commented out in the SAS source
-    102: 'J',  # PARIT RAJA (PRJ)
-    103: 'W',  # JINJANG (JJG)
-    104: 'K',  # KUALA KETIL (KKL)
-    105: 'J',  # KOTA TINGGI (KTI)
-    106: 'T',  # CHUKAI (CKI)
-    107: 'P',  # JELUTONG (JLT)
-    108: 'A',  # BAGAN SERAI (BSI)
-    109: 'B',  # K. SELANGOR (KSR)
-    110: 'J',  # TMN JOHOR JAYA (TJJ)
-    111: 'M',  # AIR KEROH (AKH)
-    112: 'S',  # LIDO (LDO)
-    113: 'C',  # TEMERLOH (TML)
-    114: 'P',  # BANDAR BARU AIR ITAM (BBA)
-    115: 'S',  # KENINGAU (KNG)
-    116: 'C',  # TRIANG (TRI)
-    117: 'D',  # KUALA KRAI (KKI)
-    118: 'B',  # TMN MELAWATI (TMW)
-    119: 'A',  # BERCHAM N/V (BNV)
-    120: 'B',  # PANDAN INDAH (PIH)
-    121: 'P',  # PRAI (PRA)
-    122: 'B',  # SRI KEMBANGAN (SKN)
-    123: 'A',  # IPOH GARDEN (IGN)
-    124: 'B',  # SECTION 14 (S14)
-    125: 'B',  # KELANA JAYA (KJA)
-    126: 'P',  # PULAU TIKUS (PTS)
-    127: 'B',  # TMN SERI MUDA (TSM)
-    128: 'W',  # SEGAMBUT (SGB)
-    129: 'W',  # BANGSAR (BSR)
-    130: 'Q',  # JLN TUN ABANG HAJI OPENG (JTO)
-    131: 'B',  # TMN MAYANG (TMG)
-    133: 'B',  # PORT KLANG (PKG)
-    134: 'D',  # RANTAU PANJANG (RPG)
-    135: 'B',  # BANDAR SUNWAY (BSY)
-    136: 'W',  # TMN CHERAS (TCS)
-    137: 'A',  # JALAN PASIR PUTEH (JPP)
-    138: 'W',  # WANGSA MAJU (WMU)
-    139: 'C',  # JERANTUT (JRT)
-    140: 'S',  # CITY PARADE (CPE)
-    141: 'W',  # SENTUL (STL)
-    142: 'S',  # KOTA BELUD (KBD)
-    143: 'S',  # LAHAD DATU (LDU)
-    144: 'J',  # KAHANG (KHG)
-    145: 'B',  # BDR SRI DAMANSARA (BSD)
-    146: 'A',  # PUSING (PSG)
-    147: 'J',  # PEKAN NENAS (PNS)
-    148: 'B',  # PJ OLD TOWN (PJO)
-    149: 'S',  # BEAUFORT (BFT)
-    150: 'P',  # LEBOH MACALLUM (LMM)
-    151: 'W',  # SELAYANG (SLY)
-    152: 'A',  # AYER TAWAR (ATR)
-    153: 'B',  # USJ (USJ)
-    154: 'P',  # BDR SEBERANG JAYA (BSJ)
-    155: 'B',  # TMN TAMING JAYA (TTJ)
-    156: 'M',  # TMN MELAKA RAYA (TMR)
-    157: 'B',  # BDR PUCHONG JAYA (BPJ)
-    158: 'A',  # SIMPANG PULAI (SPL)
-    159: 'P',  # RELAU (RLU)
-    160: 'M',  # MASJID TANAH (MTH)
-    161: 'S',  # DONGGONGON (DGG)
-    162: 'B',  # SEA PARK (SEA)
-    163: 'W',  # JALAN KUCHAI LAMA (JKA)
-    164: 'P',  # KEPALA BATAS (KBS)
-    165: 'M',  # TENGKERA (TKA)
-    166: 'J',  # PASIR GUDANG (PGG)
-    167: 'B',  # BANDAR BUKIT BERUNTUNG (BBG)
-    168: 'W',  # KUALA LUMPUR CITY MAIN (KLC)
-    169: 'W',  # CHANGKAT THAMBI DOLLAH (CTD)
-    170: 'B',  # PANDAN JAYA  (PJA)
-    171: 'P',  # JALAN MACALLISTER (JMR)
-    172: 'M',  # TAMAN MALIM JAYA (TMJ)
-    173: 'B',  # SUNGAI CHUA (SCA)
-    174: 'J',  # BANDAR BARU PERMAS JAYA (BBP)
-    175: 'Q',  # LIMBANG (LBG)
-    176: 'J',  # TAMAN PERLING (TPG)
-    177: 'P',  # JALAN RAJA UDA (JRU)
-    178: 'W',  # MEDAN IDAMAN (MIN)
-    179: 'W',  # OVERSEAS UNION GARDEN (OUG)
-    180: 'B',  # KAMPUNG BARU SUBANG (KBG)
-    183: 'Q',  # JALAN CENTRAL, SIBU (JCL)
-    184: 'Q',  # JALAN PENRISSEN, KUCHING (JPN)
-    185: 'Q',  # JALAN TUN HJ OPENG, KUCHING (JTO)
-    186: 'Q',  # JALAN TUN ZAIDI, KUCHING (JTZ)
-    # 187   = 'Q'         CHINA STREET, MIRI (CST)   -- commented out in the SAS source
-    188: 'Q',  # PELITA, MIRI (PLT)
-    189: 'Q',  # BATU NIAH (BNH)
-    190: 'Q',  # BINTANGOR (BTR)
-    191: 'Q',  # KAPIT (KPT)
-    192: 'Q',  # MARUDI (MRD)
-    193: 'Q',  # MUKAH (MKH)
-    194: 'Q',  # SARIKEI (SRK)
-    195: 'W',  # BINTANG WALK BRANCH, KL (BWK)
-    196: 'W',  # JALAN HANG LEKIU (JHL)
-    197: 'W',  # TIONG NAM BRANCH, KL (TNM)
-    198: 'W',  # TAMAN DESA, JLN KELANG LAMA (TDA)
-    199: 'B',  # JALAN TAPAH, KLANG (JTH)
-    # 200   = 'B'         JALAN SK10/4, SERI KEMBANGAN (JSK)   -- commented out in the SAS source
-    201: 'B',  # PANDAMARAN, KLANG (PDA)
-    202: 'B',  # RAWANG (RWG)
-    203: 'B',  # SUNGAI JAROM (SJM)
-    204: 'P',  # BUTTERWORTH (BTW)
-    205: 'P',  # SUNGAI NIBONG (SNG)
-    206: 'P',  # TAMAN BUKIT MAS (TBM)
-    207: 'A',  # JALAN BERCHAM, IPOH (JBM)
-    208: 'A',  # JALAN SULTAN IDRIS SHAH, IPOH (JSI)
-    209: 'A',  # SITIAWAN (STW)
-    210: 'A',  # TANJUNG MALIM (TMM)
-    211: 'A',  # TANJUNG PIANDANG (TPD)
-    214: 'J',  # JALAN GEREJA, JOHOR BARU (JGA)
-    215: 'J',  # JALAN KUKUP, PONTIAN KECHIL (JKP)
-    216: 'J',  # SKUDAI (SKI)
-    217: 'J',  # T. MUNSHI IBRAHIM, TAMPOI (TMB)
-    220: 'C',  # GENTING HIGHLANDS BRANCH  (GHS)
-    221: 'B',  # TAMAN SENTOSA, KLANG(TSK)
-    222: 'J',  # TAMAN DESA CEMERLANG(TDC),ULU TIRAM
-    224: 'J',  # JALAN ABDULLAH, MUAR
-    225: 'B',  # TAMAN INDAH, SELANGOR
-    226: 'W',  # JALAN PASAR, KUALA LUMPUR
-    227: 'B',  # KAMPONG BARU, SG.BULOH, SELANGOR
-    228: 'S',  # INANAM, KOTA KINABALU
-    230: 'W',  # SALAK SOUTH, KUALA LUMPUR
-    231: 'M',  # BATU BERENDAM, MELAKA
-    232: 'W',  # TAMAN MIDAH, KUALA LUMPUR
-    233: 'C',  # BENTONG, PAHANG
-    234: 'J',  # SIMPANG RENGAM, JOHORE
-    235: 'B',  # SABAK BERNAM, SELANGOR
-    237: 'C',  # KUALA LIPIS  (KLS)
-    238: 'K',  # JALAN KOTA, ALOR SETAR (JKT)
-    239: 'C',  # KEMAYAN, PAHANG (KMY)
-    240: 'B',  # KAPAR, SELANGOR (KAP)
-    241: 'B',  # DAMANSARA JAYA, SELANGOR (DJA)
-    242: 'J',  # TANGKAK JOHOR (TKK)
-    243: 'A',  # KUALA KANGSAR PERAK (KKR)
-    244: 'A',  # GUNUNG RAPAT IPOH PERAK (GRT)
-    245: 'A',  # BIDOR PERAK (BDR)
-    246: 'A',  # BATU GAJAH PERAK (BGH)
-    247: 'J',  # BUKIT PASIR MUAR JOHOR (BPR)
-    248: 'W',  # BUKIT PASIR MUAR JOHOR (JTS)
-    249: 'A',  # TAIPING PERAK (TAI)
-    250: 'B',  # TAMAN ENG ANN KELANG SELANGOR (TEA)
-    251: 'A',  # KAMPAR PERAK (KPR)
-    252: 'B',  # TAMAN MUDA AMPANG SELANGOR (TMA)
-    253: 'P',  # JALAN TANJONG TOKONG P.PINANG (JTT)
-    254: 'N',  # KUALA PILAH NEGERI SEMBILAN (KPH)
-    256: 'A',  # PARIT BUNTAR PERAK (PBR)
-    257: 'C',  # RAUB PAHANG (RAU)
-    258: 'K',  # JITRA KEDAH (JTA)
-    259: 'Q',  # SRI AMAN SARAWAK (SAN)
-    260: 'T',  # KUALA DUNGUN TERENGGANU (KDN)
-    261: 'D',  # GUA MUSANG KELANTAN (GMG)
-    262: 'W',  # TAMAN CONNAUGHT KUALA LUMPUR (TCT)
-    263: 'C',  # BENTA PAHANG (BTA)
-    264: 'C',  # JALAN BESERAH PAHANG (JBH)
-    265: 'P',  # JALAN AIR ITAM PENANG(JAI)
-    266: 'P',  # JALAN DATUK KERAMAT PENANG (JDK)
-    267: 'W',  # TMN TUN DR ISMAIL WILAYAH (TDI)
-    268: 'B',  # BANDAR BUKIT TINGGI (BBT)
-    269: 'W',  # MONT KIARA (MKA)
-    270: 'B',  # BANDAR PUTERI PUCHONG (BPI)
-    273: 'Q',  # LI HUA SARAWAK(LHA)
-    277: 'D',  # WAKAF SIKU (WSU)
-    278: 'S',  # JALAN PANTAI SABAH(JPI)
-    274: 'Q',  # STUTONG, SARAWAK(STG)
-    275: 'Q',  # MEDAN SENTRAL, SARAWAK(MSL)
-    276: 'S',  # JALAN APAS, SABAH (JAS)
-    279: 'W',  # PUTRAJAYA (PTJ)
-    280: 'B',  # KOTA DAMANSARA (KDA)
-    281: 'Q',  # PELITA (PLT)
-    282: 'S',  # PUTATAN (PTT)
-    283: 'S',  # PRIMA SQUARE (PSE)
-    284: 'W',  # BANDAR SRI PERMAISURI (BSP)
-    285: 'B',  # BANDAR MAHKOTA CHERAS (BMC)
-    286: 'J',  # BUKIT INDAH BRANCH    (BIH)
-    287: 'J',  # SUTERA UTAMA BRANCH (SUA)
-    288: 'W',  # STARPARC POINT BRANCH (SPT)
-    289: 'B',  # TAMANEQUINE BRANCH (TEE)
-    290: 'J',  # TAMAN DAYA (TDY)
-    291: 'B',  # BANDAR SUNGAI LONG
-    292: 'W',  # BANDAR MENJALARA (BMJ)
-    293: 'B',  # BANDAR SETIA ALAM (BSA)
-    294: 'B',  # KOTA KEMUNING (KKM)
-    295: 'B',  # BANDAR KINRARA (BKR)
-    296: 'W',  # BUKIT JALIL (BJL)
-    701: 'W',  # KAMPUNG BARU (IKB) ISLAMIC: 090810
-    702: 'W',  # PUTRAJAYA BRANCH (IPJ)
-    703: 'D',  # ISLAMIC WAKAF SIKU (IWS)
-    704: 'K',  # ISLAMIC JALAN KOTA (IJK)
-    800: 'N',
-    801: 'P',
-    802: 'W',
-    803: 'S',
-    804: 'J',
-    805: 'J',
-    806: 'K',
-    807: 'M',
-    808: 'P',
-    809: 'A',
-    811: 'W',
-    812: 'W',
-    813: 'Q',
-    814: 'B',
-    815: 'B',
-    816: 'B',
-    817: 'P',
-    818: 'W',
-    819: 'C',
-    820: 'B',
-    821: 'W',
-    822: 'W',
-    823: 'A',
-    824: 'K',
-    825: 'B',
-    826: 'P',
-    827: 'D',
-}
-_STATECD_OTHER = 'B'
-
-
-def statecd_format(branch_code: Optional[int]) -> str:
-    """STATECD: branch code -> single-character state code (OTHER = 'B')."""
-    if missing(branch_code):
-        return _STATECD_OTHER
-    return _STATECD_MAPPINGS.get(branch_code, _STATECD_OTHER)
-
-
-# ============================================================================
-# FORMAT: FDORGMT - FD ORIGINAL TERM (MONTHS) -> 2-CHARACTER BUCKET CODE
-#   LOW-1='12' 1-2='13' 2-3='14' 3-6='15' 6-9='16' 9-12='17' 12-15='21'
-#   15-18='22' 18-24='23' 24-36='24' 36-48='25' 48-60='26' 60-HIGH='30'
-# Both ends of each SAS range are inclusive; the first listed range wins, so a
-# value equal to a boundary belongs to the lower bucket (bisect_left).
-# LOW excludes missing values and there is no OTHER, so missing shows as '.'.
-# ============================================================================
-
-_FDORGMT_BOUNDS: Tuple[int, ...] = (1, 2, 3, 6, 9, 12, 15, 18, 24, 36, 48, 60)
-_FDORGMT_CODES: Tuple[str, ...] = (
-    '12',  # ORG. MAT. <= 1 MTH
-    '13',  # ORG. MAT. >1 - 2 MTHS
-    '14',  # ORG. MAT. >2 - 3 MTHS
-    '15',  # ORG. MAT. >3 - 6 MTHS
-    '16',  # ORG. MAT. >6 - 9 MTHS
-    '17',  # ORG. MAT. >9 - 12 MTHS
-    '21',  # ORG. MAT. >12 - 15 MTHS
-    '22',  # ORG. MAT. >15 - 18 MTHS
-    '23',  # ORG. MAT. >18 - 24 MTHS
-    '24',  # ORG. MAT. >24 - 36 MTHS
-    '25',  # ORG. MAT. >36 - 48 MTHS
-    '26',  # ORG. MAT. >48 - 60 MTHS
-)
-_FDORGMT_HIGH = '30'  # ORG. MAT. > 60 MTHS
-
-
-def fdorgmt_format(orgmth: Optional[float]) -> str:
-    """FDORGMT: original term in months -> 2-character bucket code ('.' if missing)."""
-    if missing(orgmth):
+from decimal import Decimal, ROUND_DOWN
+
+
+def missing(value):
+    return value is None or (isinstance(value, float) and math.isnan(value))
+
+
+def resolve(value, macros):
+    if isinstance(value, dict) and 'macro' in value:
+        return macros[value['macro']]
+    return value
+
+
+def matches(value, lo, hi, exlo, exhi):
+    if isinstance(lo, dict) and 'missing' in lo:
+        return missing(value) if lo['missing'] == '.' else value == lo['missing']
+    if missing(value):
+        return False  # SAS LOW excludes numeric missing values.
+    lower = isinstance(lo, dict) and lo.get('special') == 'LOW'
+    upper = isinstance(hi, dict) and hi.get('special') == 'HIGH'
+    return (lower or (value > lo if exlo else value >= lo)) and (upper or (value < hi if exhi else value <= hi))
+
+
+def lookup(formats, name, value, macros=None):
+    name = name.upper().rstrip('.')
+    spec = formats[name]
+    macros = macros or {}
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    if name.startswith('$'):
+        value = '' if missing(value) else str(value).rstrip()
+    elif not missing(value):
+        value = float(value)
+    fallback = None
+    for lo, hi, exlo, exhi, label, options in spec['rules']:
+        lo, hi = resolve(lo, macros), resolve(hi, macros)
+        if isinstance(lo, dict) and lo.get('special') == 'OTHER':
+            fallback = label
+            continue
+        if matches(value, lo, hi, exlo, exhi):
+            if spec['kind'] == 'PICTURE':
+                # Source pictures use MULT explicitly and no ROUND option.
+                n = (abs(Decimal(str(value))) * Decimal(str(options.get('MULT', 1)))).to_integral_value(rounding=ROUND_DOWN)
+                decimals = len(label.split('.')[1]) if '.' in label else 0
+                return options.get('PREFIX', '') + format(n / Decimal(10)**decimals, f',.{decimals}f')
+            return label
+    if fallback is not None:
+        return fallback
+    if spec['kind'] == 'INVALUE':
+        return value
+    if missing(value):
         return '.'
-    idx = bisect_left(_FDORGMT_BOUNDS, orgmth)
-    return _FDORGMT_CODES[idx] if idx < len(_FDORGMT_CODES) else _FDORGMT_HIGH
+    return str(value) if name.startswith('$') else format(value, 'g')
 
 
-# ============================================================================
-# FORMAT: FDRMMT - FD REMAINING TERM (MONTHS) -> 2-CHARACTER BUCKET CODE
-#   LOW-0='51' 0-1='52' 1-2='53' 2-3='54' 3-6='55' 6-9='56' 9-12='57'
-#   12-24='61' 24-36='62' 36-48='63' 48-60='64' 60-HIGH='70'
-# ============================================================================
+def library_cli(formats, macros):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--list', action='store_true')
+    parser.add_argument('format', nargs='?')
+    parser.add_argument('value', nargs='?')
+    args = parser.parse_args()
+    if args.list:
+        print('\n'.join(formats))
+    elif args.format is not None and args.value is not None:
+        print(lookup(formats, args.format, args.value, macros))
+    else:
+        parser.error('Use --list or FORMAT VALUE')
 
-_FDRMMT_BOUNDS: Tuple[int, ...] = (0, 1, 2, 3, 6, 9, 12, 24, 36, 48, 60)
-_FDRMMT_CODES: Tuple[str, ...] = (
-    '51',  # REM. MAT. OVERDUE
-    '52',  # REM. MAT. <= 1 MTH
-    '53',  # REM. MAT. > 1 - 2 MTHS
-    '54',  # REM. MAT. > 2 - 3 MTHS
-    '55',  # REM. MAT. > 3 - 6 MTHS
-    '56',  # REM. MAT. > 6 - 9 MTHS
-    '57',  # REM. MAT. > 9 - 12 MTHS
-    '61',  # REM. MAT. > 1 - 2 YEARS
-    '62',  # REM. MAT. > 2 - 3 YEARS
-    '63',  # REM. MAT. > 3 - 4 YEARS
-    '64',  # REM. MAT. > 4 - 5 YEARS
-)
-_FDRMMT_HIGH = '70'  # REM. MAT. > 5 YEARS
-
-
-def fdrmmt_format(remmth: Optional[float]) -> str:
-    """FDRMMT: remaining term in months -> 2-character bucket code ('.' if missing)."""
-    if missing(remmth):
-        return '.'
-    idx = bisect_left(_FDRMMT_BOUNDS, remmth)
-    return _FDRMMT_CODES[idx] if idx < len(_FDRMMT_CODES) else _FDRMMT_HIGH
-
-
-# ============================================================================
-# FORMAT: RMFDORGMT - RMFD PRODUCT CODE -> ORIGINAL MATURITY BUCKET CODE
-# No OTHER in SAS: an unmatched value is displayed as the value itself.
-# ============================================================================
-
-_RMFDORGMT_MAPPINGS: Dict[int, str] = {
-    272: '12', 284: '12',                                              # 30 DAYS
-    273: '13', 285: '13',                                              # 31-60 DAYS
-    274: '14', 286: '14',                                              # 61-90 DAYS
-    275: '15', 276: '15', 277: '15', 287: '15', 288: '15', 289: '15',  # 91-180 DAYS
-    278: '16', 279: '16', 280: '16', 290: '16', 291: '16', 292: '16',  # 181-270 DAYS
-    281: '17', 282: '17', 283: '17', 293: '17', 294: '17', 295: '17',  # 271-366 DAYS
-}
-
-
-def rmfdorgmt_format(product_code: Optional[int]) -> str:
-    """
-    RMFDORGMT: RMFD product code -> original maturity bucket code.
-    An unmatched value is returned as text (SAS shows the value itself);
-    a missing value is returned as '.'.
-    """
-    if missing(product_code):
-        return '.'
-    code = _RMFDORGMT_MAPPINGS.get(product_code)
-    return code if code is not None else best12(product_code)
-
-
-# ============================================================================
-# INVALUES: SDRANGE, S1RANGE, S2RANGE, DDRANGE - BALANCE RANGE (UPPER BOUND)
-# Each SAS range is "lower - upper = upper"; the first listed range wins, so a
-# balance equal to a boundary takes that boundary (bisect_left). LOW excludes
-# missing values, so a missing balance returns None (SAS missing).
-# ============================================================================
-
-_SDRANGE_BOUNDS: Tuple[int, ...] = (
-    5, 10, 50, 100, 500, 1000, 1500, 2000, 2500, 3000,
-    3500, 4000, 4500, 5000, 6000, 7000, 8000, 9000, 10000,
-    15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000,
-    55000, 60000, 65000, 70000, 75000, 80000, 85000, 90000,
-    95000, 100000, 150000, 200000, 300000, 500000,
-    1000000, 2000000, 3000000, 4000000, 5000000, 10000000,
-)
-_SDRANGE_HIGH = 10000001
-
-_S1RANGE_BOUNDS: Tuple[int, ...] = (
-    5, 10, 50, 100, 500, 1000, 1500, 2000, 2500, 3000,
-    3500, 4000, 4500, 5000, 6000, 7000, 8000, 9000, 10000,
-    15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000,
-    55000, 60000, 65000, 70000, 75000, 80000, 85000, 90000,
-    95000, 100000, 150000, 200000, 300000, 350000, 360000,
-    500000, 510000, 550000, 850000, 860000, 1000000,
-    2000000, 3000000, 4000000, 5000000, 10000000,
-)
-_S1RANGE_HIGH = 10000001
-
-# LOW-0 = 0 is the first range of S2RANGE, hence 0 is the first bound.
-_S2RANGE_BOUNDS: Tuple[int, ...] = (
-    0, 5, 10, 50, 100, 500, 1000, 1500, 2000, 2500, 3000,
-    3500, 4000, 4500, 5000, 6000, 7000, 8000, 9000, 10000,
-    15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000,
-    55000, 60000, 65000, 70000, 75000, 80000, 85000, 90000,
-    95000, 100000, 150000, 200000, 300000, 350000, 360000,
-    500000, 510000, 550000, 600000, 700000, 800000, 850000,
-    860000, 900000, 1000000, 1100000, 1200000, 1300000, 1400000,
-    1500000, 1600000, 1700000, 1800000, 1900000, 2000000,
-    3000000, 4000000, 5000000, 10000000,
-)
-_S2RANGE_HIGH = 10000001
-
-_DDRANGE_BOUNDS: Tuple[int, ...] = (
-    1000, 2000, 2500, 3000, 5000, 10000, 20000, 30000, 40000,
-    50000, 75000, 100000, 150000, 200000, 250000, 500000,
-    1000000, 2000000, 3000000, 4000000, 5000000,
-)
-_DDRANGE_HIGH = 5000001
-
-
-def _range_bucket(balance: Optional[float], bounds: Tuple[int, ...],
-                  high: int) -> Optional[float]:
-    """Upper-bound bucket of a balance; None when the balance is missing."""
-    if missing(balance):
-        return None
-    idx = bisect_left(bounds, balance)
-    return float(bounds[idx]) if idx < len(bounds) else float(high)
-
-
-def sdrange_format(balance: Optional[float]) -> Optional[float]:
-    """SDRANGE invalue: savings deposit balance -> upper-bound bucket value."""
-    return _range_bucket(balance, _SDRANGE_BOUNDS, _SDRANGE_HIGH)
-
-
-def s1range_format(balance: Optional[float]) -> Optional[float]:
-    """S1RANGE invalue: balance -> upper-bound bucket value (variant 1)."""
-    return _range_bucket(balance, _S1RANGE_BOUNDS, _S1RANGE_HIGH)
-
-
-def s2range_format(balance: Optional[float]) -> Optional[float]:
-    """S2RANGE invalue: balance -> upper-bound bucket value (variant 2, LOW-0 = 0)."""
-    return _range_bucket(balance, _S2RANGE_BOUNDS, _S2RANGE_HIGH)
-
-
-def ddrange_format(balance: Optional[float]) -> Optional[float]:
-    """DDRANGE invalue: demand deposit balance -> upper-bound bucket value."""
-    return _range_bucket(balance, _DDRANGE_BOUNDS, _DDRANGE_HIGH)
-
-
-# ============================================================================
-# FORMAT: $RACE - RACE CODE ('0'-'3' pass through, OTHER = '0')
-# ============================================================================
-
-def race_format(race_code: Optional[str]) -> str:
-    """$RACE: passes '0', '1', '2', '3' through; everything else returns '0'."""
-    if missing(race_code):
-        return '0'
-    code = str(race_code).rstrip()
-    return code if code in ('0', '1', '2', '3') else '0'
-
-
-# ============================================================================
-# FORMAT: BRANCHCD - BRANCH CODE -> BRANCH NAME
-# (labels are returned without the trailing blanks found in the SAS source)
-# ============================================================================
-
-_BRANCHCD_MAPPINGS: Dict[int, str] = {
-    1:   'HEAD OFFICE',
-    2:   'JLN SULTAN SULAIMAN',
-    3:   'JLN RAJA CHULAN',
-    4:   'MELAKA',
-    5:   'IPOH MAIN OFFICE',
-    6:   'PENANG',
-    7:   'JOHOR BAHRU',
-    8:   'KUANTAN',
-    9:   'JLN YANG KALSOM',
-    10:  'ALOR SETAR',
-    11:  'GURUN',
-    12:  'PASIR PUTEH',
-    13:  'KOTA BHARU',
-    14:  'TANAH MERAH',
-    15:  'KEPUNG',
-    16:  'NILAI',
-    17:  'TAMPIN',
-    18:  'PJ NEW TOWN',
-    19:  'DAMANSARA UTAMA',
-    20:  'TMN CHI LIUNG',
-    21:  'BATU PAHAT',
-    22:  'SEMENYIH',
-    23:  'KAMUNTING',
-    24:  'RASAH',
-    25:  'SHAH ALAM',
-    26:  'SERI PETALING',
-    27:  'NIBONG TEBAL',
-    28:  'MUAR',
-    29:  'JLN RAJA LAUT',
-    30:  'KUALA TRENGGANU',
-    31:  'SEKINCHAN',
-    32:  'WISMA SABERKAS (WSS)',
-    33:  'KOTA KINABALU',
-    34:  'KANGAR',
-    35:  'SERI SETIA',
-    36:  'S S 2',
-    37:  'TMN SENTOSA',
-    38:  'JLN KELANG LAMA',
-    39:  'KUALA KELAWANG',
-    40:  'JLN SUNGEI BESI',
-    41:  'JLN IPOH',
-    42:  'BKT MERTAJAM',
-    43:  'BANTING',
-    44:  'TAWAU',
-    45:  'SEREMBAN',
-    46:  'AMPANG',
-    47:  'SEGAMAT',
-    48:  'MENTAKAB',
-    49:  'JELAPANG',
-    50:  'MIRI',
-    51:  'SERI MANJUNG',
-    52:  'ULU TIRAM',
-    53:  'TMN MALURI',
-    54:  'BDR BAYAN BARU',
-    55:  'LABUAN',
-    56:  'KAJANG',
-    57:  'SG PETANI',
-    58:  'SIBU',
-    59:  'PONTIAN KECIL',
-    60:  'BAGAN AJAM',
-    61:  'KULAI',
-    62:  'SANDAKAN',
-    63:  'GEMAS',
-    64:  'PORT DICKSON',
-    65:  'BAHAU',
-    66:  'BKT DAMANSARA',
-    67:  'CHEMOR',
-    68:  'SIMPANG AMPAT',
-    69:  'BATANG KALI',
-    70:  'POKOK SENA',
-    71:  'BRINCHANG',
-    72:  'PAPAR',
-    73:  'SG PELEK',
-    74:  'SIK',
-    75:  'CHAAH',
-    76:  'PANTAI REMIS',
-    77:  'PULAU LANGKAWI',
-    78:  'SUBANG JAYA',
-    79:  'MASAI',
-    80:  'MENGLEMBU',
-    81:  'SG BULOH',
-    82:  'MACHANG',
-    83:  'JLN BUKIT BINTANG',
-    84:  'PASIR MAS',
-    85:  'SG SIPUT',
-    86:  'CHANGLUN',
-    87:  'MERSING',
-    88:  'KULIM',
-    89:  'TAMPOI',
-    90:  'BINTULU',
-    91:  'KLUANG',
-    92:  'KLANG',
-    93:  'ENDAU',
-    94:  'SETAPAK',
-    95:  'TELUK INTAN',
-    96:  'SERI GOMBAK',
-    97:  'JLN TUN H S LEE',
-    98:  'TMN CENTURY',
-    101: 'KAMPONG BAHRU',
-    102: 'PARIT RAJA',
-    103: 'JINJANG',
-    104: 'KUALA KETIL',
-    105: 'KOTA TINGGI',
-    106: 'CHUKAI',
-    107: 'JELUTONG',
-    108: 'BAGAN SERAI',
-    109: 'KUALA SELANGOR',
-    110: 'TMN JOHOR JAYA',
-    111: 'AIR KEROH',
-    112: 'LIDO',
-    113: 'TEMERLOH',
-    114: 'BANDAR BARU AIR ITAM',
-    115: 'KENINGAU',
-    116: 'TRIANG',
-    117: 'KUALA KRAI',
-    118: 'TMN MELAWATI',
-    120: 'PANDAN INDAH',
-    121: 'PRAI',
-    122: 'SERI KEMBANGAN',
-    123: 'IPOH GARDEN',
-    124: 'SECTION 14',
-    125: 'KELANA JAYA',
-    126: 'PULAU TIKUS',
-    127: 'TMN SERI MUDA',
-    128: 'SEGAMBUT',
-    129: 'BANGSAR',
-    130: 'PADUNGAN',
-    131: 'TMN MAYANG',
-    133: 'PORT KLANG',
-    134: 'RANTAU PANJANG',
-    135: 'BDR SUNWAY',
-    136: 'TMN CHERAS',
-    137: 'JLN PASIR PUTEH',
-    138: 'WANGSA MAJU',
-    139: 'JERANTUT',
-    140: 'CITY PARADE',
-    141: 'SENTUL',
-    142: 'KOTA BELUD',
-    143: 'LAHAD DATU',
-    144: 'KAHANG',
-    145: 'BDR SRI DAMANSARA',
-    146: 'PUSING',
-    147: 'PEKAN NENAS',
-    148: 'PJ OLD TOWN',
-    149: 'BEAUFORT',
-    150: 'LEBOH MACALLUM',
-    151: 'SELAYANG',
-    152: 'AIR TAWAR',
-    153: 'USJ',
-    154: 'BDR SEBERANG JAYA',
-    155: 'TMN TAMING JAYA',
-    156: 'TMN MELAKA RAYA',
-    157: 'BDR PUCHONG JAYA',
-    158: 'SIMPANG PULAI',
-    159: 'RELAU',
-    160: 'MASJID TANAH',
-    161: 'DONGGONGON',
-    162: 'SEA PARK',
-    163: 'JLN KUCHAI LAMA',
-    164: 'KEPALA BATAS',
-    165: 'TENGKERA',
-    166: 'PASIR GUDANG',
-    167: 'BKT BERUNTUNG',
-    168: 'KLCITY MAIN',
-    169: 'CKT THAMBI DOLLAH',
-    170: 'PANDAN JAYA',
-    171: 'JLN MACALLISTER',
-    172: 'TMN MALIM JAYA',
-    173: 'SG CHUA',
-    174: 'BDR BARU PERMAS JAYA',
-    175: 'LIMBANG',
-    176: 'TMN PERLING',
-    177: 'JLN RAJA UDA',
-    178: 'MEDAN IDAMAN',
-    179: 'OVERSEAS UNION GDN',
-    180: 'KG BARU SUBANG',
-    183: 'JLN CENTRAL, SIBU',
-    184: 'JLN PENRISSEN, KUCHING',
-    185: 'KUCHING CITY (KCY)',
-    186: 'JLN TUN ZAIDI, KUCHING',
-    # 187: 'CHINA STREET, MIRI'  -- commented out in the SAS source
-    188: 'PELITA, MIRI',
-    189: 'BATU NIAH',
-    190: 'BINTANGOR',
-    191: 'KAPIT',
-    192: 'MARUDI',
-    193: 'MUKAH',
-    194: 'SARIKEI',
-    195: 'BINTANG WALK, KL',
-    196: 'JLN HANG LEKIU',
-    197: 'TIONG NAM, KL',
-    198: 'TMN DESA,JLN KELANG LAMA',
-    199: 'JLN TAPAH,KLANG',
-    # 200: 'JLN SK10/4,SERI KEMBANGAN'  -- commented out in the SAS source
-    201: 'PANDAMARAN, KLANG',
-    202: 'RAWANG',
-    203: 'SG JAROM',
-    204: 'BUTTERWORTH',
-    205: 'SG NIBONG',
-    206: 'TAMAN BUKIT MAS',
-    207: 'BERCHAM (BCM)',
-    208: 'JLN SULTAN IDRIS SHAH, IPOH',
-    209: 'SITIAWAN',
-    210: 'TANJUNG MALIM',
-    211: 'TANJUNG PIANDANG',
-    214: 'JLN GEREJA, JOHOR BARU',
-    215: 'JLN KUKUP, PONTIAN KECHIL',
-    216: 'SKUDAI',
-    217: 'TMN MUNSHI IBRAHIM, TAMPOI',
-    220: 'GENTING HIGHLANDS, PAHANG',
-    221: 'TMN SENTOSA, KLANG',
-    222: 'TMN DESA CEMERLANG,JOHOR',
-    224: 'JLN ABDULLAH, MUAR',
-    225: 'TMN INDAH, SELANGOR',
-    226: 'JLN PASAR, KUALA LUMPUR',
-    228: 'INANAM, KOTA KINABALU',
-    230: 'SALAK SOUTH, KUALA LUMPUR',
-    231: 'BATU BERENDAM, MELAKA',
-    232: 'TMN MIDAH, KUALA LUMPUR',
-    233: 'BENTONG',
-    234: 'SIMPANG RENGAM',
-    235: 'SABAK BERNAM, SELANGOR',
-    237: 'KUALA LIPIS, PAHANG',
-    238: 'JALAN KOTA, KEDAH',
-    239: 'KEMAYAN, PAHANG',
-    240: 'KAPAR, SELANGOR',
-    241: 'DAMANSARA JAYA, SELANGOR',
-    242: 'TANGKAK JOHOR',
-    243: 'KUALA KANGSAR PERAK',
-    244: 'GUNUNG RAPAT IPOH PERAK',
-    245: 'BIDOR PERAK',
-    247: 'BUKIT PASIR MUAR JOHOR',
-    248: 'JLN TUN SAMBANTHAN KL',
-    249: 'TAIPING PERAK',
-    250: 'TAMAN ENG ANN SELANGOR',
-    251: 'KAMPAR PERAK',
-    252: 'TAMAN MUDA SELANGOR',
-    253: 'JLN TANJONG TOKONG P.PINANG',
-    254: 'KUALA PILAH N. SEMBILAN',
-    256: 'PARIT BUNTAR PERAK',
-    257: 'RAUB PAHANG',
-    258: 'JITRA KEDAH',
-    259: 'SRI AMAN SARAWAK',
-    260: 'KUALA DUNGUN TERENGGANU',
-    261: 'GUA MUSANG KELANTAN',
-    262: 'TAMAN CONNAUGHT CHERAS',
-    263: 'BENTA PAHANG',
-    264: 'JALAN BESERAH PAHANG',
-    265: 'JALAN AIR ITAM PENANG',
-    266: 'JALAN DATUK KERAMAT PENANG',
-    267: 'TMN TUN DR ISMAIL WILAYAH',
-    268: 'BANDAR BUKIT TINGGI',
-    269: 'MONT KIARA',
-    270: 'BANDAR PUTERI PUCHONG',
-    273: 'LI HUA SARAWAK',
-    277: 'WAKAF SIKU KELANTAN',
-    278: 'JALAN PANTAI SABAH',
-    274: 'STUTONG SARAWAK',
-    275: 'MEDAN SENTRAL SARAWAK',
-    276: 'JALAN APAS SABAH',
-    279: 'PUTRAJAYA',
-    280: 'KOTA DAMANSARA',
-    281: 'PELITA',
-    282: 'PUTATAN',
-    283: 'PRIMA SQUARE',
-    284: 'BANDAR SRI PERMAISURI',
-    285: 'BANDAR MAHKOTA CHERAS',
-    286: 'BUKIT INDAH BRANCH',
-    287: 'SUTERA UTAMA',
-    288: 'STARPARC POINT',
-    289: 'TAMAN EQUINE',
-    290: 'TAMAN DAYA',
-    291: 'BANDAR SUNGAI LONG',
-    292: 'BANDAR MENJALARA',
-    293: 'BANDAR SETIA ALAM',
-    294: 'KOTA KEMUNING',
-    295: 'BANDAR KINRARA',
-    296: 'BUKIT JALIL',
-    702: 'PUTRAJAYA',
-    703: 'ISLAMIC WAKAF SIKU',
-    704: 'ISLAMIC JALAN KOTA',
-}
-_BRANCHCD_OTHER = 'OTHER'
-
-
-def branchcd_format(branch_code: Optional[int]) -> str:
-    """BRANCHCD: branch code -> branch name (OTHER = 'OTHER')."""
-    if missing(branch_code):
-        return _BRANCHCD_OTHER
-    return _BRANCHCD_MAPPINGS.get(branch_code, _BRANCHCD_OTHER)
-
-
-# ============================================================================
-# BACKWARD-COMPATIBLE CLASS WRAPPERS
-# (kept so that programs converted against the class-based API keep working)
-# ============================================================================
-
-class ProductLists:
-    """Container for product groupings used across deposit products."""
-    ACE_PRODUCTS: Set[int] = ACE
-    FCY_PRODUCTS: Set[int] = FCY
-    CURX_PRODUCTS: Set[int] = CURX
-
-
-class SADenomFormat:
-    ISLAMIC_PRODUCTS: Set[int] = _SADENOM_ISLAMIC
-
-    @staticmethod
-    def format(product_code: Optional[int]) -> str:
-        return sadenom_format(product_code)
-
-
-class SAProductFormat:
-    MAPPINGS: Dict[int, str] = _SAPROD_MAPPINGS
-
-    @staticmethod
-    def format(product_code: Optional[int]) -> str:
-        return saprod_format(product_code)
-
-
-class FDDenomFormat:
-    ISLAMIC_RANGES: List[Tuple[int, int]] = _FDDENOM_ISLAMIC_RANGES
-    ISLAMIC_SINGLES: Set[int] = _FDDENOM_ISLAMIC_SINGLES
-
-    @staticmethod
-    def format(product_code: Optional[int]) -> str:
-        return fddenom_format(product_code)
-
-
-class FDProductFormat:
-    MAPPINGS: Dict[int, str] = _FDPROD_MAPPINGS
-
-    @staticmethod
-    def format(product_code: Optional[int]) -> str:
-        return fdprod_format(product_code)
-
-
-class CADenomFormat:
-    ISLAMIC_PRODUCTS: Set[int] = _CADENOM_ISLAMIC
-
-    @staticmethod
-    def format(product_code: Optional[int]) -> str:
-        return cadenom_format(product_code)
-
-
-class CAProductFormat:
-    MAPPINGS: Dict[int, str] = _CAPROD_MAPPINGS
-
-    @staticmethod
-    def format(product_code: Optional[int]) -> str:
-        return caprod_format(product_code)
-
-
-class FCYTermFormat:
-    TERM_1_MONTH: Set[int] = _FCYTERM_1_MONTH
-    TERM_3_MONTHS: Set[int] = _FCYTERM_3_MONTHS
-    TERM_6_MONTHS: Set[int] = _FCYTERM_6_MONTHS
-    TERM_12_MONTHS: Set[int] = _FCYTERM_12_MONTHS
-
-    @staticmethod
-    def format(intplan_code: Optional[int]) -> Optional[int]:
-        return fcyterm_format(intplan_code)
-
-
-# ============================================================================
-# GENERIC RULE ENGINE (SAS-style lookup over ordered rules)
-# FORMATS below is generated from the mapping tables above, so there is a
-# single source of truth. The fast per-format functions are used by put(),
-# format_value() and apply_format(); lookup() is the literal SAS-rule
-# interpreter and is used by selfcheck() to prove both agree.
-# ============================================================================
-
+# Compact declarations expand to the original ordered SAS rules.
 _LOW = {'special': 'LOW'}
 _HIGH = {'special': 'HIGH'}
 _OTHER = {'special': 'OTHER'}
@@ -2550,304 +103,1118 @@ def _map(result, *selectors, options=None):
         rules.append((*bounds, result, dict(options or {})))
     return rules
 
+# SAS macro constants
+AGELIMIT = 12
 
-def resolve(value, macros):
-    if isinstance(value, dict) and 'macro' in value:
-        return macros[value['macro']]
-    return value
+MAXAGE = 18
 
+AGEBELOW = 11
 
-def matches(value, lo, hi, exlo, exhi):
-    if isinstance(lo, dict) and 'missing' in lo:
-        return missing(value) if lo['missing'] == '.' else value == lo['missing']
-    if missing(value):
-        return False  # SAS LOW excludes numeric missing values.
-    lower = isinstance(lo, dict) and lo.get('special') == 'LOW'
-    upper = isinstance(hi, dict) and hi.get('special') == 'HIGH'
-    return ((lower or (value > lo if exlo else value >= lo))
-            and (upper or (value < hi if exhi else value <= hi)))
+MACROS = {
+    'AGELIMIT': AGELIMIT,
+    'MAXAGE': MAXAGE,
+    'AGEBELOW': AGEBELOW,
+}
 
-
-def _format_key(formats, name):
-    """Normalise a format name ('sadenom.', 'RACE' -> '$RACE')."""
-    key = name.strip().upper().rstrip('.')
-    if key not in formats and '$' + key in formats:
-        key = '$' + key
-    return key
-
-
-def lookup(formats, name, value, macros=None):
-    """Apply one format by walking its ordered SAS rules (first match wins)."""
-    name = _format_key(formats, name)
-    spec = formats[name]
-    macros = macros or {}
-    if isinstance(value, bytes):
-        value = value.decode('utf-8')
-    if name.startswith('$'):
-        value = '' if missing(value) else str(value).rstrip()
-    elif not missing(value):
-        value = float(value)
-    fallback = None
-    for lo, hi, exlo, exhi, label, _options in spec['rules']:
-        lo, hi = resolve(lo, macros), resolve(hi, macros)
-        if isinstance(lo, dict) and lo.get('special') == 'OTHER':
-            fallback = label
-            continue
-        if matches(value, lo, hi, exlo, exhi):
-            return label
-    if fallback is not None:
-        return fallback
-    if spec['kind'] == 'INVALUE':
-        return None  # no match in an INVALUE gives SAS missing
-    if missing(value):
-        return '.'
-    return str(value) if name.startswith('$') else best12(value)
-
-
-def _rules_from_mapping(mapping, other=None):
-    rules = [(key, key, False, False, label, {}) for key, label in mapping.items()]
-    if other is not None:
-        rules.append((_OTHER, _OTHER, False, False, other, {}))
-    return rules
-
-
-def _rules_from_buckets(bounds, labels, high_label):
-    """Rules LOW-b0, b0-b1, ... , bN-HIGH (both ends inclusive, first match wins)."""
-    rules = []
-    for i, bound in enumerate(bounds):
-        lower = _LOW if i == 0 else bounds[i - 1]
-        rules.append((lower, bound, False, False, labels[i], {}))
-    rules.append((bounds[-1], _HIGH, False, False, high_label, {}))
-    return rules
-
-
+# Formats: group only adjacent rules with the same result.
+# _span(a, b) includes both endpoints; exclusions are stated explicitly.
+# _map(result, selectors...) preserves source order and exceptions.
 FORMATS = {
-    'SADENOM': {
-        'kind': 'VALUE',
-        'rules': [*_map('I', *sorted(_SADENOM_ISLAMIC)), *_map('D', _OTHER)],
-    },
-    'SAPROD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_SAPROD_MAPPINGS, _SAPROD_OTHER),
-    },
-    'FDDENOM': {
-        'kind': 'VALUE',
-        'rules': [
-            *_map('I', *[_span(a, b) for a, b in _FDDENOM_ISLAMIC_RANGES],
-                  *sorted(_FDDENOM_ISLAMIC_SINGLES)),
-            *_map('D', _OTHER),
+    'BRCHCD': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('HOE', 1, _span(3000, 3001), 7000, _span(7500, 8000), _span(8050, 8750)),
+            *_map('JSS', 2, 3002),
+            *_map('JRC', 3, 3003),
+            *_map('MLK', 4, 3004),
+            *_map('IMO', 5, 3005),
+            *_map('PPG', 6, 3006),
+            *_map('JBU', 7, 3007),
+            *_map('KTN', 8, 3008),
+            *_map('JYK', 9, 3009),
+            *_map('ASR', 10, 3010),
+            *_map('GRN', 11, 3011),
+            *_map('PPH', 12, 3012),
+            *_map('KBU', 13, 3013),
+            *_map('TMH', 14, 3014),
+            *_map('KPG', 15, 3015),
+            *_map('NLI', 16, 3016),
+            *_map('TPN', 17, 3017),
+            *_map('PJN', 18, 3018),
+            *_map('DUA', 19, 3019),
+            *_map('TCL', 20, 3020),
+            *_map('BPT', 21, 3021),
+            *_map('SMY', 22, 3022),
+            *_map('KMT', 23, 3023),
+            *_map('RSH', 24, 3024),
+            *_map('SAM', 25, 3025),
+            *_map('SPG', 26, 3026),
+            *_map('NTL', 27, 3027),
+            *_map('MUA', 28, 3028),
+            *_map('JRL', 29, 3029),
+            *_map('KTU', 30, 3030),
+            *_map('SKC', 31, 3031),
+            *_map('WSS', 32, 3032),
+            *_map('KKU', 33, 3033),
+            *_map('KGR', 34, 3034),
+            *_map('SSA', 35, 3035),
+            *_map('SS2', 36, 3036),
+            *_map('TSA', 37, 3037),
+            *_map('JKL', 38, 3038),
+            *_map('KKG', 39, 3039),
+            *_map('JSB', 40, 3040),
+            *_map('JIH', 41, 3041),
+            *_map('BMM', 42, 3042),
+            *_map('BTG', 43, 3043),
+            *_map('TWU', 44, 3044),
+            *_map('SRB', 45, 3045),
+            *_map('APG', 46, 3046),
+            *_map('SGM', 47, 3047),
+            *_map('MTK', 48, 3048),
+            *_map('JLP', 49, 3049),
+            *_map('MRI', 50, 3050),
+            *_map('SMG', 51, 3051),
+            *_map('UTM', 52, 3052),
+            *_map('TMI', 53, 3053),
+            *_map('BBB', 54, 3054),
+            *_map('LBN', 55, 3055),
+            *_map('KJG', 56, 3056),
+            *_map('SPI', 57, 3057),
+            *_map('SBU', 58, 3058),
+            *_map('PKL', 59, 3059),
+            *_map('BAM', 60, 3060),
+            *_map('KLI', 61, 3061),
+            *_map('SDK', 62, 3062),
+            *_map('GMS', 63, 3063),
+            *_map('PDN', 64, 3064),
+            *_map('BHU', 65, 3065),
+            *_map('BDA', 66, 3066),
+            *_map('CMR', 67, 3067),
+            *_map('SAT', 68, 3068),
+            *_map('BKI', 69, 3069),
+            *_map('PSA', 70, 3070),
+            *_map('BCG', 71, 3071),
+            *_map('PPR', 72, 3072),
+            *_map('SPK', 73, 3073),
+            *_map('SIK', 74, 3074),
+            *_map('CAH', 75, 3075),
+            *_map('PRS', 76, 3076),
+            *_map('PLI', 77, 3077),
+            *_map('SJA', 78, 3078),
+            *_map('MSI', 79, 3079),
+            *_map('MLB', 80, 3080),
+            *_map('SBH', 81, 3081),
+            *_map('MCG', 82, 3082),
+            *_map('JBB', 83, 3083),
+            *_map('PMS', 84, 3084),
+            *_map('SST', 85, 3085),
+            *_map('CLN', 86, 3086),
+            *_map('MSG', 87, 3087),
+            *_map('KUM', 88, 3088),
+            *_map('TPI', 89, 3089),
+            *_map('BTL', 90, 3090),
+            *_map('KUG', 91, 3091),
+            *_map('KLG', 92, 3092),
+            *_map('EDU', 93, 3093),
+            *_map('STP', 94, 3094),
+            *_map('TIN', 95, 3095),
+            *_map('SGK', 96, 3096),
+            *_map('HSL', 97, 3097),
+            *_map('TCY', 98, 3098),
+            *_map('PRJ', 102, 3102),
+            *_map('JJG', 103, 3103),
+            *_map('KKL', 104, 3104),
+            *_map('KTI', 105, 3105),
+            *_map('CKI', 106, 3106),
+            *_map('JLT', 107, 3107),
+            *_map('BSI', 108, 3108),
+            *_map('KSR', 109, 3109),
+            *_map('TJJ', 110, 3110),
+            *_map('AKH', 111, 3111),
+            *_map('LDO', 112, 3112),
+            *_map('TML', 113, 3113),
+            *_map('BBA', 114, 3114),
+            *_map('KNG', 115, 3115),
+            *_map('TRI', 116, 3116),
+            *_map('KKI', 117, 3117),
+            *_map('TMW', 118, 3118),
+            *_map('BNV', 119, 3119),
+            *_map('PIH', 120, 3120),
+            *_map('PRA', 121, 3121),
+            *_map('SKN', 122, 3122),
+            *_map('IGN', 123, 3123),
+            *_map('S14', 124, 3124),
+            *_map('KJA', 125, 3125),
+            *_map('PTS', 126, 3126),
+            *_map('TSM', 127, 3127),
+            *_map('SGB', 128, 3128),
+            *_map('BSR', 129, 3129),
+            *_map('PDG', 130, 3130),
+            *_map('TMG', 131, 3131),
+            *_map('CKT', 132, 3132),
+            *_map('PKG', 133, 3133),
+            *_map('RPG', 134, 3134),
+            *_map('BSY', 135, 3135),
+            *_map('TCS', 136, 3136),
+            *_map('JPP', 137, 3137),
+            *_map('WMU', 138, 3138),
+            *_map('JRT', 139, 3139),
+            *_map('CPE', 140, 3140),
+            *_map('STL', 141, 3141),
+            *_map('KBD', 142, 3142),
+            *_map('LDU', 143, 3143),
+            *_map('KHG', 144, 3144),
+            *_map('BSD', 145, 3145),
+            *_map('PSG', 146, 3146),
+            *_map('PNS', 147, 3147),
+            *_map('PJO', 148, 3148),
+            *_map('BFT', 149, 3149),
+            *_map('LMM', 150, 3150),
+            *_map('SLY', 151, 3151),
+            *_map('ATR', 152, 3152),
+            *_map('USJ', 153, 3153),
+            *_map('BSJ', 154, 3154),
+            *_map('TTJ', 155, 3155),
+            *_map('TMR', 156, 3156),
+            *_map('BPJ', 157, 3157),
+            *_map('SPL', 158, 3158),
+            *_map('RLU', 159, 3159),
+            *_map('MTH', 160, 3160),
+            *_map('DGG', 161, 3161),
+            *_map('SEA', 162, 3162),
+            *_map('JKA', 163, 3163),
+            *_map('KBS', 164, 3164),
+            *_map('TKA', 165, 3165),
+            *_map('PGG', 166, 3166),
+            *_map('BBG', 167, 3167),
+            *_map('KLC', 168, 3168),
+            *_map('CTD', 169, 3169),
+            *_map('PJA', 170, 3170),
+            *_map('JMR', 171, 3171),
+            *_map('TMJ', 172, 3172),
+            *_map('SCA', 173, 3173),
+            *_map('BBP', 174, 3174),
+            *_map('LBG', 175, 3175),
+            *_map('TPG', 176, 3176),
+            *_map('JRU', 177, 3177),
+            *_map('MIN', 178, 3178),
+            *_map('OUG', 179, 3179),
+            *_map('KBG', 180, 3180),
+            *_map('JPU', 182, 3182),
+            *_map('JCL', 183, 3183),
+            *_map('JPN', 184, 3184),
+            *_map('KCY', 185, 3185),
+            *_map('JTZ', 186, 3186),
+            *_map('PLT', 188, 3188),
+            *_map('BNH', 189, 3189),
+            *_map('BTR', 190, 3190),
+            *_map('KPT', 191, 3191),
+            *_map('MRD', 192, 3192),
+            *_map('MKH', 193, 3193),
+            *_map('SRK', 194, 3194),
+            *_map('BWK', 195, 3195),
+            *_map('JHL', 196, 3196),
+            *_map('TNM', 197, 3197),
+            *_map('TDA', 198, 3198),
+            *_map('JTH', 199, 3199),
+            *_map('PDA', 201, 3201),
+            *_map('RWG', 202, 3202),
+            *_map('SJM', 203, 3203),
+            *_map('BTW', 204, 3204),
+            *_map('SNG', 205, 3205),
+            *_map('TBM', 206, 3206),
+            *_map('BCM', 207, 3207),
+            *_map('JSI', 208, 3208),
+            *_map('STW', 209, 3209),
+            *_map('TMM', 210, 3210),
+            *_map('TPD', 211, 3211),
+            *_map('JMA', 212, 3212),
+            *_map('JKB', 213, 3213),
+            *_map('JGA', 214, 3214),
+            *_map('JKP', 215, 3215),
+            *_map('SKI', 216, 3216),
+            *_map('TMB', 217, 3217),
+            *_map('GHS', 220, 3220),
+            *_map('TSK', 221, 3221),
+            *_map('TDC', 222, 3222),
+            *_map('TRJ', 223, 3223),
+            *_map('JAH', 224, 3224),
+            *_map('TIH', 225, 3225),
+            *_map('JPR', 226, 3226),
+            *_map('KSB', 227, 3227),
+            *_map('INN', 228, 3228),
+            *_map('TSJ', 229, 3229),
+            *_map('SSH', 230, 3230),
+            *_map('BBM', 231, 3231),
+            *_map('TMD', 232, 3232),
+            *_map('BEN', 233, 3233),
+            *_map('SRM', 234, 3234),
+            *_map('SBM', 235, 3235),
+            *_map('UYB', 236, 3236),
+            *_map('KLS', 237, 3237),
+            *_map('JKT', 238, 3238),
+            *_map('KMY', 239, 3239),
+            *_map('KAP', 240, 3240),
+            *_map('DJA', 241, 3241),
+            *_map('TKK', 242, 3242),
+            *_map('KKR', 243, 3243),
+            *_map('GRT', 244, 3244),
+            *_map('BDR', 245, 3245),
+            *_map('BGH', 246, 3246),
+            *_map('BPR', 247, 3247),
+            *_map('JTS', 248, 3248),
+            *_map('TAI', 249, 3249),
+            *_map('TEA', 250, 3250),
+            *_map('KPR', 251, 3251),
+            *_map('TMA', 252, 3252),
+            *_map('JTT', 253, 3253),
+            *_map('KPH', 254, 3254),
+            *_map('SBP', 255, 3255),
+            *_map('PBR', 256, 3256),
+            *_map('RAU', 257, 3257),
+            *_map('JTA', 258, 3258),
+            *_map('SAN', 259, 3259),
+            *_map('KDN', 260, 3260),
+            *_map('GMG', 261, 3261),
+            *_map('TCT', 262, 3262),
+            *_map('BTA', 263, 3263),
+            *_map('JBH', 264, 3264),
+            *_map('JAI', 265, 3265),
+            *_map('JDK', 266, 3266),
+            *_map('TDI', 267, 3267),
+            *_map('BBT', 268, 3268),
+            *_map('MKA', 269, 3269),
+            *_map('BPI', 270, 3270),
+            *_map('LHA', 273, 3273),
+            *_map('WSU', 277, 3277),
+            *_map('JPI', 278, 3278),
+            *_map('STG', 274, 3274),
+            *_map('MSL', 275, 3275),
+            *_map('JAS', 276, 3276),
+            *_map('PTJ', 279, 3279),
+            *_map('KDA', 280, 3280),
+            *_map('PLT', 281, 3281),
+            *_map('PTT', 282, 3282),
+            *_map('PSE', 283, 3283),
+            *_map('BSP', 284, 3284),
+            *_map('BMC', 285, 3285),
+            *_map('BIH', 286, 3286),
+            *_map('SUA', 287, 3287),
+            *_map('SPT', 288, 3288),
+            *_map('TEE', 289, 3289),
+            *_map('TDY', 290, 3290),
+            *_map('BSL', 291, 3291),
+            *_map('BMJ', 292, 3292),
+            *_map('BSA', 293, 3293),
+            *_map('KKM', 294, 3294),
+            *_map('BKR', 295, 3295),
+            *_map('BJL', 296, 3296),
+            *_map('IKB', 701, 3701),
+            *_map('IPJ', 702, 3702),
+            *_map('IWS', 703, 3703),
+            *_map('IJK', 704, 3704),
         ],
     },
+
+    '$GROUPF': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('GROUP 1',
+                'BBB', 'BDA', 'BMM', 'DUA', 'IMO', 'JKL', 'JRC', 'JRL', 'JSS', 'JSB', 'JYK', 'JBU', 'KPG',
+                'KLC', 'MLK', 'PPG', 'SS2', 'SPG', 'SSA', 'SAM', 'SJA', 'TCL', 'TSA',
+            ),
+            *_map('GROUP 2',
+                'BAM', 'ASR', 'BSY', 'BSR', 'BTG', 'BPT', 'CMR', 'GRN', 'IGN', 'JIH', 'JJG', 'JBB', 'KJG',
+                'KLG', 'KBU', 'KKU', 'KTN', 'WSS', 'KLI', 'MSI', 'MLB', 'MRI', 'MUA', 'NTL', 'PDG', 'PJN',
+                'SMY', 'SRB', 'SGK', 'SKN', 'SAT', 'SBH', 'TCS', 'TMI', 'TMG', 'TMW', 'TPN',
+            ),
+            *_map('GROUP 3',
+                'BBA', 'APG', 'BHU', 'BSD', 'BKI', 'BNV', 'BTL', 'BCG', 'CAH', 'CKT', 'JPP', 'JLP', 'JLT',
+                'KBR', 'KMT', 'KJA', 'KUG', 'KKG', 'KUM', 'LBN', 'LMM', 'LDO', 'MTK', 'NLI', 'PIH', 'PRS',
+                'PJO', 'PKL', 'PKG', 'PTS', 'PSG', 'RSH', 'STL', 'S14', 'SGM', 'SKC', 'STP', 'SBU', 'SPK',
+                'SPI', 'TCY', 'TJJ', 'TSM', 'TTJ', 'TPI', 'TMH', 'TWU', 'USJ', 'UTM', 'WMU',
+            ),
+            *_map('GROUP 4',
+                'AKH', 'ATR', 'BBG', 'BBP', 'BSI', 'BPJ', 'BSJ', 'BFT', 'CLN', 'CKI', 'CTD', 'CPE', 'DGG',
+                'EDU', 'GMS', 'JKA', 'JMR', 'JRT', 'HSL', 'KHG', 'KGR', 'KNG', 'KBS', 'KBD', 'KTI', 'KKL',
+                'KKI', 'KSR', 'KTU', 'LDU', 'MCG', 'MTH', 'MSG', 'PJA', 'PPR', 'PRJ', 'PMS', 'PPH', 'PNS',
+                'PSA', 'PGG', 'PDN', 'PRA', 'PLI', 'RPJ', 'RLU', 'SDK', 'SEA', 'SGB', 'SLY', 'SMG', 'SIK',
+                'SPL', 'SCA', 'SST', 'TMJ', 'TMR', 'TPG', 'TIN', 'TML', 'TKA', 'TRI', 'GHS', 'BPI',
+            ),
+            *_map('HOE', 'HOE'),
+            *_map('GROUP 4', _OTHER),
+        ],
+    },
+
+    '$ACKNOF': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('NEF', '21930'),
+            *_map('NIF', '21940'),
+            *_map('SFT', '21960'),
+            *_map('3F', '21950'),
+            *_map('SHP', '21910', '21920'),
+            *_map('SPECIAL DEPOSIT WITHOLDING TAX', _span('32300', '32699')),
+            *_map('OTHER', _OTHER),
+        ],
+    },
+
+    'SAPROD': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('SPTFSD', 204),
+            *_map('SD    ', _OTHER),
+        ],
+    },
+
+    'CAPROD': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('OTHER',
+                104, 105, 107, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 140, 141, 142, 143,
+                144, 145, 146, 147, 148, 149, 171, 172, 173,
+            ),
+            *_map('DD   ', _OTHER),
+        ],
+    },
+
+    'ODPROD': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('OTHER',
+                104, 105, 107, 126, 127, 128, 130, 131, 132, 133, 134, 135, 136, 140, 141, 142, 143, 144,
+                145, 146, 147, 148, 149, 171, 172, 173,
+            ),
+            *_map('OD   ', _OTHER),
+        ],
+    },
+
+    'LNPROD': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('HL   ', 4, 5, 100, 101, 200, 201, 204, 205, 209, 210, 211, 212, 214, 215, 219, 220),
+            *_map('HLCAG', 225, 226),
+            *_map('FL   ', _OTHER),
+        ],
+    },
+
+    'SADPRG': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('01)RM        1.00 - RM         5.00', _span(_LOW, 5)),
+            *_map('02)RM        5.01 - RM        10.00', _span(5, 10)),
+            *_map('03)RM       10.01 - RM        50.00', _span(10, 50)),
+            *_map('04)RM       50.01 - RM       100.00', _span(50, 100)),
+            *_map('05)RM      100.01 - RM       500.00', _span(100, 500)),
+            *_map('06)RM      500.01 - RM     1,000.00', _span(500, 1000)),
+            *_map('07)RM    1,000.01 - RM     1,500.00', _span(1000, 1500)),
+            *_map('08)RM    1,500.01 - RM     2,000.00', _span(1500, 2000)),
+            *_map('09)RM    2,000.01 - RM     2,500.00', _span(2000, 2500)),
+            *_map('10)RM    2,500.01 - RM     3,000.00', _span(2500, 3000)),
+            *_map('11)RM    3,000.01 - RM     3,500.00', _span(3000, 3500)),
+            *_map('12)RM    3,500.01 - RM     4,000.00', _span(3500, 4000)),
+            *_map('13)RM    4,000.01 - RM     4,500.00', _span(4000, 4500)),
+            *_map('14)RM    4,500.01 - RM     5,000.00', _span(4500, 5000)),
+            *_map('15)RM    5,000.01 - RM     6,000.00', _span(5000, 6000)),
+            *_map('16)RM    6,000.01 - RM     7,000.00', _span(6000, 7000)),
+            *_map('17)RM    7,000.01 - RM     8,000.00', _span(7000, 8000)),
+            *_map('18)RM    8,000.01 - RM     9,000.00', _span(8000, 9000)),
+            *_map('19)RM    9,000.01 - RM    10,000.00', _span(9000, 10000)),
+            *_map('20)RM   10,000.01 - RM    15,000.00', _span(10000, 15000)),
+            *_map('21)RM   15,000.01 - RM    20,000.00', _span(15000, 20000)),
+            *_map('22)RM   20,000.01 - RM    25,000.00', _span(20000, 25000)),
+            *_map('23)RM   25,000.01 - RM    30,000.00', _span(25000, 30000)),
+            *_map('24)RM   30,000.01 - RM    35,000.00', _span(30000, 35000)),
+            *_map('25)RM   35,000.01 - RM    40,000.00', _span(35000, 40000)),
+            *_map('26)RM   40,000.01 - RM    45,000.00', _span(40000, 45000)),
+            *_map('27)RM   45,000.01 - RM    50,000.00', _span(45000, 50000)),
+            *_map('28)RM   50,000.01 - RM    55,000.00', _span(50000, 55000)),
+            *_map('29)RM   55,000.01 - RM    60,000.00', _span(55000, 60000)),
+            *_map('30)RM   60,000.01 - RM    65,000.00', _span(60000, 65000)),
+            *_map('31)RM   65,000.01 - RM    70,000.00', _span(65000, 70000)),
+            *_map('32)RM   70,000.01 - RM    75,000.00', _span(70000, 75000)),
+            *_map('33)RM   75,000.01 - RM    80,000.00', _span(75000, 80000)),
+            *_map('34)RM   80,000.01 - RM    85,000.00', _span(80000, 85000)),
+            *_map('35)RM   85,000.01 - RM    90,000.00', _span(85000, 90000)),
+            *_map('36)RM   90,000.01 - RM    95,000.00', _span(90000, 95000)),
+            *_map('37)RM   95,000.01 - RM   100,000.00', _span(95000, 100000)),
+            *_map('38)RM  100,000.01 - RM   150,000.00', _span(100000, 150000)),
+            *_map('39)RM  150,000.01 - RM   200,000.00', _span(150000, 200000)),
+            *_map('40)RM  200,000.01 - RM   300,000.00', _span(200000, 300000)),
+            *_map('41)RM  300,000.01 - RM   500,000.00', _span(300000, 500000)),
+            *_map('42)RM  500,000.01 - RM 1,000,000.00', _span(500000, 1000000)),
+            *_map('43)RM1,000,000.01 - RM 2,000,000.00', _span(1000000, 2000000)),
+            *_map('44)RM2,000,000.01 - RM 3,000,000.00', _span(2000000, 3000000)),
+            *_map('45)RM3,000,000.01 - RM 4,000,000.00', _span(3000000, 4000000)),
+            *_map('46)RM4,000,000.01 - RM 5,000,000.00', _span(4000000, 5000000)),
+            *_map('47)RM5,000,000.01 - RM10,000,000.00', _span(5000000, 10000000)),
+            *_map('48)          ABOVE RM 10,000,000.00', _span(10000000, _HIGH)),
+        ],
+    },
+
+    'SA1PRG': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('01)RM        1.00 - RM         5.00', _span(_LOW, 5)),
+            *_map('02)RM        5.01 - RM        10.00', _span(5, 10)),
+            *_map('03)RM       10.01 - RM        50.00', _span(10, 50)),
+            *_map('04)RM       50.01 - RM       100.00', _span(50, 100)),
+            *_map('05)RM      100.01 - RM       500.00', _span(100, 500)),
+            *_map('06)RM      500.01 - RM     1,000.00', _span(500, 1000)),
+            *_map('07)RM    1,000.01 - RM     1,500.00', _span(1000, 1500)),
+            *_map('08)RM    1,500.01 - RM     2,000.00', _span(1500, 2000)),
+            *_map('09)RM    2,000.01 - RM     2,500.00', _span(2000, 2500)),
+            *_map('10)RM    2,500.01 - RM     3,000.00', _span(2500, 3000)),
+            *_map('11)RM    3,000.01 - RM     3,500.00', _span(3000, 3500)),
+            *_map('12)RM    3,500.01 - RM     4,000.00', _span(3500, 4000)),
+            *_map('13)RM    4,000.01 - RM     4,500.00', _span(4000, 4500)),
+            *_map('14)RM    4,500.01 - RM     5,000.00', _span(4500, 5000)),
+            *_map('15)RM    5,000.01 - RM     6,000.00', _span(5000, 6000)),
+            *_map('16)RM    6,000.01 - RM     7,000.00', _span(6000, 7000)),
+            *_map('17)RM    7,000.01 - RM     8,000.00', _span(7000, 8000)),
+            *_map('18)RM    8,000.01 - RM     9,000.00', _span(8000, 9000)),
+            *_map('19)RM    9,000.01 - RM    10,000.00', _span(9000, 10000)),
+            *_map('20)RM   10,000.01 - RM    15,000.00', _span(10000, 15000)),
+            *_map('21)RM   15,000.01 - RM    20,000.00', _span(15000, 20000)),
+            *_map('22)RM   20,000.01 - RM    25,000.00', _span(20000, 25000)),
+            *_map('23)RM   25,000.01 - RM    30,000.00', _span(25000, 30000)),
+            *_map('24)RM   30,000.01 - RM    35,000.00', _span(30000, 35000)),
+            *_map('25)RM   35,000.01 - RM    40,000.00', _span(35000, 40000)),
+            *_map('26)RM   40,000.01 - RM    45,000.00', _span(40000, 45000)),
+            *_map('27)RM   45,000.01 - RM    50,000.00', _span(45000, 50000)),
+            *_map('28)RM   50,000.01 - RM    55,000.00', _span(50000, 55000)),
+            *_map('29)RM   55,000.01 - RM    60,000.00', _span(55000, 60000)),
+            *_map('30)RM   60,000.01 - RM    65,000.00', _span(60000, 65000)),
+            *_map('31)RM   65,000.01 - RM    70,000.00', _span(65000, 70000)),
+            *_map('32)RM   70,000.01 - RM    75,000.00', _span(70000, 75000)),
+            *_map('33)RM   75,000.01 - RM    80,000.00', _span(75000, 80000)),
+            *_map('34)RM   80,000.01 - RM    85,000.00', _span(80000, 85000)),
+            *_map('35)RM   85,000.01 - RM    90,000.00', _span(85000, 90000)),
+            *_map('36)RM   90,000.01 - RM    95,000.00', _span(90000, 95000)),
+            *_map('37)RM   95,000.01 - RM   100,000.00', _span(95000, 100000)),
+            *_map('38)RM  100,000.01 - RM   150,000.00', _span(100000, 150000)),
+            *_map('39)RM  150,000.01 - RM   200,000.00', _span(150000, 200000)),
+            *_map('40)RM  200,000.01 - RM   300,000.00', _span(200000, 300000)),
+            *_map('41)RM  300,000.01 - RM   350,000.00', _span(300000, 350000)),
+            *_map('42)RM  350,000.01 - RM   360,000.00', _span(350000, 360000)),
+            *_map('43)RM  360,000.01 - RM   500,000.00', _span(360000, 500000)),
+            *_map('44)RM  500,000.01 - RM   510,000.00', _span(500000, 510000)),
+            *_map('45)RM  510,000.01 - RM   550,000.00', _span(510000, 550000)),
+            *_map('46)RM  550,000.01 - RM   850,000.00', _span(550000, 850000)),
+            *_map('47)RM  850,000.01 - RM   860,000.00', _span(850000, 860000)),
+            *_map('48)RM  860,000.01 - RM 1,000,000.00', _span(860000, 1000000)),
+            *_map('49)RM1,000,000.01 - RM 2,000,000.00', _span(1000000, 2000000)),
+            *_map('50)RM2,000,000.01 - RM 3,000,000.00', _span(2000000, 3000000)),
+            *_map('51)RM3,000,000.01 - RM 4,000,000.00', _span(3000000, 4000000)),
+            *_map('52)RM4,000,000.01 - RM 5,000,000.00', _span(4000000, 5000000)),
+            *_map('53)RM5,000,000.01 - RM10,000,000.00', _span(5000000, 10000000)),
+            *_map('54)          ABOVE RM 10,000,000.00', _span(10000000, _HIGH)),
+        ],
+    },
+
+    'SA2PRG': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('ZERO BALANCE                             ', _span(_LOW, 0)),
+            *_map('01)RM              1.00 - RM         5.00', _span(0, 5)),
+            *_map('02)ABOVE RM        5.00 - RM        10.00', _span(5, 10)),
+            *_map('03)ABOVE RM       10.00 - RM        50.00', _span(10, 50)),
+            *_map('04)ABOVE RM       50.00 - RM       100.00', _span(50, 100)),
+            *_map('05)ABOVE RM      100.00 - RM       500.00', _span(100, 500)),
+            *_map('06)ABOVE RM      500.00 - RM     1,000.00', _span(500, 1000)),
+            *_map('07)ABOVE RM    1,000.00 - RM     1,500.00', _span(1000, 1500)),
+            *_map('08)ABOVE RM    1,500.00 - RM     2,000.00', _span(1500, 2000)),
+            *_map('09)ABOVE RM    2,000.00 - RM     2,500.00', _span(2000, 2500)),
+            *_map('10)ABOVE RM    2,500.00 - RM     3,000.00', _span(2500, 3000)),
+            *_map('11)ABOVE RM    3,000.00 - RM     3,500.00', _span(3000, 3500)),
+            *_map('12)ABOVE RM    3,500.00 - RM     4,000.00', _span(3500, 4000)),
+            *_map('13)ABOVE RM    4,000.00 - RM     4,500.00', _span(4000, 4500)),
+            *_map('14)ABOVE RM    4,500.00 - RM     5,000.00', _span(4500, 5000)),
+            *_map('15)ABOVE RM    5,000.00 - RM     6,000.00', _span(5000, 6000)),
+            *_map('16)ABOVE RM    6,000.00 - RM     7,000.00', _span(6000, 7000)),
+            *_map('17)ABOVE RM    7,000.00 - RM     8,000.00', _span(7000, 8000)),
+            *_map('18)ABOVE RM    8,000.00 - RM     9,000.00', _span(8000, 9000)),
+            *_map('19)ABOVE RM    9,000.00 - RM    10,000.00', _span(9000, 10000)),
+            *_map('20)ABOVE RM   10,000.00 - RM    15,000.00', _span(10000, 15000)),
+            *_map('21)ABOVE RM   15,000.00 - RM    20,000.00', _span(15000, 20000)),
+            *_map('22)ABOVE RM   20,000.00 - RM    25,000.00', _span(20000, 25000)),
+            *_map('23)ABOVE RM   25,000.00 - RM    30,000.00', _span(25000, 30000)),
+            *_map('24)ABOVE RM   30,000.00 - RM    35,000.00', _span(30000, 35000)),
+            *_map('25)ABOVE RM   35,000.00 - RM    40,000.00', _span(35000, 40000)),
+            *_map('26)ABOVE RM   40,000.00 - RM    45,000.00', _span(40000, 45000)),
+            *_map('27)ABOVE RM   45,000.00 - RM    50,000.00', _span(45000, 50000)),
+            *_map('28)ABOVE RM   50,000.00 - RM    55,000.00', _span(50000, 55000)),
+            *_map('29)ABOVE RM   55,000.00 - RM    60,000.00', _span(55000, 60000)),
+            *_map('30)ABOVE RM   60,000.00 - RM    65,000.00', _span(60000, 65000)),
+            *_map('31)ABOVE RM   65,000.00 - RM    70,000.00', _span(65000, 70000)),
+            *_map('32)ABOVE RM   70,000.00 - RM    75,000.00', _span(70000, 75000)),
+            *_map('33)ABOVE RM   75,000.00 - RM    80,000.00', _span(75000, 80000)),
+            *_map('34)ABOVE RM   80,000.00 - RM    85,000.00', _span(80000, 85000)),
+            *_map('35)ABOVE RM   85,000.00 - RM    90,000.00', _span(85000, 90000)),
+            *_map('36)ABOVE RM   90,000.00 - RM    95,000.00', _span(90000, 95000)),
+            *_map('37)ABOVE RM   95,000.00 - RM   100,000.00', _span(95000, 100000)),
+            *_map('38)ABOVE RM  100,000.00 - RM   150,000.00', _span(100000, 150000)),
+            *_map('39)ABOVE RM  150,000.00 - RM   200,000.00', _span(150000, 200000)),
+            *_map('40)ABOVE RM  200,000.00 - RM   300,000.00', _span(200000, 300000)),
+            *_map('41)ABOVE RM  300,000.00 - RM   350,000.00', _span(300000, 350000)),
+            *_map('42)ABOVE RM  350,000.00 - RM   360,000.00', _span(350000, 360000)),
+            *_map('43)ABOVE RM  360,000.00 - RM   500,000.00', _span(360000, 500000)),
+            *_map('44)ABOVE RM  500,000.00 - RM   510,000.00', _span(500000, 510000)),
+            *_map('45)ABOVE RM  510,000.00 - RM   550,000.00', _span(510000, 550000)),
+            *_map('46)ABOVE RM  550,000.00 - RM   600,000.00', _span(550000, 600000)),
+            *_map('47)ABOVE RM  600,000.00 - RM   700,000.00', _span(600000, 700000)),
+            *_map('48)ABOVE RM  700,000.00 - RM   800,000.00', _span(700000, 800000)),
+            *_map('49)ABOVE RM  800,000.00 - RM   850,000.00', _span(800000, 850000)),
+            *_map('50)ABOVE RM  850,000.00 - RM   860,000.00', _span(850000, 860000)),
+            *_map('51)ABOVE RM  860,000.00 - RM   900,000.00', _span(860000, 900000)),
+            *_map('52)ABOVE RM  900,000.00 - RM 1,000,000.00', _span(900000, 1000000)),
+            *_map('53)ABOVE RM1,000,000.00 - RM 1,100,000.00', _span(1000000, 1100000)),
+            *_map('54)ABOVE RM1,100,000.00 - RM 1,200,000.00', _span(1100000, 1200000)),
+            *_map('55)ABOVE RM1,200,000.00 - RM 1,300,000.00', _span(1200000, 1300000)),
+            *_map('56)ABOVE RM1,300,000.00 - RM 1,400,000.00', _span(1300000, 1400000)),
+            *_map('57)ABOVE RM1,400,000.00 - RM 1,500,000.00', _span(1400000, 1500000)),
+            *_map('58)ABOVE RM1,500,000.00 - RM 1,600,000.00', _span(1500000, 1600000)),
+            *_map('59)ABOVE RM1,600,000.00 - RM 1,700,000.00', _span(1600000, 1700000)),
+            *_map('60)ABOVE RM1,700,000.00 - RM 1,800,000.00', _span(1700000, 1800000)),
+            *_map('61)ABOVE RM1,800,000.00 - RM 1,900,000.00', _span(1800000, 1900000)),
+            *_map('62)ABOVE RM1,900,000.00 - RM 2,000,000.00', _span(1900000, 2000000)),
+            *_map('63)ABOVE RM2,000,000.00 - RM 3,000,000.00', _span(2000000, 3000000)),
+            *_map('64)ABOVE RM3,000,000.00 - RM 4,000,000.00', _span(3000000, 4000000)),
+            *_map('65)ABOVE RM4,000,000.00 - RM 5,000,000.00', _span(4000000, 5000000)),
+            *_map('66)ABOVE RM5,000,000.00 - RM10,000,000.00', _span(5000000, 10000000)),
+            *_map('67)                ABOVE RM 10,000,000.00', _span(10000000, _HIGH)),
+        ],
+    },
+
+    'SA3PRG': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('01)NEGATIVE BALANCE                      ', _span(_LOW, 0, exclude_end=True)),
+            *_map('02)ZERO BALANCE                          ', 0),
+            *_map('03)ABOVE RM        0.00 - RM         5.00', _span(0, 5, exclude_start=True)),
+            *_map('04)ABOVE RM        5.00 - RM        10.00', _span(5, 10, exclude_start=True)),
+            *_map('05)ABOVE RM       10.00 - RM        50.00', _span(10, 50, exclude_start=True)),
+            *_map('06)ABOVE RM       50.00 - RM       100.00', _span(50, 100, exclude_start=True)),
+            *_map('07)ABOVE RM      100.00 - RM       500.00', _span(100, 500, exclude_start=True)),
+            *_map('08)ABOVE RM      500.00 - RM     1,000.00', _span(500, 1000, exclude_start=True)),
+            *_map('09)ABOVE RM    1,000.00 - RM     1,500.00', _span(1000, 1500, exclude_start=True)),
+            *_map('10)ABOVE RM    1,500.00 - RM     2,000.00', _span(1500, 2000, exclude_start=True)),
+            *_map('11)ABOVE RM    2,000.00 - RM     2,500.00', _span(2000, 2500, exclude_start=True)),
+            *_map('12)ABOVE RM    2,500.00 - RM     3,000.00', _span(2500, 3000, exclude_start=True)),
+            *_map('13)ABOVE RM    3,000.00 - RM     3,500.00', _span(3000, 3500, exclude_start=True)),
+            *_map('14)ABOVE RM    3,500.00 - RM     4,000.00', _span(3500, 4000, exclude_start=True)),
+            *_map('15)ABOVE RM    4,000.00 - RM     4,500.00', _span(4000, 4500, exclude_start=True)),
+            *_map('16)ABOVE RM    4,500.00 - RM     5,000.00', _span(4500, 5000, exclude_start=True)),
+            *_map('17)ABOVE RM    5,000.00 - RM     6,000.00', _span(5000, 6000, exclude_start=True)),
+            *_map('18)ABOVE RM    6,000.00 - RM     7,000.00', _span(6000, 7000, exclude_start=True)),
+            *_map('19)ABOVE RM    7,000.00 - RM     8,000.00', _span(7000, 8000, exclude_start=True)),
+            *_map('20)ABOVE RM    8,000.00 - RM     9,000.00', _span(8000, 9000, exclude_start=True)),
+            *_map('21)ABOVE RM    9,000.00 - RM    10,000.00', _span(9000, 10000, exclude_start=True)),
+            *_map('22)ABOVE RM   10,000.00 - RM    15,000.00', _span(10000, 15000, exclude_start=True)),
+            *_map('23)ABOVE RM   15,000.00 - RM    20,000.00', _span(15000, 20000, exclude_start=True)),
+            *_map('24)ABOVE RM   20,000.00 - RM    25,000.00', _span(20000, 25000, exclude_start=True)),
+            *_map('25)ABOVE RM   25,000.00 - RM    30,000.00', _span(25000, 30000, exclude_start=True)),
+            *_map('26)ABOVE RM   30,000.00 - RM    35,000.00', _span(30000, 35000, exclude_start=True)),
+            *_map('27)ABOVE RM   35,000.00 - RM    40,000.00', _span(35000, 40000, exclude_start=True)),
+            *_map('28)ABOVE RM   40,000.00 - RM    45,000.00', _span(40000, 45000, exclude_start=True)),
+            *_map('29)ABOVE RM   45,000.00 - RM    50,000.00', _span(45000, 50000, exclude_start=True)),
+            *_map('30)ABOVE RM   50,000.00 - RM    55,000.00', _span(50000, 55000, exclude_start=True)),
+            *_map('31)ABOVE RM   55,000.00 - RM    60,000.00', _span(55000, 60000, exclude_start=True)),
+            *_map('32)ABOVE RM   60,000.00 - RM    65,000.00', _span(60000, 65000, exclude_start=True)),
+            *_map('33)ABOVE RM   65,000.00 - RM    70,000.00', _span(65000, 70000, exclude_start=True)),
+            *_map('34)ABOVE RM   70,000.00 - RM    75,000.00', _span(70000, 75000, exclude_start=True)),
+            *_map('35)ABOVE RM   75,000.00 - RM    80,000.00', _span(75000, 80000, exclude_start=True)),
+            *_map('36)ABOVE RM   80,000.00 - RM    85,000.00', _span(80000, 85000, exclude_start=True)),
+            *_map('37)ABOVE RM   85,000.00 - RM    90,000.00', _span(85000, 90000, exclude_start=True)),
+            *_map('38)ABOVE RM   90,000.00 - RM    95,000.00', _span(90000, 95000, exclude_start=True)),
+            *_map('39)ABOVE RM   95,000.00 - RM   100,000.00', _span(95000, 100000, exclude_start=True)),
+            *_map('40)ABOVE RM  100,000.00 - RM   150,000.00', _span(100000, 150000, exclude_start=True)),
+            *_map('41)ABOVE RM  150,000.00 - RM   200,000.00', _span(150000, 200000, exclude_start=True)),
+            *_map('42)ABOVE RM  200,000.00 - RM   300,000.00', _span(200000, 300000, exclude_start=True)),
+            *_map('43)ABOVE RM  300,000.00 - RM   350,000.00', _span(300000, 350000, exclude_start=True)),
+            *_map('44)ABOVE RM  350,000.00 - RM   360,000.00', _span(350000, 360000, exclude_start=True)),
+            *_map('45)ABOVE RM  360,000.00 - RM   500,000.00', _span(360000, 500000, exclude_start=True)),
+            *_map('46)ABOVE RM  500,000.00 - RM   510,000.00', _span(500000, 510000, exclude_start=True)),
+            *_map('47)ABOVE RM  510,000.00 - RM   550,000.00', _span(510000, 550000, exclude_start=True)),
+            *_map('48)ABOVE RM  550,000.00 - RM   850,000.00', _span(550000, 850000, exclude_start=True)),
+            *_map('49)ABOVE RM  850,000.00 - RM   860,000.00', _span(850000, 860000, exclude_start=True)),
+            *_map('50)ABOVE RM  860,000.00 - RM  1000,000.00', _span(860000, 1000000, exclude_start=True)),
+            *_map('51)ABOVE RM 1000,000.00 - RM  2000,000.00', _span(1000000, 2000000, exclude_start=True)),
+            *_map('52)ABOVE RM 2000,000.00 - RM  3000,000.00', _span(2000000, 3000000, exclude_start=True)),
+            *_map('53)ABOVE RM 3000,000.00 - RM  4000,000.00', _span(3000000, 4000000, exclude_start=True)),
+            *_map('54)ABOVE RM 4000,000.00 - RM  5000,000.00', _span(4000000, 5000000, exclude_start=True)),
+            *_map('55)ABOVE RM 5000,000.00 - RM10,000,000.00', _span(5000000, 10000000, exclude_start=True)),
+            *_map('56)ABOVE RM 10,000,000.00                ', _span(10000000, _HIGH, exclude_start=True)),
+        ],
+    },
+
+    'PROFNORM': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('1)UP TO RM 5,000.00', _span(_LOW, 5000)),
+            *_map('2)UP TO RM10,000.00', _span(5000, 10000)),
+            *_map('3)UP TO RM30,000.00', _span(10000, 30000)),
+            *_map('4)UP TO RM50,000.00', _span(30000, 50000)),
+            *_map('5)UP TO RM75,000.00', _span(50000, 75000)),
+            *_map('6)ABOVE RM75,000.00', _span(75000, _HIGH)),
+        ],
+    },
+
+    'SEXNORM': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('1)BELOW 12 YRS', _span(_LOW, 12)),
+            *_map('2)12 - 18 YRS', _span(12, 18)),
+            *_map('3)18 - 50 YRS', _span(18, 50)),
+            *_map('4)50 YRS AND ABOVE', _span(50, _HIGH)),
+        ],
+    },
+
+    'PROFYAA': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('1)BELOW RM   500.00', _span(_LOW, 500)),
+            *_map('2)UP TO RM 2,000.00', _span(500, 2000)),
+            *_map('3)UP TO RM 5,000.00', _span(2000, 5000)),
+            *_map('4)UP TO RM10,000.00', _span(5000, 10000)),
+            *_map('5)UP TO RM30,000.00', _span(10000, 30000)),
+            *_map('6)UP TO RM50,000.00', _span(30000, 50000)),
+            *_map('7)UP TO RM75,000.00', _span(50000, 75000)),
+            *_map('8)ABOVE RM75,000.00', _span(75000, _HIGH)),
+        ],
+    },
+
+    'SEXYW': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('1)BELOW 12 YRS', _span(_LOW, 12)),
+            *_map('2)12 - 18 YRS', _span(12, 18)),
+        ],
+    },
+
+    'PROFPLUS': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('1)UP TO RM 2,000.00', _span(_LOW, 2000)),
+            *_map('1)UP TO RM 5,000.00', _span(2000, 5000)),
+            *_map('2)UP TO RM10,000.00', _span(5000, 10000)),
+            *_map('3)UP TO RM30,000.00', _span(10000, 30000)),
+            *_map('4)UP TO RM50,000.00', _span(30000, 50000)),
+            *_map('5)UP TO RM75,000.00', _span(50000, 75000)),
+            *_map('6)ABOVE RM75,000.00', _span(75000, _HIGH)),
+        ],
+    },
+
+    'PROFWISE': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('1)UP TO RM 5,000.00', _span(_LOW, 5000)),
+            *_map('2)UP TO RM10,000.00', _span(5000, 10000)),
+            *_map('3)UP TO RM20,000.00', _span(10000, 20000)),
+            *_map('4)UP TO RM30,000.00', _span(20000, 30000)),
+            *_map('5)UP TO RM50,000.00', _span(30000, 50000)),
+            *_map('6)ABOVE RM50,000.00', _span(50000, _HIGH)),
+        ],
+    },
+
+    'SDNAME': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('PLUS SAVING', 200),
+            *_map('STAFF', 201),
+            *_map('YOUNG ACHIEVER', 202),
+            *_map('50 PLUS', 203),
+            *_map('AL-WADIAH', 204),
+            *_map('BASIC SAVING', 205),
+            *_map('BASIC 55 SAVING', 206),
+            *_map('PB BRIGHT STAR SA', 208),
+            *_map('PB MYSALARY SA', 210),
+            *_map('WISE', 212),
+            *_map('PB SAVELINK', 213),
+            *_map('BESTARI SAVING', 214),
+            *_map('STAFF WADIAH', 215),
+            *_map('PB UNIONPAY SA', 216),
+            *_map('STAFF MONEYPLUS SA', 227),
+            *_map('MONEYPLUS SA', 228),
+            *_map('GIA', 480),
+            *_map('STAFF GIA', 481),
+        ],
+    },
+
+    '$RACE': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('OTHERS', '0'),
+            *_map('MALAY', '1'),
+            *_map('CHINESE', '2'),
+            *_map('INDIAN', '3'),
+            *_map('OTHERS', _OTHER),
+        ],
+    },
+
+    'CADPRG': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map(' 1)         RM0 -     RM1,000', 1000),
+            *_map(' 2)     RM1,001 -     RM2,000', 2000),
+            *_map(' 3)     RM2,001 -     RM2,500', 2500),
+            *_map(' 4)     RM2,501 -     RM5,000', 3000, 5000),
+            *_map(' 5)     RM5,001 -    RM10,000', 10000),
+            *_map(' 6)    RM10,001 -    RM20,000', 20000),
+            *_map(' 7)    RM20,001 -    RM30,000', 30000),
+            *_map(' 8)    RM30,001 -    RM40,000', 40000),
+            *_map(' 9)    RM40,001 -    RM50,000', 50000),
+            *_map('10)   RM50,001 -   RM100,000', 75000, 100000),
+            *_map('11)  RM100,001 -   RM150,000', 150000),
+            *_map('12)  RM150,001 -   RM200,000', 200000),
+            *_map('13)  RM200,001 -   RM250,000', 250000),
+            *_map('14)  RM250,001 -   RM500,000', 500000),
+            *_map('15)  RM500,001 - RM1,000,000', 1000000),
+            *_map('16)RM1,000,001 - RM2,000,000', 2000000),
+            *_map('17)RM2,000,001 - RM3,000,000', 3000000),
+            *_map('18)RM3,000,001 - RM4,000,000', 4000000),
+            *_map('19)RM4,000,001 - RM5,000,000', 5000000),
+            *_map('20)RM5,000,001 AND ABOVE', _OTHER),
+        ],
+    },
+
+    'ICADPRG': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map(' 1)     BELOW  RM2,000', 1000, 2000),
+            *_map(' 2) RM2,000 -  RM3,000', 2500, 3000),
+            *_map(' 3) RM3,000 -  RM5,000', 5000),
+            *_map(' 4) RM5,000 -  RM10,000', 10000),
+            *_map(' 5) RM10,000 - RM30,000', 20000, 30000),
+            *_map(' 6) RM30,000 - RM50,000', 40000, 50000),
+            *_map(' 7) RM50,000 - RM75,000', 75000),
+            *_map(' 8) RM75,000 - RM100,000', 100000),
+            *_map(' 9) RM100,000 -  RM150,000', 150000),
+            *_map('10) RM150,000 -  RM200,000', 200000),
+            *_map('11) RM200,000 AND ABOVE', _OTHER),
+        ],
+    },
+
+    '$CPARTYF': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('01', '01'),
+            *_map('10', '02', '03'),
+            *_map('20', '04', '05', '06'),
+            *_map('10', '10', '11', '12'),
+            *_map('20', '13', '15', '17', '20', '30', '32', '33', '34', '35', '36', '37', '38', '39', '40'),
+            *_map('60', '50', '57', '59', '60', '61', '62', '63', '64', '65', '66', '67', '68', '69'),
+            *_map('70', '70', '71', '72', '73', '74'),
+            *_map('60', '75'),
+            *_map('76', '76', '77', '78'),
+            *_map('79', '79'),
+            *_map('80', '80', '81', '85', '86', '90', '91', '92', '95', '96', '98', '99'),
+            *_map('76', _OTHER),
+        ],
+    },
+
+    '$CPARTY': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('BANK NEGARA MALAYSIA', '01'),
+            *_map('DOMESTIC BANKING INSTITUTION', '10'),
+            *_map('DOMESTIC NON-BANK FI', '20'),
+            *_map('DOMESTIC BUSINESS ENTERPRISES', '60'),
+            *_map('GOVERNMENT', '70'),
+            *_map('INDIVIDUALS', '76'),
+            *_map('DOMESTIC OTHER ENTITIES NIE', '79'),
+            *_map('NON RESIDENTS/FOREIGN ENTITIES', '80'),
+        ],
+    },
+
+    '$PURPOSE': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('PERSONAL', '1'),
+            *_map('JOINT', '2'),
+            *_map('PERSONAL', '4'),
+            *_map('OTHERS  ', _OTHER),
+        ],
+    },
+
+    'CARANGED': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map(' 1)         BELOW RM2,000', 2000),
+            *_map(' 2)     RM2,000 - RM3,000', 3000),
+            *_map(' 3)     RM3,000 - RM5,000', 5000),
+            *_map(' 4)    RM5,000 - RM10,000', 10000),
+            *_map(' 5)   RM10,000 - RM30,000', 30000),
+            *_map(' 6)   RM30,000 - RM50,000', 50000),
+            *_map(' 7)   RM50,000 - RM75,000', 75000),
+            *_map(' 8)  RM75,000 - RM100,000', 100000),
+            *_map(' 9) RM100,000 - RM150,000', 150000),
+            *_map('10) RM150,000 - RM200,000', 200000),
+            *_map('11) RM200,000 AND ABOVE  ', 200001),
+        ],
+    },
+
+    'PROD': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('ACE ACCOUNT', 150),
+            *_map('AL-WADIAH CURRENT A/C', 160),
+        ],
+    },
+
+    'AGEDESC': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('WITHOUT BIRTHDATE', 0),
+            *_map('BELOW 12 YEARS', {'macro': 'AGEBELOW'}),
+            *_map('12 TO BELOW 18 YEARS', {'macro': 'AGELIMIT'}),
+            *_map('18 AND ABOVE', {'macro': 'MAXAGE'}),
+        ],
+    },
+
+    '$STATE': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('PERAK', 'A'),
+            *_map('SELANGOR', 'B'),
+            *_map('PAHANG', 'C'),
+            *_map('KELANTAN', 'D'),
+            *_map('JOHOR', 'J'),
+            *_map('KEDAH', 'K'),
+            *_map('LABUAN', 'L'),
+            *_map('MELAKA', 'M'),
+            *_map('NEGERI SEMBILAN', 'N'),
+            *_map('PULAU PINANG', 'P'),
+            *_map('SARAWAK', 'Q'),
+            *_map('PERLIS', 'R'),
+            *_map('SABAH', 'S'),
+            *_map('TERENGGANU', 'T'),
+            *_map('WILAYAH PERSEKUTUAN', 'W'),
+        ],
+    },
+
     'FDPROD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_FDPROD_MAPPINGS, _FDPROD_OTHER),
-    },
-    'FDPRODD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_FDPRODD_MAPPINGS, _FDPRODD_OTHER),
-    },
-    'FDPRD': {
-        'kind': 'VALUE',
-        'rules': [
-            *_map('N', *[_span(a, b) for a, b in _FDPRD_NORMAL_RANGES],
-                  *sorted(_FDPRD_NORMAL_SINGLES)),
-            *_map('L', *[_span(a, b) for a, b in _FDPRD_LIFE_RANGES]),
-            *_map('M', *[_span(a, b) for a, b in _FDPRD_MGIA_RANGES]),
+        "kind": 'VALUE',
+        "rules": [
+            *_map('1 MONTH', 340),
+            *_map('3 MONTHS', 341),
+            *_map('6 MONTHS', 342),
+            *_map('9 MONTHS', 343),
+            *_map('12 MONTHS', 344),
+            *_map('15 MONTHS', 345),
+            *_map('18 MONTHS', 346),
+            *_map('21 MONTHS', 347),
+            *_map('24 MONTHS', 348),
+            *_map('36 MONTHS', 349),
+            *_map('48 MONTHS', 350),
+            *_map('60 MONTHS', 351),
             *_map(' ', _OTHER),
         ],
     },
-    'FCYTERM': {
-        'kind': 'INVALUE',
-        'rules': [
-            *_map(1, *sorted(_FCYTERM_1_MONTH)),
-            *_map(3, *sorted(_FCYTERM_3_MONTHS)),
-            *_map(6, *sorted(_FCYTERM_6_MONTHS)),
-            *_map(12, *sorted(_FCYTERM_12_MONTHS)),
+
+    'IBWRNGE': {
+        "kind": 'INVALUE',
+        "rules": [
+            *_map(10000, _span(_LOW, 10000)),
+            *_map(30000, _span(10000, 30000)),
+            *_map(50000, _span(30000, 50000)),
+            *_map(75000, _span(50000, 75000)),
+            *_map(100000, _span(75000, 100000)),
+            *_map(100001, _span(100000, _HIGH)),
         ],
     },
-    'CADENOM': {
-        'kind': 'VALUE',
-        'rules': [*_map('I', *sorted(_CADENOM_ISLAMIC)), *_map('D', _OTHER)],
-    },
-    'CAPROD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_CAPROD_MAPPINGS, _CAPROD_OTHER),
-    },
-    'DPCUSTCD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_DPCUSTCD_MAPPINGS, _DPCUSTCD_OTHER),
-    },
-    'SACUSTCD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_SACUSTCD_MAPPINGS, _SACUSTCD_OTHER),
-    },
-    'FDCUSTCD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_FDCUSTCD_MAPPINGS, _FDCUSTCD_OTHER),
-    },
-    'IFDCUSCD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_FDCUSTCD_MAPPINGS, _FDCUSTCD_OTHER),
-    },
-    'DDCUSTCD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_DDCUSTCD_MAPPINGS, _DDCUSTCD_OTHER),
-    },
-    'STATECD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_STATECD_MAPPINGS, _STATECD_OTHER),
-    },
-    'FDORGMT': {
-        'kind': 'VALUE',
-        'rules': _rules_from_buckets(_FDORGMT_BOUNDS, _FDORGMT_CODES, _FDORGMT_HIGH),
-    },
-    'FDRMMT': {
-        'kind': 'VALUE',
-        'rules': _rules_from_buckets(_FDRMMT_BOUNDS, _FDRMMT_CODES, _FDRMMT_HIGH),
-    },
-    'RMFDORGMT': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_RMFDORGMT_MAPPINGS),
-    },
-    'SDRANGE': {
-        'kind': 'INVALUE',
-        'rules': _rules_from_buckets(_SDRANGE_BOUNDS, _SDRANGE_BOUNDS, _SDRANGE_HIGH),
-    },
-    'S1RANGE': {
-        'kind': 'INVALUE',
-        'rules': _rules_from_buckets(_S1RANGE_BOUNDS, _S1RANGE_BOUNDS, _S1RANGE_HIGH),
-    },
-    'S2RANGE': {
-        'kind': 'INVALUE',
-        'rules': _rules_from_buckets(_S2RANGE_BOUNDS, _S2RANGE_BOUNDS, _S2RANGE_HIGH),
-    },
-    'DDRANGE': {
-        'kind': 'INVALUE',
-        'rules': _rules_from_buckets(_DDRANGE_BOUNDS, _DDRANGE_BOUNDS, _DDRANGE_HIGH),
-    },
-    '$RACE': {
-        'kind': 'VALUE',
-        'rules': [
-            *_map('0', '0'),
-            *_map('1', '1'),
-            *_map('2', '2'),
-            *_map('3', '3'),
-            *_map('0', _OTHER),
+
+    'CARANGE': {
+        "kind": 'INVALUE',
+        "rules": [
+            *_map(2000, _span(_LOW, 2000)),
+            *_map(3000, _span(2000, 3000)),
+            *_map(5000, _span(3000, 5000)),
+            *_map(10000, _span(5000, 10000)),
+            *_map(30000, _span(10000, 30000)),
+            *_map(50000, _span(30000, 50000)),
+            *_map(75000, _span(50000, 75000)),
+            *_map(100000, _span(75000, 100000)),
+            *_map(150000, _span(100000, 150000)),
+            *_map(200000, _span(150000, 200000)),
+            *_map(200001, _span(200000, _HIGH)),
         ],
     },
-    'BRANCHCD': {
-        'kind': 'VALUE',
-        'rules': _rules_from_mapping(_BRANCHCD_MAPPINGS, _BRANCHCD_OTHER),
+
+    'ISARANGE': {
+        "kind": 'INVALUE',
+        "rules": [
+            *_map(1000, _span(_LOW, 1000)),
+            *_map(5000, _span(1000, 5000)),
+            *_map(25000, _span(5000, 25000)),
+            *_map(50000, _span(25000, 50000)),
+            *_map(50001, _span(50000, _HIGH)),
+        ],
     },
+
+    'ISARANGD': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map(' 1)       BELOW RM1,000', 1000),
+            *_map(' 2)   RM1,000 - RM5,000', 5000),
+            *_map(' 3)  RM5,000 - RM25,000', 25000),
+            *_map(' 4) RM25,000 - RM50,000', 50000),
+            *_map(' 5) RM50,000 AND ABOVE ', 50001),
+        ],
+    },
+
+    'IWSRNGE': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map(' 1) UP TO   RM  3,000', _span(_LOW, 3001, exclude_end=True)),
+            *_map(' 2) UP TO   RM 10,000', _span(3001, 10001, exclude_end=True)),
+            *_map(' 3) UP TO   RM 30,000', _span(10001, 30001, exclude_end=True)),
+            *_map(' 4) UP TO   RM 50,000', _span(30001, 50001, exclude_end=True)),
+            *_map(' 5) UP TO   RM 75,000', _span(50001, 75001, exclude_end=True)),
+            *_map(' 6) UP TO   RM100,000', _span(75001, 100001, exclude_end=True)),
+            *_map(' 7) ABOVE RM100,000  ', _span(100001, _HIGH)),
+        ],
+    },
+
+    'IWSRNGX': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map(' 1) FIRST RM  5,000', _span(_LOW, 5000)),
+            *_map(' 2) NEXT  RM  5,000', _span(5000, 10000)),
+            *_map(' 3) NEXT  RM 40,000', _span(10000, 50000)),
+            *_map(' 4) NEXT  RM100,000', _span(50000, 150000)),
+            *_map(' 5) NEXT  RM200,000', _span(150000, 350000)),
+            *_map(' 6) NEXT  RM300,000', _span(350000, 650000)),
+            *_map(' 6) NEXT  RM550,000', _span(650000, 1200000)),
+            *_map(' 7) THEREAFTER     ', _span(1200000, _HIGH)),
+        ],
+    },
+
+    'IBWSRNGD': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map(' 1) UP TO   RM 10,000', _span(_LOW, 10001, exclude_end=True)),
+            *_map(' 2) UP TO   RM 30,000', _span(10001, 30001, exclude_end=True)),
+            *_map(' 3) UP TO   RM 50,000', _span(30001, 50001, exclude_end=True)),
+            *_map(' 4) UP TO   RM 75,000', _span(50001, 75001, exclude_end=True)),
+            *_map(' 5) UP TO   RM100,000', _span(75001, 100001, exclude_end=True)),
+            *_map(' 6) ABOVE RM100,000  ', _span(100001, _HIGH)),
+        ],
+    },
+
+    'HUNDRED': {
+        "kind": 'PICTURE',
+        "rules": [
+            *_map('0,000,009.99', _span(_LOW, 0, exclude_end=True), options={'PREFIX': '-', 'MULT': 1}),
+            *_map('0,000,009.99', _span(0, _HIGH), options={'MULT': 1}),
+        ],
+    },
+
+    'THOUSAND': {
+        "kind": 'PICTURE',
+        "rules": [
+            *_map('0,000,000,009', _span(_LOW, 0, exclude_end=True), options={'PREFIX': '-', 'MULT': 0.001}),
+            *_map('0,000,000,009', _span(0, _HIGH), options={'MULT': 0.001}),
+        ],
+    },
+
+    'MILLION': {
+        "kind": 'PICTURE',
+        "rules": [
+            *_map('0,000,000,009', _span(_LOW, 0, exclude_end=True), options={'PREFIX': '-', 'MULT': 1e-06}),
+            *_map('0,000,000,009', _span(0, _HIGH), options={'MULT': 1e-06}),
+        ],
+    },
+
+    'LNPOGRP': {
+        "kind": 'VALUE',
+        "rules": [
+            *_map('01-SELANGOR/WILAYAH REG.   I',
+                2, 3, 22, 46, 53, 56, 120, 129, 136, 169, 170, 173, 196, 226, 232, 252, 262, 802, 811, 818,
+                284, 285, 291,
+            ),
+            *_map('02-SELANGOR/WILAYAH REG.  II',
+                15, 29, 40, 41, 66, 83, 96, 97, 101, 103, 118, 128, 141, 151, 195, 197, 248, 269, 701, 812,
+                821, 822,
+            ),
+            *_map('03-SELANGOR/WILAYAH REG. III',
+                18, 19, 35, 36, 81, 124, 125, 131, 135, 145, 148, 162, 167, 180, 220, 241, 267, 280, 292,
+                295, 815, 816,
+            ),
+            *_map('04-SOUTHERN REGION I       ',
+                7, 37, 52, 59, 61, 79, 87, 89, 91, 93, 102, 105, 110, 144, 147, 174, 176, 216, 217, 222, 234,
+                286, 287, 290, 804, 805,
+            ),
+            *_map('05-CENTRAL REGION           ',
+                5, 9, 49, 51, 67, 71, 76, 80, 85, 95, 123, 137, 146, 152, 158, 207, 208, 209, 210, 244, 245,
+                251, 809, 823,
+            ),
+            *_map('06-SARAWAK REGION           ',
+                32, 50, 58, 90, 130, 175, 183, 184, 185, 186, 189, 190, 191, 192, 193, 194, 259, 813, 273,
+                274, 275, 281,
+            ),
+            *_map('07-SABAH REGION             ',
+                33, 44, 55, 62, 72, 112, 115, 140, 142, 143, 149, 161, 228, 803, 278, 276, 282, 283,
+            ),
+            *_map('08-SOUTHERN REGION II       ',
+                4, 16, 17, 21, 24, 28, 39, 45, 47, 63, 64, 65, 75, 111, 156, 160, 165, 172, 224, 231, 242,
+                247, 254, 800, 807,
+            ),
+            *_map('09-NORTHERN REGION I        ',
+                6, 10, 34, 54, 70, 74, 77, 86, 104, 107, 114, 126, 150, 159, 171, 205, 238, 258, 265, 266,
+                806, 808, 817, 704,
+            ),
+            *_map('10-EAST COAST REGION        ',
+                8, 13, 14, 30, 48, 106, 113, 116, 117, 139, 233, 237, 239, 257, 260, 261, 263, 264, 819, 277,
+                703,
+            ),
+            *_map('11-SELANGOR/WILAYAH REG.  IV',
+                26, 38, 94, 122, 138, 153, 155, 157, 163, 168, 178, 179, 198, 225, 230, 270, 296, 814, 820,
+                279, 288, 289, 702,
+            ),
+            *_map('12-NORTHERN REGION II       ',
+                23, 27, 42, 57, 60, 68, 88, 108, 121, 154, 164, 177, 204, 206, 211, 249, 256, 801, 824, 11,
+                243,
+            ),
+            *_map('13-SELANGOR/WILAYAH REG.   V',
+                20, 25, 31, 43, 69, 73, 78, 92, 109, 127, 133, 199, 201, 202, 203, 221, 235, 240, 268, 293,
+                294,
+            ),
+            *_map('99-OTHER', _OTHER),
+        ],
+    },
+
 }
 
-MACROS = {
-    'ACE': ACE,
-    'FCY': FCY,
-    'CURX': CURX,
-}
-
-
-# ============================================================================
-# FORMAT REGISTRY (name -> fast function)
-# ============================================================================
-
-_FORMAT_FUNCS = {
-    'SADENOM': sadenom_format,
-    'SAPROD': saprod_format,
-    'FDDENOM': fddenom_format,
-    'FDPROD': fdprod_format,
-    'FDPRODD': fdprodd_format,
-    'FDPRD': fdprd_format,
-    'FCYTERM': fcyterm_format,
-    'CADENOM': cadenom_format,
-    'CAPROD': caprod_format,
-    'DPCUSTCD': dpcustcd_format,
-    'SACUSTCD': sacustcd_format,
-    'FDCUSTCD': fdcustcd_format,
-    'IFDCUSCD': ifdcuscd_format,
-    'DDCUSTCD': ddcustcd_format,
-    'STATECD': statecd_format,
-    'FDORGMT': fdorgmt_format,
-    'FDRMMT': fdrmmt_format,
-    'RMFDORGMT': rmfdorgmt_format,
-    'SDRANGE': sdrange_format,
-    'S1RANGE': s1range_format,
-    'S2RANGE': s2range_format,
-    'DDRANGE': ddrange_format,
-    '$RACE': race_format,
-    'BRANCHCD': branchcd_format,
-}
-
-
-def _resolve_format_func(format_name):
-    """Return the function for a format name; raise KeyError if unknown."""
-    key = format_name.strip().upper().rstrip('.')
-    func = _FORMAT_FUNCS.get(key) or _FORMAT_FUNCS.get('$' + key)
-    if func is None:
-        raise KeyError(f'Unknown format: {format_name!r}')
-    return func
-
-
-def _is_format_name(candidate) -> bool:
-    if not isinstance(candidate, str):
-        return False
-    try:
-        _resolve_format_func(candidate)
-    except KeyError:
-        return False
-    return True
-
-
-# ============================================================================
-# PUBLIC API
-# ============================================================================
 
 def format_value(name, value):
     """Apply an original SAS format name; accepts trailing dots and $ names."""
-    return _resolve_format_func(name)(value)
+    return lookup(FORMATS, name.strip(), value, MACROS)
 
 
 def put(value, format_name):
-    """SAS-style argument order: put(value, 'SAPROD.')."""
+    """SAS-style argument order: put(value, 'BRCHCD.')."""
     return format_value(format_name, value)
 
 
 def informat(value, informat_name):
-    """Apply an INVALUE definition; reject VALUE definitions."""
-    key = _format_key(FORMATS, informat_name)
-    if FORMATS[key]['kind'] != 'INVALUE':
-        raise ValueError(f'{key} is not an INVALUE definition')
-    return format_value(key, value)
+    """Apply an INVALUE definition; reject VALUE/PICTURE names."""
+    name = informat_name.strip().upper().rstrip('.')
+    if FORMATS[name]['kind'] != 'INVALUE':
+        raise ValueError(f'{name} is not an INVALUE definition')
+    return format_value(name, value)
 
 
-def apply_format(first, second):
+def apply_format(values, format_name):
+    """Map an iterable to a list, or a pandas Series to a Series retaining its index.
+
+    A Series uses its native map method; scalar lookups need no pandas import.
     """
-    Apply a named format to a scalar or to a collection. Both argument orders
-    are accepted so that earlier programs keep working:
-
-        apply_format('SAPROD', 200)          # name first  -> '42120'
-        apply_format(200, 'SAPROD')          # value first -> '42120'
-        apply_format(values, 'SAPROD')       # list / numpy -> list
-                                             # pandas Series -> Series (index kept)
-                                             # polars Series -> Series
-
-    Raises KeyError when neither argument is a known format name.
-    """
-    if _is_format_name(first):
-        name, data = first, second
-    elif _is_format_name(second):
-        name, data = second, first
-    else:
-        raise KeyError(f'Unknown format: {first!r} / {second!r}')
-    func = _resolve_format_func(name)
-    if isinstance(data, (str, bytes)) or not hasattr(data, '__iter__'):
-        return func(data)
-    if type(data).__module__.startswith('polars'):
-        return type(data)(data.name, [func(v) for v in data.to_list()])
-    if hasattr(data, 'map') and hasattr(data, 'index'):
-        return data.map(func)
-    return [func(v) for v in data]
+    if isinstance(values, (str, bytes)):
+        raise TypeError('Pass a list or Series; use put() for a scalar value')
+    if hasattr(values, 'map') and hasattr(values, 'index'):
+        return values.map(lambda value: format_value(format_name, value))
+    return [format_value(format_name, value) for value in values]
 
 
 def available_formats():
@@ -2857,164 +1224,209 @@ def available_formats():
 
 def get_rules(format_name):
     """Return an independent copy of a format's kind and ordered mapping rules."""
-    return deepcopy(FORMATS[_format_key(FORMATS, format_name)])
+    from copy import deepcopy
+    return deepcopy(FORMATS[format_name.strip().upper().rstrip('.')])
 
 
-_LEGACY_FORMAT_CLASSES = {
-    'SADENOM': SADenomFormat,
-    'SAPROD': SAProductFormat,
-    'FDDENOM': FDDenomFormat,
-    'FDPROD': FDProductFormat,
-    'CADENOM': CADenomFormat,
-    'CAPROD': CAProductFormat,
-    'FCYTERM': FCYTermFormat,
-    'PRODUCTS': ProductLists,
-}
+def BRCHCD(value):
+    """Apply the original SAS BRCHCD format."""
+    return format_value('BRCHCD', value)
 
 
-def get_format(format_name: str):
-    """
-    Get a format class (legacy 8 names) or format function by name.
-    Returns None when the name is unknown.
-    """
-    legacy = _LEGACY_FORMAT_CLASSES.get(format_name.upper())
-    if legacy is not None:
-        return legacy
-    try:
-        return _resolve_format_func(format_name)
-    except KeyError:
-        return None
+def GROUPF(value):
+    """Apply the original SAS $GROUPF format."""
+    return format_value('$GROUPF', value)
 
 
-# SAS-name aliases (upper-case names used by programs that call the format by
-# its SAS name; every one is the same function as its *_format counterpart).
-SADENOM = sadenom_format
-SAPROD = saprod_format
-FDDENOM = fddenom_format
-FDPROD = fdprod_format
-FDPRODD = fdprodd_format
-FDPRD = fdprd_format
-FCYTERM = fcyterm_format
-CADENOM = cadenom_format
-CAPROD = caprod_format
-DPCUSTCD = dpcustcd_format
-SACUSTCD = sacustcd_format
-FDCUSTCD = fdcustcd_format
-IFDCUSCD = ifdcuscd_format
-DDCUSTCD = ddcustcd_format
-STATECD = statecd_format
-FDORGMT = fdorgmt_format
-FDRMMT = fdrmmt_format
-RMFDORGMT = rmfdorgmt_format
-SDRANGE = sdrange_format
-S1RANGE = s1range_format
-S2RANGE = s2range_format
-DDRANGE = ddrange_format
-RACE = race_format
-BRANCHCD = branchcd_format
+def ACKNOF(value):
+    """Apply the original SAS $ACKNOF format."""
+    return format_value('$ACKNOF', value)
 
 
-# ============================================================================
-# SELF-CHECK AND COMMAND LINE
-# ============================================================================
-
-def selfcheck():
-    """
-    Compare every fast format function with the literal SAS-rule interpreter
-    (lookup) on every rule boundary, values just around it, missing values and
-    unmatched values. Returns a list of mismatches (empty when all agree).
-    """
-    problems = []
-    for key, spec in FORMATS.items():
-        func = _FORMAT_FUNCS[key]
-        if key.startswith('$'):
-            probes = {'', 'ZZ', '9', '1', '2', '3', '0', None}
-        else:
-            probes = {None, float('nan'), -1, 0, 99999999, 0.5}
-            for lo, hi, *_ in spec['rules']:
-                for bound in (lo, hi):
-                    if isinstance(bound, (int, float)):
-                        probes.update({bound, bound - 1, bound + 1, bound + 0.5})
-        for probe in probes:
-            expected = lookup(FORMATS, key, probe, MACROS)
-            actual = func(probe)
-            if expected != actual:
-                problems.append((key, probe, expected, actual))
-    return problems
+def SAPROD(value):
+    """Apply the original SAS SAPROD format."""
+    return format_value('SAPROD', value)
 
 
-def _cli_value(format_name, text):
-    key = _format_key(FORMATS, format_name)
-    if key.startswith('$'):
-        return text
-    try:
-        number = float(text)
-    except ValueError:
-        return text
-    return int(number) if number.is_integer() else number
+def CAPROD(value):
+    """Apply the original SAS CAPROD format."""
+    return format_value('CAPROD', value)
 
 
-def library_cli(formats, macros):
-    parser = argparse.ArgumentParser(description='PBBDPFMT format lookup')
-    parser.add_argument('--list', action='store_true')
-    parser.add_argument('--selfcheck', action='store_true')
-    parser.add_argument('format', nargs='?')
-    parser.add_argument('value', nargs='?')
-    args = parser.parse_args()
-    if args.list:
-        print('\n'.join(formats))
-    elif args.selfcheck:
-        problems = selfcheck()
-        for problem in problems:
-            print('MISMATCH', problem)
-        print(f'{len(problems)} mismatch(es) across {len(formats)} formats')
-    elif args.format is not None and args.value is not None:
-        print(format_value(args.format, _cli_value(args.format, args.value)))
-    else:
-        parser.error('Use --list, --selfcheck or FORMAT VALUE')
+def ODPROD(value):
+    """Apply the original SAS ODPROD format."""
+    return format_value('ODPROD', value)
 
 
-def _print_examples():
-    print("Format Examples:")
-    print(f"SADENOM(200) = {sadenom_format(200)}")      # D
-    print(f"SADENOM(204) = {sadenom_format(204)}")      # I
-    print(f"SAPROD(200)  = {saprod_format(200)}")       # 42120
-    print(f"SAPROD(204)  = {saprod_format(204)}")       # 42320
-    print(f"FDDENOM(229) = {fddenom_format(229)}")      # I
-    print(f"FDDENOM(233) = {fddenom_format(233)}")      # D
-    print(f"FDPROD(229)  = {fdprod_format(229)}")       # 42133
-    print(f"FDPRD(300)   = {fdprd_format(300)}")        # N
-    print(f"FDPRD(340)   = {fdprd_format(340)}")        # M
-    print(f"FDPRD(320)   = {fdprd_format(320)}")        # L
-    print(f"CAPROD(104)  = {caprod_format(104)}")       # 43110
-    print(f"CAPROD(166)  = {caprod_format(166)}")       # 42110
-    print(f"CADENOM(60)  = {cadenom_format(60)}")       # I
-    print(f"CADENOM(50)  = {cadenom_format(50)}")       # D
-    print(f"FCYTERM(470) = {fcyterm_format(470)}")      # 1
-    print(f"FCYTERM(472) = {fcyterm_format(472)}")      # 3
-    print(f"FDORGMT(0.5) = {fdorgmt_format(0.5)}")      # 12
-    print(f"FDORGMT(1.5) = {fdorgmt_format(1.5)}")      # 13
-    print(f"FDORGMT(61.0)= {fdorgmt_format(61.0)}")     # 30
-    print(f"FDRMMT(0.0)  = {fdrmmt_format(0.0)}")       # 51
-    print(f"FDRMMT(0.5)  = {fdrmmt_format(0.5)}")       # 52
-    print(f"FDRMMT(13.0) = {fdrmmt_format(13.0)}")      # 61
-    print(f"DPCUSTCD(77) = {dpcustcd_format(77)}")      # 77
-    print(f"SACUSTCD(77) = {sacustcd_format(77)}")      # 77
-    print(f"FDCUSTCD(70) = {fdcustcd_format(70)}")      # 71
-    print(f"DDCUSTCD(65) = {ddcustcd_format(65)}")      # 44
-    print(f"STATECD(5)   = {statecd_format(5)}")        # A
-    print(f"BRANCHCD(5)  = {branchcd_format(5)}")       # IPOH MAIN OFFICE
-    print(f"SDRANGE(750) = {sdrange_format(750)}")      # 1000.0
-    print(f"DDRANGE(1500)= {ddrange_format(1500)}")     # 2000.0
-    print(f"RACE('1')    = {race_format('1')}")         # 1
-    print(f"RACE('9')    = {race_format('9')}")         # 0
-    print(f"RMFDORGMT(272)= {rmfdorgmt_format(272)}")   # 12
-    print(f"ACE Products: {sorted(ACE)}")
-    print(f"FCY Products: {sorted(FCY)}")
+def LNPROD(value):
+    """Apply the original SAS LNPROD format."""
+    return format_value('LNPROD', value)
 
 
-if __name__ == '__main__':
-    if len(sys.argv) > 1:
-        library_cli(FORMATS, MACROS)
-    else:
-        _print_examples()
+def SADPRG(value):
+    """Apply the original SAS SADPRG format."""
+    return format_value('SADPRG', value)
+
+
+def SA1PRG(value):
+    """Apply the original SAS SA1PRG format."""
+    return format_value('SA1PRG', value)
+
+
+def SA2PRG(value):
+    """Apply the original SAS SA2PRG format."""
+    return format_value('SA2PRG', value)
+
+
+def SA3PRG(value):
+    """Apply the original SAS SA3PRG format."""
+    return format_value('SA3PRG', value)
+
+
+def PROFNORM(value):
+    """Apply the original SAS PROFNORM format."""
+    return format_value('PROFNORM', value)
+
+
+def SEXNORM(value):
+    """Apply the original SAS SEXNORM format."""
+    return format_value('SEXNORM', value)
+
+
+def PROFYAA(value):
+    """Apply the original SAS PROFYAA format."""
+    return format_value('PROFYAA', value)
+
+
+def SEXYW(value):
+    """Apply the original SAS SEXYW format."""
+    return format_value('SEXYW', value)
+
+
+def PROFPLUS(value):
+    """Apply the original SAS PROFPLUS format."""
+    return format_value('PROFPLUS', value)
+
+
+def PROFWISE(value):
+    """Apply the original SAS PROFWISE format."""
+    return format_value('PROFWISE', value)
+
+
+def SDNAME(value):
+    """Apply the original SAS SDNAME format."""
+    return format_value('SDNAME', value)
+
+
+def RACE(value):
+    """Apply the original SAS $RACE format."""
+    return format_value('$RACE', value)
+
+
+def CADPRG(value):
+    """Apply the original SAS CADPRG format."""
+    return format_value('CADPRG', value)
+
+
+def ICADPRG(value):
+    """Apply the original SAS ICADPRG format."""
+    return format_value('ICADPRG', value)
+
+
+def CPARTYF(value):
+    """Apply the original SAS $CPARTYF format."""
+    return format_value('$CPARTYF', value)
+
+
+def CPARTY(value):
+    """Apply the original SAS $CPARTY format."""
+    return format_value('$CPARTY', value)
+
+
+def PURPOSE(value):
+    """Apply the original SAS $PURPOSE format."""
+    return format_value('$PURPOSE', value)
+
+
+def CARANGED(value):
+    """Apply the original SAS CARANGED format."""
+    return format_value('CARANGED', value)
+
+
+def PROD(value):
+    """Apply the original SAS PROD format."""
+    return format_value('PROD', value)
+
+
+def AGEDESC(value):
+    """Apply the original SAS AGEDESC format."""
+    return format_value('AGEDESC', value)
+
+
+def STATE(value):
+    """Apply the original SAS $STATE format."""
+    return format_value('$STATE', value)
+
+
+def FDPROD(value):
+    """Apply the original SAS FDPROD format."""
+    return format_value('FDPROD', value)
+
+
+def IBWRNGE(value):
+    """Apply the original SAS IBWRNGE format."""
+    return format_value('IBWRNGE', value)
+
+
+def CARANGE(value):
+    """Apply the original SAS CARANGE format."""
+    return format_value('CARANGE', value)
+
+
+def ISARANGE(value):
+    """Apply the original SAS ISARANGE format."""
+    return format_value('ISARANGE', value)
+
+
+def ISARANGD(value):
+    """Apply the original SAS ISARANGD format."""
+    return format_value('ISARANGD', value)
+
+
+def IWSRNGE(value):
+    """Apply the original SAS IWSRNGE format."""
+    return format_value('IWSRNGE', value)
+
+
+def IWSRNGX(value):
+    """Apply the original SAS IWSRNGX format."""
+    return format_value('IWSRNGX', value)
+
+
+def IBWSRNGD(value):
+    """Apply the original SAS IBWSRNGD format."""
+    return format_value('IBWSRNGD', value)
+
+
+def HUNDRED(value):
+    """Apply the original SAS HUNDRED format."""
+    return format_value('HUNDRED', value)
+
+
+def THOUSAND(value):
+    """Apply the original SAS THOUSAND format."""
+    return format_value('THOUSAND', value)
+
+
+def MILLION(value):
+    """Apply the original SAS MILLION format."""
+    return format_value('MILLION', value)
+
+
+def LNPOGRP(value):
+    """Apply the original SAS LNPOGRP format."""
+    return format_value('LNPOGRP', value)
+
+
+if __name__ == "__main__":
+    library_cli(FORMATS, MACROS)
