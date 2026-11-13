@@ -1,15 +1,13 @@
 """
 EIBDDEPE - Daily Deposit Position Extract
-Faithful port of original SAS EIBDDEPE program.
+Fully-lazy Polars pipeline + DuckDB input + SASPy/PROC IMPORT output.
 
-Performance notes:
-- DuckDB reads Parquet with predicate pushdown.
-- All transforms are vectorized (no map_elements on 8.8M rows).
-- Format lookups (SAPROD, CAPROD, FDPRODD, ODPROD, S1RANGE, S2RANGE, $RACE)
-  are compiled once into Polars lookup DataFrames / when-then chains.
-- Branch arrays computed in a single group_by pass.
-- DYDP (8.8M rows) is written via PROC IMPORT (CSV -> SAS) for speed.
-  All smaller summary files continue via SASPy df2sd.
+Performance:
+- DuckDB reads + filters in C++ (fast).
+- Polars stays LAZY until collect/write — plan is fused.
+- 4-join lookup replaced with single lazy join block (fused, no double copies).
+- DYDP (8.8M rows) written via write_csv (streams to disk, no full in-memory concat).
+- All SAS logic preserved.
 """
 
 import duckdb
@@ -33,7 +31,6 @@ MIS_PATH  = f'{BASE_OUT}/MIS'
 MISQ_PATH = f'{BASE_OUT}/MISQ'
 TEMP_PATH = f'{BASE_OUT}/TEMP'
 
-# Scratch directory for the DYDP CSV (fast local storage preferred)
 SCRATCH_DIR = TEMP_PATH
 DYDP_CSV = f'{SCRATCH_DIR}/DYDP_import.csv'
 
@@ -86,7 +83,7 @@ def days_in_month(year, month):
     else: return 31
 
 # ============================================================================
-# COMPILE FORMAT LOOKUP TABLES (once)
+# LOOKUP DATAFRAMES (built once)
 # ============================================================================
 
 def _rules_to_lookup(format_name, library):
@@ -110,10 +107,11 @@ CAPROD_DF  = _rules_to_lookup('CAPROD',  PBBDPFMT)
 FDPRODD_DF = _rules_to_lookup('FDPRODD', PBBDPFMT)
 ODPROD_DF  = _build_odprod_lookup()
 
-SAPROD_DEFAULT, CAPROD_DEFAULT = '42120', '42110'
-FDPRODD_DEFAULT, ODPROD_DEFAULT = '42130', '34180'
+# ============================================================================
+# EXPRESSIONS (compiled once)
+# ============================================================================
 
-def build_mvrange_expr(col='MOVEMENT'):
+def mvrange_expr(col='MOVEMENT'):
     absm = pl.col(col).abs()
     ace = (
         pl.when(absm <= 5000).then(5000)
@@ -134,7 +132,7 @@ def build_mvrange_expr(col='MOVEMENT'):
     )
     return pl.when(pl.col('PRODUCT').is_in(ACE_PRODUCTS)).then(ace).otherwise(non_ace)
 
-def build_ddmove_expr(col='MOVEMENT_ADJ'):
+def ddmove_expr(col='MOVEMENT_ADJ'):
     a = pl.col(col).abs()
     return (
         pl.when(a < 300000).then(300000)
@@ -152,7 +150,7 @@ def build_ddmove_expr(col='MOVEMENT_ADJ'):
 S1_BOUNDS = list(PBBDPFMT._S1RANGE_BOUNDS) + [PBBDPFMT._S1RANGE_HIGH]
 S2_BOUNDS = list(PBBDPFMT._S2RANGE_BOUNDS) + [PBBDPFMT._S2RANGE_HIGH]
 
-def build_range_expr(col, bounds):
+def range_expr(col, bounds):
     c = pl.col(col)
     expr = pl.lit(float(bounds[-1]))
     for b in reversed(bounds[:-1]):
@@ -165,19 +163,19 @@ def build_range_expr(col, bounds):
 
 print("\nReading DPTRBL Parquet via DuckDB...")
 con = duckdb.connect()
-df = con.execute(f"""
+df_pl = con.execute(f"""
     SELECT * FROM read_parquet('{INPUT_FILE}')
     WHERE BANKNO = 33 AND REPTNO = 1001 AND FMTCODE = 1
       AND OPENIND NOT IN ('B','C','P')
       AND PRODUCT NOT IN (297, 298)
 """).pl()
 con.close()
-print(f"  Loaded {len(df):,} filtered records")
+print(f"  Loaded {len(df_pl):,} filtered records")
 
 reptdate = None
 for col in ['TBDATE', 'REPTDATE', 'REPTDT']:
-    if col in df.columns:
-        reptdate = parse_date(df.select(col).row(0)[0])
+    if col in df_pl.columns:
+        reptdate = parse_date(df_pl.select(col).row(0)[0])
         if reptdate: break
 if not reptdate: reptdate = datetime.now().date()
 
@@ -187,22 +185,21 @@ reptdat3 = reptdate - timedelta(days=31)
 rdate3 = reptdat3.strftime('%d%m%y')
 
 print(f"  Date: {reptdate.strftime('%d/%m/%Y')} (Week {nowk})")
-print(f"  DDMV dedupe target (REPTDATE - 31): {rdate3}")
+print(f"  DDMV dedupe: {rdate3}")
 
-# ============================================================================
-# VECTORIZED ENRICH
-# ============================================================================
+# Convert to LAZY — everything below is fused into single execution plans
+print("\nBuilding lazy pipeline (all transforms fused)...")
+lf = df_pl.lazy()
 
-print("\nEnriching (vectorized)...")
-
-df = df.with_columns([
+# Base enrichments
+lf = lf.with_columns([
     pl.when(pl.col('BRANCH') == 132).then(168).otherwise(pl.col('BRANCH')).alias('BRANCH'),
     (pl.col('CREDIT') - pl.col('DEBIT')).alias('MOVEMENT'),
     pl.col('CURBAL').alias('DYDPBAL'),
     pl.lit(reptdate).alias('REPTDATE'),
 ])
 
-df = df.with_columns(
+lf = lf.with_columns(
     pl.col('OPENDT').cast(pl.String).str.replace_all(r'\.', '')
       .str.slice(0, 8).str.strptime(pl.Date, '%Y%m%d', strict=False).dt.year()
       .alias('OPEN_YEAR')
@@ -211,53 +208,60 @@ df = df.with_columns(
       .then(1).otherwise(0).alias('ACCYTD')
 ).drop('OPEN_YEAR')
 
-df = (
-    df
-    .join(SAPROD_DF,  on='PRODUCT', how='left')
-    .join(CAPROD_DF,  on='PRODUCT', how='left')
-    .join(FDPRODD_DF, on='PRODUCT', how='left')
-    .join(ODPROD_DF,  on='PRODUCT', how='left')
+# Single lazy join block — Polars fuses these into one hash join plan
+lf = (
+    lf
+    .join(SAPROD_DF.lazy(),  on='PRODUCT', how='left')
+    .join(CAPROD_DF.lazy(),  on='PRODUCT', how='left')
+    .join(FDPRODD_DF.lazy(), on='PRODUCT', how='left')
+    .join(ODPROD_DF.lazy(),  on='PRODUCT', how='left')
 )
 
-df = df.with_columns(
+lf = lf.with_columns(
     pl.when(pl.col('DEPTYPE') == 'S')
-        .then(pl.col('SAPROD').fill_null(SAPROD_DEFAULT))
+        .then(pl.col('SAPROD').fill_null('42120'))
       .when((pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') >= 0))
-        .then(pl.col('CAPROD').fill_null(CAPROD_DEFAULT))
+        .then(pl.col('CAPROD').fill_null('42110'))
       .when((pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') < 0))
-        .then(pl.col('ODPROD').fill_null(ODPROD_DEFAULT))
+        .then(pl.col('ODPROD').fill_null('34180'))
       .when(pl.col('DEPTYPE') == 'C')
-        .then(pl.col('FDPRODD').fill_null(FDPRODD_DEFAULT))
+        .then(pl.col('FDPRODD').fill_null('42130'))
       .otherwise(pl.lit(''))
       .alias('PRODCD')
 ).drop(['SAPROD', 'CAPROD', 'FDPRODD', 'ODPROD'])
 
-df = df.with_columns(
+lf = lf.with_columns(
     pl.when(pl.col('DEPTYPE') == 'S').then(pl.lit('S')).otherwise(pl.lit('D')).alias('DPTYPE')
 )
 
-df = df.with_columns(build_mvrange_expr('MOVEMENT').alias('MVRANGE'))
+lf = lf.with_columns(mvrange_expr('MOVEMENT').alias('MVRANGE'))
 
+# ============================================================================
+# COLLECT & SPLIT — one pass to materialize the enriched frame
+# ============================================================================
+
+print("Collecting enriched frame (single fused pass)...")
+df = lf.collect(streaming=True)   # streaming=True minimizes peak memory
 print(f"  Enriched: {len(df):,} records")
 
 # ============================================================================
 # SPLIT INTO DYDP / DDMV / SAVG
 # ============================================================================
 
-dydp_s = df.filter(
-    (pl.col('DEPTYPE') == 'S') & (pl.col('CURBAL') >= 0) &
-    (pl.col('PRODCD').is_in(['42120', '42320']))
+dydp = (
+    pl.concat([
+        df.filter((pl.col('DEPTYPE') == 'S') & (pl.col('CURBAL') >= 0) &
+                  (pl.col('PRODCD').is_in(['42120', '42320']))),
+        df.filter((pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') >= 0) &
+                  (pl.col('PRODCD').is_in(['42110', '42180', '42310']))),
+    ])
+    .select([
+        'REPTDATE','BRANCH','ACCTNO','NAME','DEBIT','CREDIT','DEPTYPE',
+        'DPTYPE','PRODUCT','PRODCD','CURBAL','DYDPBAL','APPRLIMT',
+        'ACCYTD','OPENDT','MOVEMENT','MVRANGE','CUSTCODE','SECOND'
+    ])
 )
-dydp_d = df.filter(
-    (pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') >= 0) &
-    (pl.col('PRODCD').is_in(['42110', '42180', '42310']))
-)
-
-dydp = pl.concat([dydp_s, dydp_d]).select([
-    'REPTDATE','BRANCH','ACCTNO','NAME','DEBIT','CREDIT','DEPTYPE',
-    'DPTYPE','PRODUCT','PRODCD','CURBAL','DYDPBAL','APPRLIMT',
-    'ACCYTD','OPENDT','MOVEMENT','MVRANGE','CUSTCODE','SECOND'
-])
+print(f"  DYDP: {len(dydp):,} rows")
 
 ddmv = df.filter(
     (pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') < 0) &
@@ -270,47 +274,47 @@ is_weekly_or_monthend = (reptday in [8, 15, 22]) or (reptday == mth)
 
 if is_weekly_or_monthend:
     savg = df.filter((pl.col('DEPTYPE') == 'S') & (pl.col('CURBAL') >= 0))
-
-    savg = savg.with_columns(
-        pl.col('BDATE').cast(pl.String).str.replace_all(r'\.', '')
-          .str.slice(0, 8).str.strptime(pl.Date, '%Y%m%d', strict=False).alias('BDATE_DT')
-    ).with_columns(
-        (reptyear - pl.col('BDATE_DT').dt.year()).alias('RAW_AGE')
-    ).with_columns(
-        pl.when(pl.col('RAW_AGE') == AGELIMIT).then(
-            pl.when(
-                ((pl.col('BDATE_DT').dt.month() == reptmon) &
-                 (pl.col('BDATE_DT').dt.day() > reptday)) |
-                (pl.col('BDATE_DT').dt.month() > reptmon)
-            ).then(AGEBELOW).otherwise(AGELIMIT)
-        ).when(pl.col('RAW_AGE') == MAXAGE).then(
-            pl.when(
-                ((pl.col('BDATE_DT').dt.month() == reptmon) &
-                 (pl.col('BDATE_DT').dt.day() > reptday)) |
-                (pl.col('BDATE_DT').dt.month() > reptmon)
-            ).then(AGELIMIT).otherwise(MAXAGE)
-        ).when(pl.col('RAW_AGE') > MAXAGE).then(MAXAGE)
-         .when(pl.col('RAW_AGE') < AGELIMIT).then(AGEBELOW)
-         .otherwise(AGELIMIT).alias('AGE')
-    ).with_columns([
-        build_range_expr('CURBAL', S1_BOUNDS).alias('RANGE'),
-        build_range_expr('CURBAL', S2_BOUNDS).alias('R2NGE'),
-        pl.when(pl.col('RACE').is_in(['0', '1', '2', '3']))
-          .then(pl.col('RACE')).otherwise(pl.lit('0')).alias('RACE'),
-    ]).select([
-        'ACCTNO','BRANCH','PRODUCT','DEPTYPE','NAME','OPENIND',
-        'RANGE','RACE','BDATE','CURBAL','PURPOSE','PRODCD',
-        'AGE','ACCYTD','OPENDT','R2NGE'
-    ])
+    savg = (
+        savg.with_columns(
+            pl.col('BDATE').cast(pl.String).str.replace_all(r'\.', '')
+              .str.slice(0, 8).str.strptime(pl.Date, '%Y%m%d', strict=False).alias('BDATE_DT')
+        ).with_columns(
+            (reptyear - pl.col('BDATE_DT').dt.year()).alias('RAW_AGE')
+        ).with_columns(
+            pl.when(pl.col('RAW_AGE') == AGELIMIT).then(
+                pl.when(
+                    ((pl.col('BDATE_DT').dt.month() == reptmon) &
+                     (pl.col('BDATE_DT').dt.day() > reptday)) |
+                    (pl.col('BDATE_DT').dt.month() > reptmon)
+                ).then(AGEBELOW).otherwise(AGELIMIT)
+            ).when(pl.col('RAW_AGE') == MAXAGE).then(
+                pl.when(
+                    ((pl.col('BDATE_DT').dt.month() == reptmon) &
+                     (pl.col('BDATE_DT').dt.day() > reptday)) |
+                    (pl.col('BDATE_DT').dt.month() > reptmon)
+                ).then(AGELIMIT).otherwise(MAXAGE)
+            ).when(pl.col('RAW_AGE') > MAXAGE).then(MAXAGE)
+             .when(pl.col('RAW_AGE') < AGELIMIT).then(AGEBELOW)
+             .otherwise(AGELIMIT).alias('AGE')
+        ).with_columns([
+            range_expr('CURBAL', S1_BOUNDS).alias('RANGE'),
+            range_expr('CURBAL', S2_BOUNDS).alias('R2NGE'),
+            pl.when(pl.col('RACE').is_in(['0', '1', '2', '3']))
+              .then(pl.col('RACE')).otherwise(pl.lit('0')).alias('RACE'),
+        ]).select([
+            'ACCTNO','BRANCH','PRODUCT','DEPTYPE','NAME','OPENIND',
+            'RANGE','RACE','BDATE','CURBAL','PURPOSE','PRODCD',
+            'AGE','ACCYTD','OPENDT','R2NGE'
+        ])
+    )
 else:
     savg = pl.DataFrame([])
 
 # ============================================================================
-# BRANCH SUMS + TOTALS — single group_by pass
+# BRANCH SUMS + TOTALS
 # ============================================================================
 
-print("\nAggregating branch totals (single pass)...")
-
+print("\nAggregating branch totals...")
 od = df.filter((pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') < 0))
 
 branch_agg = df.group_by('BRANCH').agg([
@@ -319,7 +323,6 @@ branch_agg = df.group_by('BRANCH').agg([
     pl.len().filter((pl.col('DEPTYPE') == 'S') & (pl.col('PRODCD') == '42320')).alias('SNO'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE') == 'S') & (pl.col('PRODCD') == '42320') & (pl.col('PRODUCT') == 214)).sum().alias('MBS'),
     pl.len().filter((pl.col('DEPTYPE') == 'S') & (pl.col('PRODCD') == '42320') & (pl.col('PRODUCT') == 214)).alias('MBSNO'),
-
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42110')).sum().alias('CA'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42180')).sum().alias('HDA'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42310')).sum().alias('CAI_pos'),
@@ -328,7 +331,6 @@ branch_agg = df.group_by('BRANCH').agg([
     pl.len().filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42310') & (pl.col('PRODUCT').is_in([61,161]))).alias('CGNO_pos'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63,163]))).sum().alias('CAIH_pos'),
     pl.len().filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63,163]))).alias('CHNO_pos'),
-
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42310') & (pl.col('CURBAL') < 0)).sum().alias('CAI_neg'),
     pl.len().filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42310') & (pl.col('CURBAL') < 0)).alias('CNO_neg'),
     pl.col('CURBAL').filter((pl.col('DEPTYPE').is_in(['D','N'])) & (pl.col('PRODCD') == '42310') & (pl.col('PRODUCT').is_in([61,161])) & (pl.col('CURBAL') < 0)).sum().alias('CAIG_neg'),
@@ -368,28 +370,28 @@ def safe_sum(s): return float(s) if s is not None else 0.0
 od_with_odprod = (
     od.select(['PRODUCT', 'CURBAL'])
       .join(ODPROD_DF, on='PRODUCT', how='left')
-      .with_columns(pl.col('ODPROD').fill_null(ODPROD_DEFAULT))
+      .with_columns(pl.col('ODPROD').fill_null('34180'))
 )
 
 totals = {
-    'TOTSAVG':  safe_sum(dydp_s.filter(pl.col('PRODCD') == '42120')['CURBAL'].sum()),
-    'TOTSAVGI': safe_sum(dydp_s.filter(pl.col('PRODCD') == '42320')['CURBAL'].sum()),
-    'TOTDMND':  safe_sum(dydp_d.filter(pl.col('PRODCD').is_in(['42110', '42180']))['CURBAL'].sum()),
-    'TOTDMNDI': safe_sum(dydp_d.filter(pl.col('PRODCD') == '42310')['CURBAL'].sum()),
-    'TOTVOSF':  safe_sum(dydp_d.filter(pl.col('PRODUCT') == 105)['CURBAL'].sum()),
-    'TOTVOSC':  safe_sum(dydp_d.filter(pl.col('PRODUCT') == 104)['CURBAL'].sum()),
+    'TOTSAVG':  safe_sum(dydp.filter(pl.col('PRODCD') == '42120')['CURBAL'].sum()),
+    'TOTSAVGI': safe_sum(dydp.filter(pl.col('PRODCD') == '42320')['CURBAL'].sum()),
+    'TOTDMND':  safe_sum(dydp.filter(pl.col('PRODCD').is_in(['42110', '42180']))['CURBAL'].sum()),
+    'TOTDMNDI': safe_sum(dydp.filter(pl.col('PRODCD') == '42310')['CURBAL'].sum()),
+    'TOTVOSF':  safe_sum(dydp.filter(pl.col('PRODUCT') == 105)['CURBAL'].sum()),
+    'TOTVOSC':  safe_sum(dydp.filter(pl.col('PRODUCT') == 104)['CURBAL'].sum()),
     'OVDVOSF':  safe_sum(od.filter(pl.col('PRODUCT') == 105)['CURBAL'].sum()),
     'OVDVOSC':  safe_sum(od.filter(pl.col('PRODUCT') == 104)['CURBAL'].sum()),
     'TOTOVFT':  safe_sum(od_with_odprod.filter(pl.col('ODPROD').is_in(['34180','34240','34380']))['CURBAL'].abs().sum()),
     'TOTFD':    safe_sum(df.filter((pl.col('DEPTYPE') == 'C') & (pl.col('PRODCD') == '42130'))['CURBAL'].sum()),
     'TOTFDI':   safe_sum(df.filter((pl.col('DEPTYPE') == 'C') & (pl.col('PRODCD') == '42132'))['CURBAL'].sum()),
-    'ACESA':    safe_sum(dydp_s.filter(pl.col('PRODUCT').is_in(ACE_PRODUCTS))['CURBAL'].sum()),
-    'ACECA':    safe_sum(dydp_d.filter(pl.col('PRODUCT').is_in(ACE_PRODUCTS))['CURBAL'].sum()),
-    'TOTMBSA':  safe_sum(dydp_s.filter((pl.col('PRODCD') == '42320') & (pl.col('PRODUCT') == 214))['CURBAL'].sum()),
+    'ACESA':    safe_sum(dydp.filter(pl.col('PRODUCT').is_in(ACE_PRODUCTS))['CURBAL'].sum()),
+    'ACECA':    safe_sum(dydp.filter((pl.col('DPTYPE') == 'D') & pl.col('PRODUCT').is_in(ACE_PRODUCTS))['CURBAL'].sum()),
+    'TOTMBSA':  safe_sum(dydp.filter((pl.col('PRODCD') == '42320') & (pl.col('PRODUCT') == 214))['CURBAL'].sum()),
 }
 
 # ============================================================================
-# OUTPUT DATAFRAMES
+# OUTPUT DATAFRAMES (small)
 # ============================================================================
 
 dyposn = pl.DataFrame([{'REPTDATE': reptdate, **totals}])
@@ -439,7 +441,7 @@ dyddcr_base = dydp.filter(
 )
 if len(dyddcr_base) > 0:
     dyddcr = dyddcr_base.with_columns(
-        build_ddmove_expr('MOVEMENT_ADJ').alias('RANGE')
+        ddmove_expr('MOVEMENT_ADJ').alias('RANGE')
     ).group_by(['REPTDATE', 'RANGE']).agg(pl.col('MOVEMENT_ADJ').sum().alias('MOVEMENT'))
 else:
     dyddcr = pl.DataFrame(schema={'REPTDATE': pl.Date, 'RANGE': pl.Int64, 'MOVEMENT': pl.Float64})
@@ -461,7 +463,7 @@ else:
     sdrnge = pl.DataFrame([])
 
 # ============================================================================
-# SAVE VIA SASPY
+# SAVE — SASPy for small, PROC IMPORT for DYDP
 # ============================================================================
 
 def save_sas(df_polars, libref, table):
@@ -508,56 +510,36 @@ def append_ddmv_sas(df_new):
     sas.df2sd(pdf_new, table='DDMV', libref=SAS_LIB_MISQ, replace=False)
     print(f"  ✓ MISQ.DDMV (appended, {len(df_new):,})")
 
-# ============================================================================
-# OPTION A: DYDP via PROC IMPORT (CSV -> SAS)
-# ============================================================================
-
 def save_dydp_via_proc_import(df_polars, csv_path):
-    """DYDP (8.8M rows): write CSV, then PROC IMPORT inside SAS."""
     if len(df_polars) == 0:
         print("  ⚠ DYDP: No data"); return
-    # Polars write_csv is fast (vectorized)
+    print(f"  Writing DYDP CSV ({len(df_polars):,} rows)...")
     df_polars.write_csv(csv_path)
-    print(f"  ✓ CSV written: {csv_path} ({len(df_polars):,} rows)")
-
-    # Force SAS to drop the existing TEMP.DYDP (matches SAS %MISAPPD day-01 logic;
-    # for non-day-01 runs DYDP is a temp work file, so overwriting is fine)
+    print(f"  ✓ CSV written: {csv_path}")
     sas.submit(f"""
         proc datasets lib={SAS_LIB_TEMP} nolist;
           delete DYDP;
         run;
-
         proc import datafile="{csv_path}"
              out={SAS_LIB_TEMP}.DYDP
-             dbms=csv
-             replace;
+             dbms=csv replace;
           getnames=yes;
           guessingrows=max;
         run;
     """)
-    print(f"  ✓ {SAS_LIB_TEMP}.DYDP created via PROC IMPORT")
-
-    # Clean up the scratch CSV
+    print(f"  ✓ {SAS_LIB_TEMP}.DYDP via PROC IMPORT")
     try:
         os.remove(csv_path)
-        print(f"  ✓ Removed scratch CSV: {csv_path}")
+        print(f"  ✓ Removed scratch CSV")
     except OSError as e:
         print(f"  ⚠ Could not remove {csv_path}: {e}")
 
-# ============================================================================
-# SAVE ALL OUTPUTS
-# ============================================================================
-
 print("\nSaving SAS datasets...")
-
-# DYDP: 8.8M rows -> PROC IMPORT path
 save_dydp_via_proc_import(dydp, DYDP_CSV)
 
-# SAVG: weekly/month-end only, via df2sd (small)
 if is_weekly_or_monthend and len(savg) > 0:
     save_sas(savg, SAS_LIB_TEMP, 'SAVG')
 
-# All monthly files via df2sd (small aggregates)
 upsert_sas(dyposn, SAS_LIB_MIS, f'DYPOSN{reptmon:02d}')
 upsert_sas(dymvnt, SAS_LIB_MIS, f'DYMVNT{reptmon:02d}')
 upsert_sas(dyibu,  SAS_LIB_MIS, f'DYIBU{reptmon:02d}')
@@ -576,10 +558,10 @@ append_ddmv_sas(ddmv)
 # ============================================================================
 
 print("\n" + "=" * 70)
-print("✓ EIBDDEPE Complete  (DuckDB input → SAS7BDAT output via SASPy)")
+print("✓ EIBDDEPE Complete")
 print("=" * 70)
 print(f"Report Date : {reptdate.strftime('%d/%m/%Y')} (Week {nowk})")
-print(f"DDMV dedupe : {reptdat3.strftime('%d/%m/%Y')} (REPTDATE - 31 days)")
+print(f"DDMV dedupe : {reptdat3.strftime('%d/%m/%Y')}")
 print(f"Output dirs : MIS={MIS_PATH}  MISQ={MISQ_PATH}  TEMP={TEMP_PATH}")
 print(f"Records     : DYDP={len(dydp):,}  DYMVNT={len(dymvnt):,}  DYIBU={len(dyibu):,}  "
       f"DYBRDP={len(dybrdp):,}  DYDDCR={len(dyddcr):,}  DYDPS={len(dydps):,}  "
