@@ -1,146 +1,2539 @@
+#!/usr/bin/env python3
 """
-Program : PBBLNFMT - reusable conversion of the original SAS include.
+Program : PBBDPFMT.py
+Purpose : Python conversion of the SAS include PBBDPFMT (PROC FORMAT library
+          for deposit products, customer codes, branch/state codes and balance
+          / maturity buckets) used across multiple SAS programs.
 
-Usage from another job:
-    import PBBLNFMT
-    names = PBBLNFMT.available_formats()
-    result = PBBLNFMT.put(value, names[0])
-    results = PBBLNFMT.apply_format(values, names[0])
+Formats converted (SAS name -> function):
+    SADENOM -> sadenom_format      SAPROD   -> saprod_format
+    FDDENOM -> fddenom_format      FDPROD   -> fdprod_format
+    FDPRODD -> fdprodd_format      FDPRD    -> fdprd_format
+    FCYTERM -> fcyterm_format      CADENOM  -> cadenom_format
+    CAPROD  -> caprod_format       DPCUSTCD -> dpcustcd_format
+    SACUSTCD-> sacustcd_format     FDCUSTCD -> fdcustcd_format
+    IFDCUSCD-> ifdcuscd_format     DDCUSTCD -> ddcustcd_format
+    STATECD -> statecd_format      FDORGMT  -> fdorgmt_format
+    FDRMMT  -> fdrmmt_format       RMFDORGMT-> rmfdorgmt_format
+    SDRANGE / S1RANGE / S2RANGE / DDRANGE -> sdrange_format / s1range_format /
+                                              s2range_format / ddrange_format
+    $RACE   -> race_format         BRANCHCD -> branchcd_format
 
-Original macro names are module constants and are also in MACROS.
-Original format names are in FORMATS; named functions omit only the SAS $ prefix.
-Keep imports qualified because different libraries can define the same names.
-Run this file with --list, or FORMAT VALUE, for command-line lookups.
+Two calling styles are supported by this one module (both are kept so that
+every program already converted against either earlier version keeps working):
 
-Parity limits: overlapping ranges use first-listed match, without SAS FUZZ;
-character ranges use Unicode ordering. PICTURE padding/overflow and special
-numeric missing codes are not fully reproduced. Validate against production SAS.
+    Style 1 (function per format):
+        from PBBDPFMT import saprod_format, fdprod_format, statecd_format
+        saprod_format(200)                 # '42120'
+        apply_format('SAPROD', 200)        # '42120'
+
+    Style 2 (SAS-like, generic):
+        import PBBDPFMT
+        PBBDPFMT.SAPROD(200)               # '42120'
+        PBBDPFMT.put(200, 'SAPROD.')       # '42120'
+        PBBDPFMT.apply_format(values, 'SAPROD')   # list / pandas / polars Series
+        PBBDPFMT.available_formats()
+        PBBDPFMT.FORMATS, PBBDPFMT.MACROS, PBBDPFMT.get_rules('SAPROD')
+
+    Command line:
+        python PBBDPFMT.py --list
+        python PBBDPFMT.py SAPROD 200
+        python PBBDPFMT.py --selfcheck
+
+SAS behaviour that is reproduced:
+    * OTHER also catches missing values (None / NaN), e.g. SADENOM(.) = 'D'.
+    * LOW does not include missing values, so a missing value in a range format
+      without OTHER (FDORGMT, FDRMMT, RMFDORGMT) is displayed as '.'.
+    * A value that matches nothing in a VALUE format without OTHER is displayed
+      as the value itself (RMFDORGMT).
+    * An INVALUE with no match returns missing (None), e.g. FCYTERM.
+    * Overlapping ranges use the first listed match.
+    * Character labels are returned without trailing blanks.
 
 TAKE NOTE : ANY AMENDMENTS TO PRODUCTS MAPPING, THESE FORMATS
-ARE AFFECTED : LNDENOM, LNPROD, LNTYPE & LNRATE (LOANS)
-               ODPROD, ODDENOM & ODRATE
-2006-1199  NPH  EXT NEW LOAN PRODUCT 532.
-2008-1090  MAA  EXT NEW LOAN PRODUCT 533.
-2010-2715  AAB  EXT NEW LOAN PRODUCT 512.
-2011-2706  SKP  EXT NEW OD   PRODUCT 190.
-2011-3893  SKP  EXT WOF OD   PRODUCT 32 & 33.
-2011-3853  SKP  EXT WOF LOAN PRODUCT 650-679
-2012-1088  CWK  EXT NEW OD   PRODUCT 133,134
-2012-3170  MFM  EXT NEW LOAN PRODUCT 409 & 410
-2012-3494  MFM  EXT NEW LOAN PRODUCT 411,187 & 687
-2013-502   MFM  EXT NEW OD   PRODUCT 184
-2013-1098  MFM  EXT NEW LN   PRODUCT 639 & 912
-2013-758   CWK  EXT NEW LOAN PRODUCT 412-414
-2013-414   CWK  EXT NEW LOAN PRODUCT 102-108
-2013-1313  MFM  EXT NEW LOAN PRODUCT 461
-2013-2577  RST  EXT NEW LOAN PRODUCT 462 & 463
-2014-632   RST  EXT NEW LOAN PRODUCT 188,189,190,688,689
-2014-885   SKP      NEW LOAN PRODUCT 249,349
-2014-2252  TBC      NEW LOAN PRODUCT 191,417
-                    INACTIVE LOAN PRODUCT 690,670
-2015-606   TBC      NEW LOAN PRODUCT 307
-2015-1190  TBC      NEW OD PRODUCT 185,186
-2015-1043  SKP      NEW LOAN PRODUCT 144
-2015-1044  TBC      NEW LOAN PRODUCT 468
-2015-1368  TBC      EXCLUDE LOAN PRODUCT 698,699
-2015-2284  TBC      NEW LOAN PRODUCT 419,420,469,470
-                    INACTIVE LOAN PRODUCT 672,673,674,675
-2016-630   NSA      NEW LOAN PRODUCT 422
-2016-1409  TBC      EXCLUDE LOAN 973
-2016-1407  TBC      ExCLUDE LOAN 972
-2016-579   TBC      NEW OD PRODUCT
-2016-678   NSA      NEW LOAN PRODUCT 918
-2016-2771  CWK      NEW CA PRODUCT 92
-2016-2203  NFJ      NEW LOAN PRODUCT 429,430
-2017-65    CWK      NEW OD PRODUCT 77,78
-2016-4701  MFM      NEW LOAN PRODUCT 440,441,442,443
-2017-4244  TBC      UPDATE $SECTOR TO NEW SECTFISS
-2019-816   IFA      EXCLUDE LOAN PRODUCT 972 & 973
+ARE AFFECTED : SADENOM, SAPROD (SAVINGS DEPOSITS)
+               FDDENOM, FDPROD (FIXED DEPOSITS)
+               CDDENOM, CAPROD (CURRENT ACCOUNTS)
+
+AMENDMENT  : 11/05/04
+DONE BY    : RHA - A497
+REASON : TO ADD & REMAP PRODUCT 182(STAFF AL-WADIAH CA)
+         AND 166(CASH LINE FACILITY) IN FISS RDAL REPORT
+         PRODUCT 166 -REMAP FRM BNM BIC CODE '42110' TO
+                      '42310'
+SMR 2006-411 MAA3 15-05-06 MERGER 212->165, 229->151
+SMR 2006-866 MAA3 15-07-06 MERGER 223->024
+SMR 2006-1145 NPH 08-09-06 MERGE BRANCH 246 -> 146
+SMR 2010-3206 AAB 10-01-11 MERGE BRANCH 200 -> 122
+SMR 2006-1296 TGX 16-10-06 UNIT TRUST FD(368-372)
+SMR 2007-0989 RHA 27-07-07 NEW BRANCH (BBT -268)
+SMR 2007-1535 RHA 24-12-07 NEW BRANCH (MKA -269)
+SMR 2008-0820 MAA3 1-08-08 NEW BRANCH (BPI -270)
+SMR 2009-0679 HHH  9-07-09 NEW BRANCH (LHA -273)
+SMR 2009-0785 HHH 21-08-09 NEW BRANCH (JPI -278)
+SMR 2010-1070 NRA 15-04-10 NEW BRANCH (PTJ -279)
+SMR 2010-1462 AAB 12-08-10 NEW BRANCH (KDA -280)
+SMR 2010-2450 AAB 07-01-11 NEW BRANCH (PLT -281)
+SMR 2010-3952 AAB 11-02-11 NEW BRANCH (PSE -283)
+SMR 2010-4187 AAB 14-03-11 NEW BRANCH (PTT -282)
+SMR 2012-2172 AAB 18-09-12 NEW BRANCH (BSP -284)
+SMR 2012-2172 CWK 05-10-12 NEW BRANCH (BMC -285)
+SMR 2012-2172 CWK 09-11-12 NEW BRANCH (BMC -286)
+SMR 2011-1889 SKP 21-10-11 NEW FCY PRODUCT 440-444
+SMR 2011-3893 SKP          WOF PRODUCT 32,33
+SMR 2012-1088 CWK          OD  PRODUCT 133,134
+SMR 2012-3575 SKP          NEW RMFD PRODUCT 300,INTPLAN 399
+SMR 2013-34   JKA 15-02-13 NEW BRANCH (SUA-287)
+SMR 2013-1407 JKA 16-07-13 NEW BRANCH (SPT-288)
+SMR 2013-1408 NFJ 29-08-13 NEW BRANCH (TEE-289)
+SMR 2013-502  MFM 13-03-13 NEW OD  PRODUCT 184
+SMR 2013-2100 SKP          NEW BRANCH (IPJ-702)
+SMR 2014-83   RST 22-01-14 NEW INTEREST PLAN 747, 748
+SMR 2014-85   NFJ 29-01-14 REMOVE INTEREST PLAN 640-659
+SMR 2014-40   NFJ 07-02-14 NEW BRANCH (TDY-290)
+SMR 2014-367  RST 25-02-14 NEW INTEREST PLAN 749, 750
+SMR 2014-1932 SKP          NEW INTEREST PLAN 778,779
+SMR 2014-1973 SKP          NEW INTEREST PLAN 862,863
+SMR 2014-2223 TBC 18-09-14 NEW INTEREST PLAN 860,861
+SMR 2014-2587 NFJ 28-10-14 NEW INT PLAN 854,855,858,859
+SMR 2015-1588 TBC 10-06-15 NEW INT PLAN 850,851,852,853
+SMR 2015-1190 TBC 23-05-15 NEW OD PRODUCT 185,186
+SMR 2015-1842 HHH 06-07-15 NEW INT PLAN 891,892,893,894
+SMR 2015-2841 NNR 21-10-15 NEW INT PLAN 333,334,335,336
+SMR 2015-2679 TBC 28-10-15 NEW OD PRODUCT 72 413
+SMR 2015-2790 LAC 19-11-15 NEW INT PLAN 895,896,897,898
+SMR 2016-579  TBC 12-05-16 NEW OD PRODUCT 73
+SMR 2016-1134 TBC 01-08-16 NEW SA PRODUCT 210
+SMR 2016-2765 IFA 15-08-16 NEW SA PRODUCT 218
+SMR 2016-2771 CWK 15-08-16 NEW CA PRODUCT 92
+SMR 2016-2905 NFJ 09-08-16 UPD INTPLAN 778,779,862,863,
+                               895,337,338,339
+SMR 2016-4627 TBC 14-12-16 RM CA 20 AND FCYCA 420:431
+    2016-4623              RM CA 21 AND FCYCA 450:454
+SMR 2016-3894 TBC 09-11-16 PB UNION PAY PRODUCT 216
+SMR 2017-65   CWK 23-01-17 NEW CA PRODUCT 77,78
+SMR 2016-1621 MFM 21-02-17 NEW CA PRODUCT 40
+SMR 2017-2496 TBC 20-06-17 EXCLUDE PRODUCT 482
+SMR 2017-2401 TBC 22-06-17 FD & TDI 985,986,987,988
+SMR 2017-2150 TBC 22-06-17 STEPUP FD/FD-I 968:984
+SMR 2017-4237 SAM 07-11-17 FD RUSH FD/FD-I 900,901,902,993
+SMR 2017-1646/1645 IFA 22-11-17 NEW BRANCH 292,291
+SMR 2018-0138 SAM 19-01-18 NEW CA PRODUCT 42,43
+SMR 2018-0254 SAM 25-01-18 PLUS FD 895,337,904,905,
+                                   994,995,996,997
+                           & TDI   338,339,599,659,
+                                   229,230,231,232
+SMR 2018-2875 TBC 24-07-18 UPDATE INTPLAN 438
+SMR 2018-3988 TBC 27-09-18 INTPLAN 379,380,381,382
+SMR 2018-40   TBC 07-11-18 FCYCA 432:434
+SMR 2018-3434 IFA 14-12-18 NEW BRANCH (BJL -296)
+SMR 2019-1150 TBC 21-03-19 INTPLAN 447,540,541,559,568
+SMR 2019-1148 TBC 22-03-19 INTPLAN 475,481,542,543,555 &557
+SMR 2019-0098 IFA 22-07-19 CST(187) MERGE WITH MIRI(050)
+SMR 2019-3347 IFA 03-09-19 INT PLAN 575 PB RCB CAMPAIGN
+SMR 2019-3358 skp 26-09-19 INT PLAN 575 PB RCB CAMPAIGN
+SMR 2017-4296 IFA 23-11-17 ISLAMIC NEW CA PRODUCT 45
+SMR 2020-2060 IFA 23-06-20 INT PLAN 575 RCB CENTRE
 """
 
 import argparse
 import math
-from functools import lru_cache
-from decimal import Decimal, ROUND_DOWN
+import sys
+from bisect import bisect_left
+from copy import deepcopy
+from typing import Dict, List, Optional, Set, Tuple
 
 
-def missing(value):
-    return value is None or (isinstance(value, float) and math.isnan(value))
+# ============================================================================
+# SMALL HELPERS (SAS missing-value and BEST12. emulation)
+# ============================================================================
+
+def missing(value) -> bool:
+    """True for None / NaN / pandas NA (SAS numeric or character missing)."""
+    if value is None:
+        return True
+    try:
+        return bool(value != value)
+    except (TypeError, ValueError):
+        return True
 
 
-def resolve(value, macros):
-    if isinstance(value, dict) and 'macro' in value:
-        return macros[value['macro']]
-    return value
-
-
-def matches(value, lo, hi, exlo, exhi):
-    if isinstance(lo, dict) and 'missing' in lo:
-        return missing(value) if lo['missing'] == '.' else value == lo['missing']
-    if missing(value):
-        return False  # SAS LOW excludes numeric missing values.
-    lower = isinstance(lo, dict) and lo.get('special') == 'LOW'
-    upper = isinstance(hi, dict) and hi.get('special') == 'HIGH'
-    return (lower or (value > lo if exlo else value >= lo)) and (upper or (value < hi if exhi else value <= hi))
-
-
-def best12(value):
-    """Approximate SAS BEST12. for numbers with no matching format rule."""
+def best12(value) -> str:
+    """Approximate SAS BEST12. for numbers that match no format rule."""
     if float(value).is_integer() and abs(value) < 1e12:
         return str(int(value))
     return format(value, '.12g')
 
 
-def lookup(formats, name, value, macros=None):
-    name = name.upper().rstrip('.')
-    spec = formats[name]
-    macros = macros or {}
-    if isinstance(value, bytes):
-        value = value.decode('utf-8')
-    if name.startswith('$'):
-        value = '' if missing(value) else str(value).rstrip()
-    elif not missing(value):
-        value = float(value)
-    fallback = None
-    for lo, hi, exlo, exhi, label, options in spec['rules']:
-        lo, hi = resolve(lo, macros), resolve(hi, macros)
-        if name.startswith('$'):
-            lo = lo.rstrip() if isinstance(lo, str) else lo
-            hi = hi.rstrip() if isinstance(hi, str) else hi
-        if isinstance(lo, dict) and lo.get('special') == 'OTHER':
-            fallback = label
-            continue
-        if matches(value, lo, hi, exlo, exhi):
-            if spec['kind'] == 'PICTURE':
-                # Source pictures use MULT explicitly and no ROUND option.
-                n = (abs(Decimal(str(value))) * Decimal(str(options.get('MULT', 1)))).to_integral_value(rounding=ROUND_DOWN)
-                decimals = len(label.split('.')[1]) if '.' in label else 0
-                return options.get('PREFIX', '') + format(n / Decimal(10)**decimals, f',.{decimals}f')
-            return label
-    if fallback is not None:
-        return fallback
-    if spec['kind'] == 'INVALUE':
-        return value
-    if missing(value):
+# ============================================================================
+# MACRO VARIABLE EQUIVALENTS
+# ============================================================================
+
+# %LET ACE=(40,42,43,150,151,152,181);  /* ACE PRODUCTS CODES */
+ACE: Set[int] = {40, 42, 43, 150, 151, 152, 181}
+
+# %LET FCY=(350,351,...,362); /*EIBWFCWH*/
+FCY: Set[int] = {350, 351, 352, 353, 354, 355, 356, 357, 358, 360, 361, 362}
+
+# %LET CURX=(050,051,055,056,057,058,060,064,065,068,069,167,169,168,
+#            085,086,087,088,089,066,067,070,071,073,096,097,061,090,
+#            091,092,093,094,095,100,101,102,106,108,109,110,111,112,
+#            113,114,115,116,117,118,119,120,121,122,123,124,125,133,
+#            134,135,137,138,170,150,151,152,153,154,155,156,157,158,
+#            159,160,161,162,163,164,165,166,174,175,176,177,178,179,
+#            180,181,182,183,189,190,191,192,193,194,195,196,197,198,
+#            081,082,083,084,184,185,186,131,132,187,188,020,021,077,
+#            040,041,042,043,078,074,35,36,37,38,39,46,47,48,49,75,
+#            076,023,024,025,045,026,027,013,014,015,016,017,018,019,
+#            003,004,005,006,007,008,009,010,011,012,022,081);
+CURX: Set[int] = {
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    20, 21, 22, 23, 24, 25, 26, 27, 35, 36, 37, 38, 39, 40, 41, 42, 43,
+    45, 46, 47, 48, 49, 50, 51, 55, 56, 57, 58, 60, 61, 62, 63, 64,
+    65, 66, 67, 68, 69, 70, 71, 73, 74, 75, 76, 77, 78, 81, 82, 83, 84, 85,
+    86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 100, 101, 102, 106, 108,
+    109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123,
+    124, 125, 131, 132, 133, 134, 135, 137, 138, 150, 151, 152, 153, 154, 155,
+    156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170,
+    174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188,
+    189, 190, 191, 192, 193, 194, 195, 196, 197, 198,
+}
+
+# Aliases (names used by programs converted earlier)
+ACE_PRODUCTS: Set[int] = ACE
+FCY_PRODUCTS: Set[int] = FCY
+CURX_PRODUCTS: Set[int] = CURX
+
+
+# ============================================================================
+# FORMAT: SADENOM - SA DENOMINATION OF ISLAMIC OR DOMESTIC
+# ============================================================================
+
+_SADENOM_ISLAMIC: Set[int] = {204, 207, 214, 215, 218, 220, 221, 222, 223}
+
+
+def sadenom_format(product_code: Optional[int]) -> str:
+    """
+    SADENOM: savings product code -> 'I' (Islamic) or 'D' (Domestic).
+    OTHER = 'D' also applies to missing values.
+    """
+    if missing(product_code):
+        return 'D'
+    return 'I' if product_code in _SADENOM_ISLAMIC else 'D'
+
+
+# ============================================================================
+# FORMAT: SAPROD - SAVINGS PRODUCT CODE -> BNM CODE
+# ============================================================================
+
+_SAPROD_MAPPINGS: Dict[int, str] = {
+    100: 'N',      # GIRO              PFB 207
+    126: 'N',      # PFB REMITTANCES BC NORM
+    127: 'N',      # PFB - SHARE PUBLIC
+    128: 'N',      # PFB - BC - SHARE BUMI
+    129: 'N',      # PFB - DD
+    140: 'N',      # SI-CLEARING ACCOUNT-PFB
+    141: 'N',      # ATM-PISA CLEARING ACCT-PFB
+    142: 'N',      # ATM-LOAN CLEARING ACCT-PFB
+    200: '42120',  # NORMAL SAVINGS
+    201: '42120',  # STAFF SAVINGS
+    202: '42120',  # YOUNG ACHIEVER ACCOUNT
+    203: '42120',  # 50 PLUS SAVINGS
+    204: '42320',  # ISLAMIC BANKING AL-WADIAH
+    205: '42120',  # BASIC SAVING A/C
+    206: '42120',  # BASIC 55 SAVING A/C
+    207: '42120',  # AL WADIAH SAVINGS
+    208: '42120',  # PB BRIGHT STAR
+    210: '42120',  # PB MYSALARY
+    211: 'N',      # ATM-FD CLRG.      PFB 211
+    212: '42120',  # WISE
+    213: '42120',  # PB SAVELINK
+    214: '42320',  # MUDHARABAH SAVINGS
+    215: '42320',  # ALWADIAH SAVINGS (STAFF)
+    216: '42120',  # PB UNIONPAY SAVINGS
+    218: '42120',  # PB MYSALARY SAVINGS ACCOUNT-I
+    220: '42120',  # (CM) SAVINGS ACC-I
+    221: '42120',  # (CM) BASIC SA-I
+    222: '42120',  # (CM) PB MYSALARY SA-I
+    223: '42120',  # (CM) FORU2SAVE SA-I
+    227: '42120',  # MONEYPLUS SA (STAFF)
+    228: '42120',  # MONEYPLUS SA
+    297: 'N',      # UMA1
+    298: 'N',      # UMA3
+    480: 'N',      # PB GOLD INVESTMENT
+    481: 'N',      # PB GOLD INVESTMENT -STAFF
+    482: 'N',      # CORP GOLD INVESTMENT ACCOUNT
+    483: 'N',      # EGOLD INVESTMENT ACCOUNT (NON-STAFF)
+    484: 'N',      # EGOLD INVESTMENT ACCOUNT (STAFF)
+}
+_SAPROD_OTHER = '42120'  # ALL OTHER SAVING CODES
+
+
+def saprod_format(product_code: Optional[int]) -> str:
+    """SAPROD: savings product code -> BNM code (OTHER = '42120')."""
+    if missing(product_code):
+        return _SAPROD_OTHER
+    return _SAPROD_MAPPINGS.get(product_code, _SAPROD_OTHER)
+
+
+# ============================================================================
+# FORMAT: FDDENOM - FD DENOMINATION OF ISLAMIC OR DOMESTIC
+# ============================================================================
+
+_FDDENOM_ISLAMIC_RANGES: List[Tuple[int, int]] = [
+    (229, 232), (272, 283), (334, 336), (338, 339), (340, 359),
+    (379, 382), (386, 394), (453, 459), (461, 469), (542, 544),
+    (580, 593), (595, 599), (603, 607), (609, 611), (620, 627),
+    (640, 659), (660, 719), (726, 731), (736, 740), (780, 839),
+    (851, 853), (856, 863), (893, 894), (896, 897), (902, 903),
+    (914, 940), (941, 967), (987, 988), (991, 993),
+]
+
+_FDDENOM_ISLAMIC_SINGLES: Set[int] = {
+    422, 424, 426, 428, 475, 481, 487, 489, 491, 493, 495, 497, 499,
+    555, 557, 575, 777,
+}
+
+
+def fddenom_format(product_code: Optional[int]) -> str:
+    """
+    FDDENOM: FD product code -> 'I' (Islamic) or 'D' (Domestic).
+    OTHER = 'D' also applies to missing values.
+    """
+    if missing(product_code):
+        return 'D'
+    is_islamic = (
+        product_code in _FDDENOM_ISLAMIC_SINGLES
+        or any(start <= product_code <= end for start, end in _FDDENOM_ISLAMIC_RANGES)
+    )
+    return 'I' if is_islamic else 'D'
+
+
+# ============================================================================
+# FORMAT: FDPROD - FIXED DEPOSIT PRODUCT (INTEREST PLAN) -> BNM CODE
+# ============================================================================
+
+_FDPROD_MAPPINGS: Dict[int, str] = {
+    229: '42133',  # PB FD / TD-I - 3-MONTHS NON-STAFF (INDV)
+    230: '42133',  # PB FD / TD-I - 3-MONTHS STAFF
+    231: '42133',  # PB FD / TD-I - 8-MONTHS NON-STAFF (INDV)
+    232: '42133',  # PB FD / TD-I - 8-MONTHS STAFF
+    233: '42130',  # EFD - 1 MTH
+    234: '42130',  # EFD - 2 MTH
+    235: '42130',  # PB EFD NORMAL - 3 MONTHS
+    236: '42130',  # EFD - 4 MTH
+    237: '42130',  # EFD - 5 MTH
+    238: '42130',  # PB EFD NORMAL - 6 MONTHS
+    239: '42130',  # EFD - 7 MTH
+    240: '42130',  # EFD - 8 MTH
+    241: '42130',  # EFD - 9 MTH
+    242: '42130',  # EFD - 10 MTH
+    243: '42130',  # EFD - 11 MTH
+    244: '42130',  # EFD - 12 MTH
+    245: '42130',  # EFD - 13 MTH
+    246: '42130',  # EFD - 14 MTH
+    247: '42130',  # EFD - 15 MTH
+    248: '42130',  # EFD - 16 MTH
+    249: '42130',  # EFD - 17 MTH
+    250: '42130',  # EFD - 18 MTH
+    251: '42130',  # EFD - 19 MTH
+    252: '42130',  # EFD - 20 MTH
+    253: '42130',  # EFD - 21 MTH
+    254: '42130',  # EFD - 22 MTH
+    255: '42130',  # EFD - 23 MTH
+    256: '42130',  # EFD - 24 MTH
+    257: '42130',  # EFD - 36 MTH
+    258: '42130',  # EFD - 48 MTH
+    259: '42130',  # EFD - 60 MTH
+    260: '42130',  # FD GOLDEN 50 - 1 MTH
+    261: '42130',  # FD GOLDEN 50 - 2 MTH
+    262: '42130',  # FD GOLDEN 50 - 3 MTH
+    263: '42130',  # FD GOLDEN 50 - 4 MTH
+    264: '42130',  # FD GOLDEN 50 - 5 MTH
+    265: '42130',  # FD GOLDEN 50 - 6 MTH
+    266: '42130',  # FD GOLDEN 50 - 7 MTH
+    267: '42130',  # FD GOLDEN 50 - 8 MTH
+    268: '42130',  # FD GOLDEN 50 - 9 MTH
+    269: '42130',  # FD GOLDEN 50 - 10 MTH
+    270: '42130',  # FD GOLDEN 50 - 11 MTH
+    271: '42130',  # FD GOLDEN 50 - 12 MTH
+    272: '42133',  # FD SHORT-TERM TD-I - 30 DAYS
+    273: '42133',  # FD SHORT-TERM TD-I - 31-60 DAYS
+    274: '42133',  # FD SHORT-TERM TD-I - 61-90 DAYS
+    275: '42133',  # FD SHORT-TERM TD-I - 91-120 DAYS
+    276: '42133',  # FD SHORT-TERM TD-I - 121-150 DAYS
+    277: '42133',  # FD SHORT-TERM TD-I - 151-180 DAYS
+    278: '42133',  # FD SHORT-TERM TD-I - 181-210 DAYS
+    279: '42133',  # FD SHORT-TERM TD-I - 211-240 DAYS
+    280: '42133',  # FD SHORT-TERM TD-I - 241-270 DAYS
+    281: '42133',  # FD SHORT-TERM TD-I - 271-300 DAYS
+    282: '42133',  # FD SHORT-TERM TD-I - 301-330 DAYS
+    283: '42133',  # FD SHORT-TERM TD-I - 331-366 DAYS
+    284: '42130',  # PLUS FD - 30 DAYS
+    285: '42130',  # PLUS FD - 31 - 60 DAYS
+    286: '42130',  # PLUS FD - 61 - 90 DAYS
+    287: '42130',  # PLUS FD - 91 - 120 DAYS
+    288: '42130',  # PLUS FD - 121 - 150 DAYS
+    289: '42130',  # PLUS FD - 151 - 180 DAYS
+    290: '42130',  # PLUS FD - 181 - 210 DAYS
+    291: '42130',  # PLUS FD - 211 - 240 DAYS
+    292: '42130',  # PLUS FD - 241 - 270 DAYS
+    293: '42130',  # PLUS FD - 271 - 300 DAYS
+    294: '42130',  # PLUS FD - 301 - 330 DAYS
+    295: '42130',  # PLUS FD - 331 - 365/366 DAYS
+    300: '42130',  # NORMAL FD - 1 MONTH
+    301: '42130',  # NORMAL FD - 3 MONTHS
+    302: '42130',  # NORMAL FD - 6 MONTHS
+    303: '42130',  # NORMAL FD - 9 MONTHS
+    304: '42130',  # NORMAL FD - 12 MONTHS
+    305: '42130',  # NORMAL FD - 15 MONTHS
+    306: '42130',  # NORMAL FD - 18 MONTHS
+    307: '42130',  # NORMAL FD - 21 MONTHS
+    308: '42130',  # NORMAL FD - 24 MONTHS
+    309: '42130',  # NORMAL FD - 36 MONTHS
+    310: '42130',  # NORMAL FD - 48 MONTHS
+    311: '42130',  # EFD NON-STAFF
+    312: '42130',  # EFD STAFF
+    313: '42130',  # FD BONUS - 4 MONTHS
+    314: '42130',  # NORMAL FD - 5 MONTHS
+    315: '42130',  # NORMAL FD - 7 MONTHS
+    316: '42130',  # NORMAL FD - 8 MONTHS
+    317: '42130',  # NORMAL FD - 10 MONTHS
+    318: '42130',  # NORMAL FD - 11 MONTHS
+    319: '42130',  # NORMAL FD - 27 MONTHS
+    320: '42130',  # FD LIFE - 1 MONTHS
+    321: '42130',  # FD LIFE - 3 MONTHS
+    322: '42130',  # FD LIFE - 6 MONTHS
+    323: '42130',  # FD LIFE - 9 MONTHS
+    324: '42130',  # FD LIFE - 12 MONTHS
+    325: '42130',  # FD LIFE - 15 MONTHS
+    326: '42130',  # FD LIFE - 18 MONTHS
+    327: '42130',  # FD LIFE - 21 MONTHS
+    328: '42130',  # FD LIFE - 24 MONTHS
+    329: '42130',  # FD LIFE - 36 MONTHS
+    330: '42130',  # FD LIFE - 48 MONTHS
+    331: '42130',  # FD LIFE - 60 MONTHS
+    332: '42130',  # FD LIFE - 2 MONTH-PFB
+    333: '42130',  # FD BONUS - 4 MONTHS
+    334: '42133',  # PB eTDi - 3 MONTHS
+    335: '42133',  # PB eTDi - 6 MONTHS
+    336: '42133',  # PB eTDi - 9 MONTHS
+    337: '42130',  # PLUS FD STAFF (6MTH)
+    338: '42133',  # TDI REWARD - 6 MONTHS(N-STAFF)
+    339: '42133',  # TDI REWARD - 6 MONTHS(STAFF)
+    340: '42132',  # FD MUDH - 1 MONTH
+    341: '42132',  # FD MUDH - 3 MONTHS
+    342: '49999',  # TERM INVESTMENT ACCT-I (3 MTH)
+    343: '42132',  # FD MUDH - 9 MONTHS
+    344: '42132',  # FD MUDH - 12 MONTHS
+    345: '49999',  # TERM INVESTMENT ACCT-I (6 MTH)
+    346: '42132',  # FD MUDH - 18 MONTHS
+    347: '42132',  # FD MUDH - 21 MONTHS
+    348: '49999',  # TERM INVESTMENT ACCT-I (9 MTH)
+    349: '42132',  # FD MUDH - 36 MONTHS
+    350: '42132',  # FD MUDH - 48 MONTHS
+    351: '42132',  # FD MUDH - 60 MONTHS
+    352: '42132',  # FD MUDH - 2 MONTHS
+    353: '42132',  # FD MUDH - 4 MONTHS
+    354: '42132',  # FD MUDH - 5 MONTHS
+    355: '42132',  # FD MUDH - 7 MONTHS
+    356: '42132',  # FD MUDH - 8 MONTHS
+    357: '42132',  # FD MUDH - 10 MONTHS
+    358: '42132',  # FD MUDH - 11 MONTHS
+    359: '42132',  # FD MUDH - 27 MONTHS
+    360: '42130',  # FD GOLDEN 50 - 15 MTH
+    361: '42130',  # FD GOLDEN 50 - 18 MTH
+    362: '42130',  # FD GOLDEN 50 - 21 MTH
+    363: '42130',  # FD GOLDEN 50 - 24 MTH
+    364: '42130',  # FD GOLDEN 50 - 36 MTH
+    365: '42130',  # FD GOLDEN 50 - 48 MTH
+    366: '42130',  # FD GOLDEN 50 - 60 MTH
+    368: '42130',  # PB RCB PREMIER -  6 MTH
+    369: '42130',  # UNIT TRUST FD-3 MTH
+    370: '42130',  # UNIT TRUST FD-6 MTH
+    371: '42130',  # PB RCB PREMIER - 12 MTH
+    372: '42130',  # UNIT TRUST FD-12 MTHS
+    373: '42130',  # PB RCB PREMIER -  6 MTH
+    374: '42130',  # PB RCB PREMIER - 12 MTH
+    375: '42130',  # PB FD / TD-I - 3-MONTHS NON-STAFF (INDV)
+    376: '42130',  # PB FD / TD-I - 3-MONTHS STAFF
+    377: '42130',  # PB FD / TD-I - 8-MONTHS NON-STAFF (INDV)
+    378: '42130',  # PB FD / TD-I - 8-MONTHS STAFF
+    379: '42133',  # PB SPECIAL2 TD-I NON STAFF - 6 MONTHS
+    380: '42133',  # PB SPECIAL2 TD-I STAFF - 6 MONTHS
+    381: '42133',  # PB RCB FD / TD-I - 3-MTHS NON-STAFF (INDV)
+    382: '42133',  # PB RCB FD / TD-I - 8-MTHS NON-STAFF (INDV)
+    383: '42130',  # PB 3-MONTH RCB FD/TD-I - 03 MONTHS
+    384: '42130',  # PB RCB PREMIER FD - 12 MONTHS
+    385: '42130',  # PLUS FD  - 15 MONTHS
+    386: '42133',  # PB 3-MONTH RCB FD/TD-I - 03 MONTHS
+    387: '42133',  # PB RCB PREMIER TD-I - 12 MONTHS
+    388: '42133',  # PB RCB PREMIER HY TD-I N-STAFF R5:1  6MTH
+    389: '42133',  # PB RCB PREMIER HY TD-I N-STAFF R5:1 12MTH
+    390: '42133',  # PB RCB PREMIER HY TD-I N-STAFF R2:1  6MTH
+    391: '42133',  # PB RCB PREMIER HY TD-I N-STAFF R2:1 12MTH
+    392: '42133',  # TD-I - 03 MONTHS
+    393: '42133',  # TD-I - 06 MONTHS
+    394: '42133',  # TD-I - 12 MONTHS
+    395: '42130',  # TWIN HAPPINESS FD CAMPAIGN - 12 MTH
+    396: '42130',  # FD PB WONDER- 7 MONTHS
+    397: '42130',  # TWIN HAPPINESS FD CAMPAIGN - 12 MTH-STAFF
+    398: '42130',  # FD PB WONDER- 7 MTHS-STAFF
+    399: '42130',  # PB FORTUNE-6 MONTHS
+    400: '42130',  # NORMAL FD - 1 MONTH (S)
+    401: '42130',  # NORMAL FD - 3 MONTHS (S)
+    402: '42130',  # NORMAL FD - 6 MONTHS (S)
+    403: '42130',  # NORMAL FD - 9 MONTHS (S)
+    404: '42130',  # NORMAL FD - 12 MONTHS (S)
+    405: '42130',  # NORMAL FD - 15 MONTHS (S)
+    406: '42130',  # NORMAL FD - 18 MONTHS (S)
+    407: '42130',  # NORMAL FD - 21 MONTHS (S)
+    408: '42130',  # NORMAL FD - 24 MONTHS (S)
+    409: '42130',  # NORMAL FD - 36 MONTHS (S)
+    410: '42130',  # NORMAL FD - 48 MONTHS (S)
+    411: '42130',  # NORMAL FD - 60 MONTHS (S)
+    412: '42130',  # NORMAL FD - 2 MONTHS (S)
+    413: '42130',  # FD  BONUS  - 4 MONTHS
+    414: '42130',  # NORMAL FD - 5 MONTHS (S)
+    415: '42130',  # NORMAL FD - 7 MONTHS (S)
+    416: '42130',  # NORMAL FD - 8 MONTHS (S)
+    417: '42130',  # NORMAL FD - 10 MONTHS (S)
+    418: '42130',  # NORMAL FD - 11 MONTHS (S)
+    419: '42130',  # NORMAL FD - 27 MONTHS (S)
+    420: '42130',  # FD LIFE  - 1 MONTH   (S)
+    421: '42630',  # CNY - 1 MTH  CATEGORY  I
+    422: '42133',  # PB eTDi NORMAL - 3 MONTHS
+    423: '42630',  # CNY - 3 MTHS CATEGORY  I
+    424: '42133',  # PB eTDi NORMAL STAFF - 3 MONTHS
+    425: '42630',  # CNY - 6 MTHS CATEGORY  I
+    426: '42133',  # PB eTDi NORMAL - 6 MONTHS
+    427: '42630',  # CNY -12 MTHS CATEGORY  I
+    428: '42133',  # PB eTDi NORMAL STAFF - 6 MONTHS
+    429: '42630',  # SWISS FRANC (CHF) 1MTH
+    430: '42630',  # SWISS FRANC (CHF) 3MTH
+    431: '42630',  # SWISS FRANC (CHF) 6MTH
+    432: '42630',  # SWISS FRANC (CHF) 12MTH
+    433: '42630',  # THAI BAHT (THB) 1MTH
+    434: '42630',  # THAI BAHT (THB) 3MTH
+    435: '42630',  # THAI BAHT (THB) 6MTH
+    436: '42630',  # THAI BAHT (THB) 12MTH
+    437: '42630',  # PB FCY FD POWER(CAD) 1MTH
+    438: '42130',  # PB JOURNEY GOLDEN SAVERS2 - 50FD - 3-MTH
+    439: '42630',  # ZAR  1 MONTH CAT II
+    440: '42630',  # ZAR  3 MONTHS CAT I
+    441: '42630',  # ZAR  3 MONTHS CAT II
+    442: '42630',  # ZAR  6 MONTHS CAT I
+    443: '42630',  # ZAR  6 MONTHS CAT II
+    444: '42630',  # ZAR 12 MONTHS CAT I
+    445: '42130',  # PB FD BONANZA - 3 MONTH
+    446: '42630',  # CAD 12 MONTHS CAT I
+    447: '42130',  # PB PB RCB TOP RATE FD CAMPAIGN
+    448: '42130',  # PB EFD  -  3 MONTH  (S)
+    449: '42130',  # PB EFD  -  6 MONTH  (S)
+    450: '42130',  # PB EFD  -  9 MONTH  (S)
+    451: '42130',  # PB EFD  -  12 MONTH  (S)
+    452: '42130',  # PB EFD  -  15 MONTH  (S)
+    453: '42132',  # FD MUDH  -  6 MONTH  (S)
+    454: '42132',  # FD MUDH  -  7 MONTH  (S)
+    455: '42132',  # FD MUDH  -  8 MONTH  (S)
+    456: '42132',  # FD MUDH  -  9 MONTH  (S)
+    457: '42132',  # FD MUDH  - 10 MONTH  (S)
+    458: '42132',  # FD MUDH  - 11 MONTH  (S)
+    459: '42132',  # FD MUDH  - 12 MONTH  (S)
+    460: '42130',  # FD GOLDEN 50 - 15 MTH (S)
+    461: '42132',  # FD MUDH  - 13 MONTH  (S)
+    462: '42132',  # FD MUDH  - 14 MONTH  (S)
+    463: '42132',  # FD MUDH  - 15 MONTH  (S)
+    464: '42132',  # FD MUDH  - 18 MONTH  (S)
+    465: '42132',  # FD MUDH  - 21 MONTH  (S)
+    466: '42132',  # FD MUDH  - 24 MONTH  (S)
+    467: '42132',  # FD MUDH  - 36 MONTH  (S)
+    468: '42132',  # FD MUDH  - 48 MONTH  (S)
+    469: '42132',  # FD MUDH  - 60 MONTH  (S)
+    470: '42630',  # FD FCY USD* - 1 MONTH(S)
+    471: '42630',  # FD FCY USD  - 1 MONTH(S)
+    472: '42630',  # FD FCY USD* - 3 MONTH(S)
+    473: '42630',  # FD FCY USD  - 3 MONTH(S)
+    474: '42630',  # FD FCY USD* - 6 MONTH(S)
+    475: '42133',  # PB RCB TOP RATE TD-I-NON-STAFF - 3 MONTH(S)
+    476: '42630',  # FD FCY GBP* - 1 MONTH(S)
+    477: '42630',  # FD FCY GBP  - 1 MONTH(S)
+    478: '42630',  # FD FCY GBP* - 3 MONTH(S)
+    479: '42630',  # FD FCY GBP  - 3 MONTH(S)
+    480: '42630',  # FD FCY GBP* - 6 MONTH(S)
+    481: '42133',  # PB RCB TOP RATE TD-I-NON-STAFF - 6 MONTH(S)
+    482: '42630',  # FD FCY AUD* - 1 MONTH(S)
+    483: '42630',  # FD FCY AUD  - 1 MONTH(S)
+    484: '42630',  # FD FCY AUD* - 3 MONTH(S)
+    485: '42630',  # FD FCY AUD  - 3 MONTH(S)
+    486: '42630',  # FD FCY AUD* - 6 MONTH(S)
+    487: '42133',  # PB eTDi NORMAL - 9 MONTHS
+    488: '42630',  # FD FCY SGD* - 1 MONTH(S)
+    489: '42133',  # PB eTDi NORMAL STAFF - 9 MONTHS
+    490: '42630',  # FD FCY SGD* - 3 MONTH(S)
+    491: '42133',  # PB eTDi - 3 MONTHS
+    492: '42630',  # FD FCY SGD* - 6 MONTH(S)
+    493: '42133',  # PB eTDi - 6 MONTHS
+    494: '42630',  # FD FCY JPY* - 1 MONTH(S)
+    495: '42133',  # PB eTDi - 9 MONTHS
+    496: '42630',  # FD FCY JPY* - 3 MONTH(S)
+    497: '42133',  # PB eTDi - 12 MONTHS
+    498: '42630',  # FD FCY JPY* - 6 MONTH(S)
+    499: '42133',  # PB eTDi - 15 MONTHS
+    500: '42130',  # NORMAL FD - 30 MONTHS
+    501: '42130',  # NORMAL FD - 33 MONTHS
+    502: '42130',  # NORMAL FD - 39 MONTHS
+    503: '42130',  # NORMAL FD - 42 MONTHS
+    504: '42130',  # NORMAL FD - 45 MONTHS
+    505: '42130',  # NORMAL FD - 51 MONTHS
+    506: '42130',  # NORMAL FD - 54 MONTHS
+    507: '42130',  # NORMAL FD - 57 MONTHS
+    508: '42130',  # NORMAL FD - 13 MONTHS
+    509: '42130',  # NORMAL FD - 14 MONTHS
+    510: '42130',  # NORMAL FD - 16 MONTHS
+    511: '42130',  # NORMAL FD - 17 MONTHS
+    512: '42130',  # NORMAL FD - 19 MONTHS
+    513: '42130',  # NORMAL FD - 20 MONTHS
+    514: '42130',  # NORMAL FD - 22 MONTHS
+    515: '42130',  # NORMAL FD - 23 MONTHS
+    516: '42130',  # NORMAL FD - 25 MONTHS
+    517: '42130',  # NORMAL FD - 26 MONTHS
+    518: '42130',  # NORMAL FD - 28 MONTHS
+    519: '42130',  # NORMAL FD - 29 MONTHS
+    520: '42130',  # NORMAL FD - 31 MONTHS
+    521: '42130',  # NORMAL FD - 32 MONTHS
+    522: '42130',  # NORMAL FD - 34 MONTHS
+    523: '42130',  # NORMAL FD - 35 MONTHS
+    524: '42130',  # NORMAL FD - 37 MONTHS
+    525: '42130',  # NORMAL FD - 38 MONTHS
+    526: '42130',  # NORMAL FD - 40 MONTHS
+    527: '42130',  # NORMAL FD - 41 MONTHS
+    528: '42130',  # NORMAL FD - 43 MONTHS
+    529: '42130',  # NORMAL FD - 44 MONTHS
+    530: '42130',  # NORMAL FD - 46 MONTHS
+    531: '42130',  # NORMAL FD - 47 MONTHS
+    532: '42130',  # NORMAL FD - 49 MONTHS
+    533: '42130',  # NORMAL FD - 50 MONTHS
+    534: '42130',  # NORMAL FD - 52 MONTHS
+    535: '42130',  # NORMAL FD - 53 MONTHS
+    536: '42130',  # NORMAL FD - 55 MONTHS
+    537: '42130',  # NORMAL FD - 56 MONTHS
+    538: '42130',  # NORMAL FD - 58 MONTHS
+    539: '42130',  # NORMAL FD - 59 MONTHS
+    540: '42130',  # PB JOURNEY JUNIOR SAVERS 3-4M(NS,NON-APP)
+    541: '42130',  # PB JOURNEY JUNIOR SAVERS 3-4M(NS,APP USR)
+    542: '42133',  # PB TOP RATE TD-I NON-STAFF - 3 MONTH(S)
+    543: '42133',  # PB TOP RATE TD-I STAFF - 3 MONTH(S)
+    544: '42133',  # PIBB 13-MTH TERM DEPOSIT-I CAMP STAFF
+    545: '42130',  # PB INSURE REWARDS CAMPAIGN
+    546: '42130',  # PB INSURE REWARDS CAMPAIGN
+    547: '42130',  # PB INSURE REWARDS CAMPAIGN
+    548: '42630',  # FD FCY EUR* - 1 MONTH(S)
+    550: '42630',  # FD FCY EUR* - 3 MONTH(S)
+    551: '42130',  # PB RCB INVITATION (6-MTH) -NON STAFF(INDV)
+    552: '42630',  # FD FCY EUR* - 6 MONTH(S)
+    553: '42130',  # PB JOURNEY GOLDEN SAVERS2 - 50FD - 6-MTH
+    554: '42630',  # FD FCY HKD* - 1 MONTH(S)
+    555: '42133',  # PB TOP RATE TD-I NON-STAFF - 6 MONTH(S)
+    556: '42630',  # FD FCY HKD* - 3 MONTH(S)
+    557: '42133',  # PB TOP RATE TD-I STAFF - 6 MONTH(S)
+    558: '42630',  # FD FCY HKD* - 6 MONTH(S)
+    559: '42130',  # PB JOURNEY GOLDEN SAVERS2 - 50FD - 9-MTH
+    560: '42630',  # FD FCY USD  - 12 MONTH(S)
+    561: '42630',  # FD FCY GBP  - 12 MONTH(S)
+    562: '42630',  # FD FCY AUD  - 12 MONTH(S)
+    563: '42630',  # FD FCY SGD  - 12 MONTH(S)
+    564: '42630',  # FD FCY JPY  - 12 MONTH(S)
+    565: '42630',  # FD FCY EUR  - 12 MONTH(S)
+    566: '42630',  # FD FCY HKD  - 12 MONTH(S)
+    567: '42630',  # FD FCY NZG  - 1 MONTH(S) CAT I
+    568: '42130',  # PB JJS 2(6 MTH)-NON STAFF(INDV)
+    569: '42630',  # FD FCY NZG  - 3 MONTH(S) CAT I
+    570: '42130',  # PB EFD NORMAL - 9 MONTHS
+    571: '42630',  # FD FCY NZG  - 6 MONTH(S) CAT I
+    572: '42130',  # PB EFD NORMAL STAFF - 9 MONTHS
+    573: '42630',  # FD FCY NZG  - 12 MONTH(S)
+    574: '42630',  # CAD  1 MONTHS CAT I
+    575: '42133',  # PIBB 13-MTH TERM DEPOSIT-I CAMP N-STAFF
+    576: '42630',  # CAD  3 MONTHS CAT I
+    577: '42130',  # PB ENTERPRISE FD 6 MONTHS
+    578: '42630',  # CAD  6 MONTHS CAT I
+    579: '42630',  # CAD  6 MONTHS CAT II
+    580: '42132',  # FD MUDH  - 30 MONTHS
+    581: '42132',  # FD MUDH  - 33 MONTHS
+    582: '42132',  # FD MUDH  - 39 MONTHS
+    583: '42132',  # FD MUDH  - 42 MONTHS
+    584: '42132',  # FD MUDH  - 45 MONTHS
+    585: '42132',  # FD MUDH  - 51 MONTHS
+    586: '42132',  # FD MUDH  - 54 MONTHS
+    587: '42132',  # FD MUDH  - 57 MONTHS
+    588: '42132',  # FD MUDH  - 13 MONTHS
+    589: '42132',  # FD MUDH  - 14 MONTHS
+    590: '42132',  # FD MUDH  - 16 MONTHS
+    591: '42132',  # FD MUDH  - 17 MONTHS
+    592: '42132',  # FD MUDH  - 19 MONTHS
+    593: '42132',  # FD MUDH  - 20 MONTHS
+    594: '42130',  # PB JOURNEY GOLDEN SAVERS 3-50FD 3M
+    595: '42132',  # FD MUDH  - 23 MONTHS
+    596: '42132',  # FD MUDH  - 25 MONTHS
+    597: '42133',  # TDI
+    598: '42133',  # TDI
+    599: '42133',  # TDI NONSTAFF (12MTH)
+    600: '42130',  # NORMAL FD - 30 MONTHS (S)
+    601: '42130',  # NORMAL FD - 33 MONTHS (S)
+    602: '42130',  # NORMAL FD - 39 MONTHS (S)
+    603: '42133',  # UT+3M TD-i (2:1)
+    604: '42133',  # UT+8M TD-i (2:1)
+    605: '42133',  # UT+3M TD-i (5:1)
+    606: '42133',  # UT+8M TD-i (5:1)
+    607: '42133',  # ExcelLink+3M TD-i (2:1)
+    608: '42130',  # NORMAL FD - 13 MONTHS (S)
+    609: '42133',  # ExcelLink+8M TD-i (2:1)
+    610: '42133',  # ExcelLink+3M TD-i (5:1)
+    611: '42133',  # ExcelLink+8M TD-i (5:1)
+    612: '42130',  # NORMAL FD - 19 MONTHS (S)
+    613: '42130',  # NORMAL FD - 20 MONTHS (S)
+    614: '42130',  # NORMAL FD - 22 MONTHS (S)
+    615: '42130',  # NORMAL FD - 23 MONTHS (S)
+    616: '42130',  # NORMAL FD - 25 MONTHS (S)
+    617: '42130',  # NORMAL FD - 26 MONTHS (S)
+    618: '42130',  # NORMAL FD - 28 MONTHS (S)
+    619: '42130',  # NORMAL FD - 29 MONTHS (S)
+    620: '42133',  # UT+3M TD-i (2:1)
+    621: '42133',  # UT+8M TD-i (2:1)
+    622: '42133',  # UT+3M TD-i (5:1)
+    623: '42133',  # UT+8M TD-i (5:1)
+    624: '42133',  # ExcelLink+3M TD-i (2:1)
+    625: '42133',  # ExcelLink+8M TD-i (2:1)
+    626: '42133',  # ExcelLink+3M TD-i (5:1)
+    627: '42133',  # ExcelLink+8M TD-i (5:1)
+    628: '42130',  # NORMAL FD - 43 MONTHS (S)
+    629: '42130',  # NORMAL FD - 44 MONTHS (S)
+    630: '42130',  # NORMAL FD - 46 MONTHS (S)
+    631: '42130',  # NORMAL FD - 47 MONTHS (S)
+    632: '42130',  # NORMAL FD - 49 MONTHS (S)
+    633: '42130',  # NORMAL FD - 50 MONTHS (S)
+    634: '42130',  # NORMAL FD - 52 MONTHS (S)
+    635: '42130',  # NORMAL FD - 53 MONTHS (S)
+    636: '42130',  # NORMAL FD - 55 MONTHS (S)
+    637: '42130',  # NORMAL FD - 56 MONTHS (S)
+    638: '42130',  # NORMAL FD - 58 MONTHS (S)
+    639: '42130',  # NORMAL FD - 59 MONTHS (S)
+    640: '42133',  # FD STAFF TD-I 1 MONTH(S)
+    641: '42133',  # FD STAFF TD-I 2 MONTH(S)
+    642: '42133',  # FD STAFF TD-I 3 MONTH(S)
+    643: '42133',  # FDI BONUS  - 4 MONTHS
+    644: '42133',  # FD STAFF TD-I 5 MONTH(S)
+    645: '42133',  # FD STAFF TD-I 6 MONTH(S)
+    646: '42133',  # FD STAFF TD-I 7 MONTH(S)
+    647: '42133',  # FD STAFF TD-I 8 MONTH(S)
+    648: '42133',  # FD STAFF TD-I 9 MONTH(S)
+    649: '42133',  # FD STAFF TD-I 10 MONTH(S)
+    650: '42133',  # FD STAFF TD-I 11 MONTH(S)
+    651: '42133',  # FD STAFF TD-I 12 MONTH(S)
+    652: '42133',  # FD STAFF TD-I 15 MONTH(S)
+    653: '42133',  # FD STAFF TD-I 18 MONTH(S)
+    654: '42133',  # FD STAFF TD-I 21 MONTH(S)
+    655: '42133',  # FD STAFF TD-I 24 MONTH(S)
+    656: '42133',  # FD STAFF TD-I 36 MONTH(S)
+    657: '42133',  # FD STAFF TD-I 48 MONTH(S)
+    658: '42133',  # FD STAFF TD-I 60 MONTH(S)
+    659: '42133',  # TDI STAFF (12MTH)
+    660: '42132',  # FD MUDH  - 1     PFB 340
+    661: '42132',  # FD MUDH  - 2         341
+    662: '42132',  # FD MUDH  - 3         342
+    663: '42132',  # FD MUDH  - 4         343
+    664: '42132',  # FD MUDH  - 5         344
+    665: '42132',  # FD MUDH  - 6         342
+    666: '42132',  # FD MUDH  - 7         342
+    667: '42132',  # FD MUDH  - 8         342
+    668: '42132',  # FD MUDH  - 9         343
+    669: '42132',  # FD MUDH  - 10        343
+    670: '42132',  # FD MUDH  - 11        343
+    671: '42132',  # FD MUDH  - 12        344
+    672: '42132',  # FD MUDH  - 13        344
+    673: '42132',  # FD MUDH  - 14        344
+    674: '42132',  # FD MUDH  - 15        345
+    675: '42132',  # FD MUDH  - 16        345
+    676: '42132',  # FD MUDH  - 17        345
+    677: '42132',  # FD MUDH  - 18        346
+    678: '42132',  # FD MUDH  - 19        346
+    679: '42132',  # FD MUDH  - 20        346
+    680: '42132',  # FD MUDH  - 21        347
+    681: '42132',  # FD MUDH  - 22        348
+    682: '42132',  # FD MUDH  - 23        348
+    683: '42132',  # FD MUDH  - 24        348
+    684: '42132',  # FD MUDH  - 25        348
+    685: '42132',  # FD MUDH  - 26        348
+    686: '42132',  # FD MUDH  - 27        348
+    687: '42132',  # FD MUDH  - 28        348
+    688: '42132',  # FD MUDH  - 29        348
+    689: '42132',  # FD MUDH  - 30        348
+    690: '42132',  # FD MUDH  - 31        348
+    691: '42132',  # FD MUDH  - 32        348
+    692: '42132',  # FD MUDH  - 33        348
+    693: '42132',  # FD MUDH  - 34        348
+    694: '42132',  # FD MUDH  - 35        348
+    695: '42132',  # FD MUDH  - 36        349
+    696: '42132',  # FD MUDH  - 37        349
+    697: '42132',  # FD MUDH  - 38        349
+    698: '42132',  # FD MUDH  - 39        349
+    699: '42132',  # FD MUDH  - 40        349
+    700: '42132',  # FD MUDH  - 41        349
+    701: '42132',  # FD MUDH  - 42        349
+    702: '42132',  # FD MUDH  - 43        349
+    703: '42132',  # FD MUDH  - 44        349
+    704: '42132',  # FD MUDH  - 45        349
+    705: '42132',  # FD MUDH  - 46        349
+    706: '42132',  # FD MUDH  - 47        349
+    707: '42132',  # FD MUDH  - 48        350
+    708: '42132',  # FD MUDH  - 49        350
+    709: '42132',  # FD MUDH  - 50        350
+    710: '42132',  # FD MUDH  - 51        350
+    711: '42132',  # FD MUDH  - 52        350
+    712: '42132',  # FD MUDH  - 53        350
+    713: '42132',  # FD MUDH  - 54        350
+    714: '42132',  # FD MUDH  - 55        350
+    715: '42132',  # FD MUDH  - 56        350
+    716: '42132',  # FD MUDH  - 57        350
+    717: '42132',  # FD MUDH  - 58        350
+    718: '42132',  # FD MUDH  - 59        350
+    719: '42132',  # FD MUDH  - 60        351
+    720: '42130',  # POWERINVEST FD   CAMPAIGN R2:1  3MTH
+    721: '42130',  # POWERINVEST FD   CAMPAIGN R2:1  6MTH
+    722: '42130',  # POWERINVEST FD   CAMPAIGN R2:1 12MTH
+    723: '42130',  # POWERINVEST FD   CAMPAIGN R5:1  3MTH
+    724: '42130',  # POWERINVEST FD   CAMPAIGN R5:1  6MTH
+    725: '42130',  # POWERINVEST FD   CAMPAIGN R5:1 12MTH
+    726: '42133',  # POWERINVEST TD-I CAMPAIGN R2:1  3MTH
+    727: '42133',  # POWERINVEST TD-I CAMPAIGN R2:1  6MTH
+    728: '42133',  # POWERINVEST TD-I CAMPAIGN R2:1 12MTH
+    729: '42133',  # POWERINVEST TD-I CAMPAIGN R5:1  3MTH
+    730: '42133',  # POWERINVEST TD-I CAMPAIGN R5:1  6MTH
+    731: '42133',  # POWERINVEST TD-I CAMPAIGN R5:1 12MTH
+    732: '42130',  # PB PREMIER HY FD   N-STAFF R2:1  6MTH
+    733: '42130',  # PB PREMIER HY FD   N-STAFF R2:1 12MTH
+    734: '42130',  # PB PREMIER HY FD   N-STAFF R5:1  6MTH
+    735: '42130',  # PB PREMIER HY FD   N-STAFF R5:1 12MTH
+    736: '42133',  # PB PREMIER HY TD-I N-STAFF R2:1  6MTH
+    737: '42133',  # PB PREMIER HY TD-I N-STAFF R2:1 12MTH
+    738: '42133',  # PB PREMIER HY TD-I N-STAFF R5:1  6MTH
+    739: '42133',  # PB PREMIER HY TD-I N-STAFF R5:1 12MTH
+    740: '42133',  # RCB ELITE - 12
+    741: '42130',  # PB PROSPERITY RATES -  3 MONTHS
+    742: '42130',  # PB PROSPERITY RATES -  6 MONTHS
+    743: '42130',  # PB PROSPERITY RATES -  9 MONTHS
+    744: '42130',  # PB PROSPERITY RATES - 12 MONTHS
+    745: '42130',  # PB SUPER FD RATES (NON-STAFF)- 1 MONTH(S)
+    746: '42130',  # PB SUPER FD RATES (STAFF)    - 1 MONTH(S)
+    747: '42130',  # PB SUPER FD RATES (NON-STAFF)- 1 MONTH(S)
+    748: '42130',  # PB SUPER FD RATES (STAFF)    - 1 MONTH(S)
+    749: '42130',  # PB RCB FD / TD-I - 3-MTHS NON-STAFF (INDV)
+    750: '42130',  # PB RCB FD / TD-I - 8-MTHS NON-STAFF (INDV)
+    751: '42630',  # FD FCY USD* -  1 MONTH(S)
+    752: '42630',  # FD FCY USD* -  3 MONTH(S)
+    753: '42630',  # FD FCY USD* -  6 MONTH(S)
+    754: '42630',  # FD FCY USD* - 12 MONTH(S)
+    755: '42630',  # FD FCY GBP* -  1 MONTH(S)
+    756: '42630',  # FD FCY USD* -  1 MONTH(S)
+    757: '42630',  # FD FCY USD* -  3 MONTH(S)
+    758: '42630',  # FD FCY USD* -  6 MONTH(S)
+    759: '42630',  # FD FCY GBP* -  1 MONTH(S)
+    760: '42630',  # FD FCY GBP* -  3 MONTH(S)
+    761: '42630',  # FD FCY GBP* -  6 MONTH(S)
+    762: '42630',  # FD FCY AUD* -  1 MONTH(S)
+    763: '42630',  # FD FCY AUD* -  3 MONTH(S)
+    764: '42630',  # FD FCY AUD* -  6 MONTH(S)
+    765: '42630',  # FD FCY EUR* -  6 MONTH(S)
+    766: '42630',  # FD FCY EUR* - 12 MONTH(S)
+    767: '42630',  # FD FCY NZD* -  1 MONTH(S)
+    768: '42630',  # FD FCY NZD* -  3 MONTH(S)
+    769: '42630',  # FD FCY NZD* -  6 MONTH(S)
+    770: '42630',  # FD FCY NZD* - 12 MONTH(S)
+    771: '42630',  # FD FCY CNY* -  1 MONTH(S)
+    772: '42630',  # FD FCY CNY* -  3 MONTH(S)
+    773: '42630',  # FD FCY CNY* -  6 MONTH(S)
+    774: '42630',  # FD FCY CNY* - 12 MONTH(S)
+    775: '42130',  # PB 3-MONTH FD/TD-I - 3 MONTH(S)
+    776: '42130',  # PB 3-MONTH FD/TD-I(STAFF) - 3 MONTH(S)
+    777: '42133',  # PB 3-MONTH FD/TD-I - 3 MONTH(S)
+    778: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    779: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    780: '42133',  # FD TD-I & TD-I FI - 1 MONTH(S)
+    781: '42133',  # FD TD-I & TD-I FI - 2 MONTH(S)
+    782: '42133',  # FD TD-I & TD-I FI - 3 MONTH(S)
+    783: '42133',  # FDI BONUS  - 4 MONTHS
+    784: '42133',  # FD TD-I & TD-I FI - 5 MONTH(S)
+    785: '42133',  # FD TD-I & TD-I FI - 6 MONTH(S)
+    786: '42133',  # FD TD-I & TD-I FI - 7 MONTH(S)
+    787: '42133',  # FD TD-I & TD-I FI - 8 MONTH(S)
+    788: '42133',  # FD TD-I & TD-I FI - 9 MONTH(S)
+    789: '42133',  # FD TD-I & TD-I FI - 10 MONTH(S)
+    790: '42133',  # FD TD-I & TD-I FI - 11 MONTH(S)
+    791: '42133',  # FD TD-I & TD-I FI - 12 MONTH(S)
+    792: '42133',  # FD TD-I & TD-I FI - 13 MONTH(S)
+    793: '42133',  # FD TD-I & TD-I FI - 14 MONTH(S)
+    794: '42133',  # FD TD-I & TD-I FI - 15 MONTH(S)
+    795: '42133',  # FD TD-I & TD-I FI - 16 MONTH(S)
+    796: '42133',  # FD TD-I & TD-I FI - 17 MONTH(S)
+    797: '42133',  # FD TD-I & TD-I FI - 18 MONTH(S)
+    798: '42133',  # FD TD-I & TD-I FI - 19 MONTH(S)
+    799: '42133',  # FD TD-I & TD-I FI - 20 MONTH(S)
+    800: '42133',  # FD TD-I & TD-I FI - 21 MONTH(S)
+    801: '42133',  # FD TD-I & TD-I FI - 22 MONTH(S)
+    802: '42133',  # FD TD-I & TD-I FI - 23 MONTH(S)
+    803: '42133',  # FD TD-I & TD-I FI - 24 MONTH(S)
+    804: '42133',  # FD TD-I & TD-I FI - 25 MONTH(S)
+    805: '42133',  # FD TD-I & TD-I FI - 26 MONTH(S)
+    806: '42133',  # FD TD-I & TD-I FI - 27 MONTH(S)
+    807: '42133',  # FD TD-I & TD-I FI - 28 MONTH(S)
+    808: '42133',  # FD TD-I & TD-I FI - 29 MONTH(S)
+    809: '42133',  # FD TD-I & TD-I FI - 30 MONTH(S)
+    810: '42133',  # FD TD-I & TD-I FI - 31 MONTH(S)
+    811: '42133',  # FD TD-I & TD-I FI - 32 MONTH(S)
+    812: '42133',  # FD TD-I & TD-I FI - 33 MONTH(S)
+    813: '42133',  # FD TD-I & TD-I FI - 34 MONTH(S)
+    814: '42133',  # FD TD-I & TD-I FI - 35 MONTH(S)
+    815: '42133',  # FD TD-I & TD-I FI - 36 MONTH(S)
+    816: '42133',  # FD TD-I & TD-I FI - 37 MONTH(S)
+    817: '42133',  # FD TD-I & TD-I FI - 38 MONTH(S)
+    818: '42133',  # FD TD-I & TD-I FI - 39 MONTH(S)
+    819: '42133',  # FD TD-I & TD-I FI - 40 MONTH(S)
+    820: '42133',  # FD TD-I & TD-I FI - 41 MONTH(S)
+    821: '42133',  # FD TD-I & TD-I FI - 42 MONTH(S)
+    822: '42133',  # FD TD-I & TD-I FI - 43 MONTH(S)
+    823: '42133',  # FD TD-I & TD-I FI - 44 MONTH(S)
+    824: '42133',  # FD TD-I & TD-I FI - 45 MONTH(S)
+    825: '42133',  # FD TD-I & TD-I FI - 46 MONTH(S)
+    826: '42133',  # FD TD-I & TD-I FI - 47 MONTH(S)
+    827: '42133',  # FD TD-I & TD-I FI - 48 MONTH(S)
+    828: '42133',  # FD TD-I & TD-I FI - 49 MONTH(S)
+    829: '42133',  # FD TD-I & TD-I FI - 50 MONTH(S)
+    830: '42133',  # FD TD-I & TD-I FI - 51 MONTH(S)
+    831: '42133',  # FD TD-I & TD-I FI - 52 MONTH(S)
+    832: '42133',  # FD TD-I & TD-I FI - 53 MONTH(S)
+    833: '42133',  # FD TD-I & TD-I FI - 54 MONTH(S)
+    834: '42133',  # FD TD-I & TD-I FI - 55 MONTH(S)
+    835: '42133',  # FD TD-I & TD-I FI - 56 MONTH(S)
+    836: '42133',  # FD TD-I & TD-I FI - 57 MONTH(S)
+    837: '42133',  # FD TD-I & TD-I FI - 58 MONTH(S)
+    838: '42133',  # FD TD-I & TD-I FI - 59 MONTH(S)
+    839: '42133',  # FD TD-I & TD-I FI - 60 MONTH(S)
+    850: '42130',  # PLUS FD NEW RCB SIGN-UP - 4 MONTH(S)
+    851: '49999',  # TERM INVESTMENT ACCT-I (3 MTH)
+    852: '49999',  # TERM INVESTMENT ACCT-I (6 MTH)
+    853: '49999',  # TERM INVESTMENT ACCT-I (9 MTH)
+    854: '42130',  # PLUS FD CAMPAIGN NON-STAFF - 3 MONTH(S)
+    855: '42130',  # PLUS FD CAMPAIGN STAFF - 3 MONTH(S)
+    856: '42133',  # PB TD-I REWARD CAMPAIGN (NON-STAFF)
+    857: '42133',  # PB TD-I REWARD CAMPAIGN (STAFF)
+    858: '42133',  # FD TD-I NON-STAFF - 3 MONTH(S)
+    859: '42133',  # FD TD-I STAFF - 3 MONTH(S)
+    860: '42133',  # PB FD RUSH CAMPAIGN NON-STAFF - 4 MONTH(S)
+    861: '42133',  # PB FD RUSH CAMPAIGN STAFF     - 4 MONTH(S)
+    862: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    863: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    864: '42130',  # EFD STAFF            - 1 MTH
+    865: '42130',  # EFD STAFF            - 2 MTH
+    866: '42130',  # PB EFD NORMAL STAFF  - 3 MONTHS
+    867: '42130',  # EFD STAFF            - 4 MTH
+    868: '42130',  # EFD STAFF            - 5 MTH
+    869: '42130',  # PB EFD NORMAL STAFF  - 6 MONTHS
+    870: '42130',  # EFD STAFF            - 7 MTH
+    871: '42130',  # EFD STAFF            - 8 MTH
+    872: '42130',  # EFD STAFF            - 9 MTH
+    873: '42130',  # EFD STAFF            - 10 MTH
+    874: '42130',  # EFD STAFF            - 11 MTH
+    875: '42130',  # EFD STAFF            - 12 MTH
+    876: '42130',  # EFD STAFF            - 13 MTH
+    877: '42130',  # EFD STAFF            - 14 MTH
+    878: '42130',  # EFD STAFF            - 15 MTH
+    879: '42130',  # EFD STAFF            - 16 MTH
+    880: '42130',  # EFD STAFF            - 17 MTH
+    881: '42130',  # EFD STAFF            - 18 MTH
+    882: '42130',  # EFD STAFF            - 19 MTH
+    883: '42130',  # EFD STAFF            - 20 MTH
+    884: '42130',  # EFD STAFF            - 21 MTH
+    885: '42130',  # EFD STAFF            - 22 MTH
+    886: '42130',  # EFD STAFF            - 23 MTH
+    887: '42130',  # EFD STAFF            - 24 MTH
+    888: '42130',  # EFD STAFF            - 36 MTH
+    889: '42130',  # EFD STAFF            - 48 MTH
+    890: '42130',  # EFD STAFF            - 60 MTH
+    891: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    892: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    893: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    894: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    895: '42130',  # PLUS FD NONSTAFF (6MTH)
+    896: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    897: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    898: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    899: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    900: '42130',  # PB JOURNEY GOLDEN SAVERS 3-50FD 6M
+    901: '42130',  # PB JOURNEY GOLDEN SAVERS 3-50FD 9M
+    902: '42133',  # PB TD-I REWARD CAMPAIGN - NON STAFF(3MTH)
+    903: '42133',  # PB 3-MONTH FD/TD-I(STAFF) - 3 MONTH(S)
+    904: '42130',  # PLUS FD NONSTAFF (12MTH)
+    905: '42130',  # PLUS FD STAFF  (12MTH)
+    914: '42133',  # PB ETD-I NON-STAFF   - 1  MONTH
+    915: '42133',  # PB ETD-I NON-STAFF   - 2  MONTH
+    916: '42133',  # PB ETD-I NON-STAFF   - 3  MONTH
+    917: '42133',  # PB ETD-I NON-STAFF   - 4  MONTH
+    918: '42133',  # PB ETD-I NON-STAFF   - 5  MONTH
+    919: '42133',  # PB ETD-I NON-STAFF   - 6  MONTH
+    920: '42133',  # PB ETD-I NON-STAFF   - 7  MONTH
+    921: '42133',  # PB ETD-I NON-STAFF   - 8  MONTH
+    922: '42133',  # PB ETD-I NON-STAFF   - 9  MONTH
+    923: '42133',  # PB ETD-I NON-STAFF   - 10 MONTH
+    924: '42133',  # PB ETD-I NON-STAFF   - 11 MONTH
+    925: '42133',  # PB ETD-I NON-STAFF   - 12 MONTH
+    926: '42133',  # PB ETD-I NON-STAFF   - 13 MONTH
+    927: '42133',  # PB ETD-I NON-STAFF   - 14 MONTH
+    928: '42133',  # PB ETD-I NON-STAFF   - 15 MONTH
+    929: '42133',  # PB ETD-I NON-STAFF   - 16 MONTH
+    930: '42133',  # PB ETD-I NON-STAFF   - 17 MONTH
+    931: '42133',  # PB ETD-I NON-STAFF   - 18 MONTH
+    932: '42133',  # PB ETD-I NON-STAFF   - 19 MONTH
+    933: '42133',  # PB ETD-I NON-STAFF   - 20 MONTH
+    934: '42133',  # PB ETD-I NON-STAFF   - 21 MONTH
+    935: '42133',  # PB ETD-I NON-STAFF   - 22 MONTH
+    936: '42133',  # PB ETD-I NON-STAFF   - 23 MONTH
+    937: '42133',  # PB ETD-I NON-STAFF   - 24 MONTH
+    938: '42133',  # PB ETD-I NON-STAFF   - 36 MONTH
+    939: '42133',  # PB ETD-I NON-STAFF   - 48 MONTH
+    940: '42133',  # PB ETD-I NON-STAFF   - 60 MONTH
+    941: '42133',  # PB ETD-I STAFF       - 1  MONTH
+    942: '42133',  # PB ETD-I STAFF       - 2  MONTH
+    943: '42133',  # PB ETD-I STAFF       - 3  MONTH
+    944: '42133',  # PB ETD-I STAFF       - 4  MONTH
+    945: '42133',  # PB ETD-I STAFF       - 5  MONTH
+    946: '42133',  # PB ETD-I STAFF       - 6  MONTH
+    947: '42133',  # PB ETD-I STAFF       - 7  MONTH
+    948: '42133',  # PB ETD-I STAFF       - 8  MONTH
+    949: '42133',  # PB ETD-I STAFF       - 9  MONTH
+    950: '42133',  # PB ETD-I STAFF       - 10 MONTH
+    951: '42133',  # PB ETD-I STAFF       - 11 MONTH
+    952: '42133',  # PB ETD-I STAFF       - 12 MONTH
+    953: '42133',  # PB ETD-I STAFF       - 13 MONTH
+    954: '42133',  # PB ETD-I STAFF       - 14 MONTH
+    955: '42133',  # PB ETD-I STAFF       - 15 MONTH
+    956: '42133',  # PB ETD-I STAFF       - 16 MONTH
+    957: '42133',  # PB ETD-I STAFF       - 17 MONTH
+    958: '42133',  # PB ETD-I STAFF       - 18 MONTH
+    959: '42133',  # PB ETD-I STAFF       - 19 MONTH
+    960: '42133',  # PB ETD-I STAFF       - 20 MONTH
+    961: '42133',  # PB ETD-I STAFF       - 21 MONTH
+    962: '42133',  # PB ETD-I STAFF       - 22 MONTH
+    963: '42133',  # PB ETD-I STAFF       - 23 MONTH
+    964: '42133',  # PB ETD-I STAFF       - 24 MONTH
+    965: '42133',  # PB ETD-I STAFF       - 36 MONTH
+    966: '42133',  # PB ETD-I STAFF       - 48 MONTH
+    967: '42133',  # PB ETD-I STAFF       - 60 MONTH
+    968: '42130',  # PB EFD CAMPAIGN - 3 MONTHS
+    969: '42130',  # PB EFD CAMPAIGN - 6 MONTHS
+    970: '42130',  # PB EFD CAMPAIGN - 9 MONTHS
+    971: '42130',  # PB EFD VIA FPX CAMPAIGN 4 MONTHS
+    972: '42130',  # PB EFD VIA FPX 1 MONTHS (NON-STAFF)
+    973: '42130',  # PB EFD VIA FPX 2 MONTHS (NON-STAFF)
+    974: '42130',  # PB EFD VIA FPX 3 MONTHS (NON-STAFF)
+    975: '42130',  # PB EFD CAMPAIGN - 18 MONTHS
+    976: '42130',  # PB EFD CAMPAIGN - 19 MONTHS
+    977: '42130',  # PB EFD CAMPAIGN - 20 MONTHS
+    978: '42130',  # PB EFD CAMPAIGN - 21 MONTHS
+    979: '42130',  # PB EFD CAMPAIGN - 22 MONTHS
+    980: '42130',  # PB EFD CAMPAIGN - 23 MONTHS
+    981: '42130',  # PB EFD CAMPAIGN - 24 MONTHS
+    982: '42130',  # PB EFD CAMPAIGN - 36 MONTHS
+    983: '42130',  # PB EFD CAMPAIGN - 48 MONTHS
+    984: '42130',  # PB EFD CAMPAIGN - 60 MONTHS
+    985: '42130',  # PB SUPER FIXED DEPOSIT - NON-STAFF(12MTH)
+    986: '42130',  # PB SUPER FIXED DEPOSIT - STAFF(12MTH)
+    987: '42133',  # PB TD-I - NON-STAFF(12MTH)
+    988: '42133',  # PB TD-I - STAFF(12MTH)
+    989: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    990: '42130',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    991: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    992: '42133',  # RCB BDAY MONTH PRIVILEGES NON STAFF(INDV)
+    993: '42133',  # PB TD-I REWARD CAMPAIGN - STAFF(3MTH)
+    994: '42130',  # PLUS FD NONSTAFF (6MTH)
+    995: '42130',  # PB JOURNEY GOLDEN ASSIST-50FD-3MTH-NSTAFF
+    996: '42130',  # PB JOURNEY GOLDEN ASSIST-50FD-6MTH-NSTAFF
+    997: '42130',  # PB JOURNEY GOLDEN ASSIST-50FD-9MTH-NSTAFF
+}
+_FDPROD_OTHER = '42130'  # ALL OTHER FD CODES
+
+
+def fdprod_format(product_code: Optional[int]) -> str:
+    """FDPROD: FD product (interest plan) code -> BNM code (OTHER = '42130')."""
+    if missing(product_code):
+        return _FDPROD_OTHER
+    return _FDPROD_MAPPINGS.get(product_code, _FDPROD_OTHER)
+
+
+# ============================================================================
+# FORMAT: FDPRODD - FD PRODUCT (SIMPLIFIED / ALTERNATIVE)
+# ============================================================================
+
+_FDPRODD_MAPPINGS: Dict[int, str] = {
+    300: '42130',  # FD NORMAL
+    301: '42130',  # FD LIFE
+    302: '42132',  # FD AL MUDHARABAH
+    303: '42130',  # FD GOLDEN 50
+    311: '42130',  # PB EFD
+    312: '42130',  # PB EFD
+    313: '42133',  # PB ETD-I (NON-STAFF)
+    314: '42133',  # PB ETD-I (STAFF)
+    315: '42132',  # FD ISTISMAR
+    316: '42133',  # FD TERM (TD-I)
+    393: '42133',  # FD TERM (TD-I FI)
+    394: '42132',  # FD ISTISMAR
+}
+_FDPRODD_OTHER = '42130'  # OTHERS, IF ANY
+
+
+def fdprodd_format(product_code: Optional[int]) -> str:
+    """FDPRODD: simplified FD product mapping (OTHER = '42130')."""
+    if missing(product_code):
+        return _FDPRODD_OTHER
+    return _FDPRODD_MAPPINGS.get(product_code, _FDPRODD_OTHER)
+
+
+# ============================================================================
+# FORMAT: FDPRD - FD PRODUCT TYPE ('N' NORMAL, 'L' LIFE, 'M' MGIA/MUDHARABAH)
+# ============================================================================
+
+_FDPRD_NORMAL_RANGES: List[Tuple[int, int]] = [
+    (300, 319), (400, 419), (368, 394), (500, 539), (600, 639), (741, 744),
+]
+_FDPRD_NORMAL_SINGLES: Set[int] = {445}
+_FDPRD_LIFE_RANGES: List[Tuple[int, int]] = [(320, 339), (420, 428), (540, 547)]
+_FDPRD_MGIA_RANGES: List[Tuple[int, int]] = [
+    (340, 359), (453, 459), (461, 469), (580, 599), (660, 740),
+]
+
+
+def fdprd_format(product_code: Optional[int]) -> str:
+    """
+    FDPRD: classify FD products into type codes.
+        'N' : FD NORMAL   (300-319, 400-419, 368-394, 500-539, 600-639,
+                           741-744, 445)
+        'L' : FD LIFE     (320-339, 420-428, 540-547)
+        'M' : FD MGIA     (340-359, 453-459, 461-469, 580-599) and
+              FD MGIA-PFB (660-740)
+        ' ' : OTHER (also missing)
+    """
+    if missing(product_code):
+        return ' '
+    if (product_code in _FDPRD_NORMAL_SINGLES
+            or any(a <= product_code <= b for a, b in _FDPRD_NORMAL_RANGES)):
+        return 'N'
+    if any(a <= product_code <= b for a, b in _FDPRD_LIFE_RANGES):
+        return 'L'
+    if any(a <= product_code <= b for a, b in _FDPRD_MGIA_RANGES):
+        return 'M'
+    return ' '
+
+
+# ============================================================================
+# INVALUE: FCYTERM - FCY TERM (MONTHS) BASED ON INTEREST PLAN
+# ============================================================================
+
+_FCYTERM_1_MONTH: Set[int] = {
+    470, 471, 476, 477, 482, 483, 488, 494, 548, 554,
+    429, 433, 437, 421, 567, 574, 439, 751, 755, 756, 759,
+    762, 767, 771,
+}
+
+_FCYTERM_3_MONTHS: Set[int] = {
+    472, 473, 478, 479, 484, 485, 490, 496, 550, 551, 556,
+    569, 576, 440, 441, 423, 752, 757, 760, 763, 768, 772,
+    430, 434,
+}
+
+_FCYTERM_6_MONTHS: Set[int] = {
+    474, 480, 486, 492, 498, 552, 553, 558,
+    571, 578, 579, 442, 443, 425, 753, 761, 764, 765, 769, 773,
+    431, 435, 758,
+}
+
+_FCYTERM_12_MONTHS: Set[int] = {
+    444, 446, 545, 546, 547, 560, 561, 562, 563, 564, 565, 566,
+    573, 427, 754, 766, 770, 774, 432, 436,
+}
+
+
+def fcyterm_format(intplan_code: Optional[int]) -> Optional[int]:
+    """
+    FCYTERM invalue: FCY interest plan code -> term in months (1, 3, 6, 12).
+    Returns None (SAS missing) when the code matches no rule.
+    """
+    if missing(intplan_code):
+        return None
+    if intplan_code in _FCYTERM_1_MONTH:
+        return 1
+    if intplan_code in _FCYTERM_3_MONTHS:
+        return 3
+    if intplan_code in _FCYTERM_6_MONTHS:
+        return 6
+    if intplan_code in _FCYTERM_12_MONTHS:
+        return 12
+    return None
+
+
+# ============================================================================
+# FORMAT: CADENOM - CA DENOMINATION OF ISLAMIC OR DOMESTIC
+# ============================================================================
+
+_CADENOM_ISLAMIC: Set[int] = {
+    7, 8, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 32, 33,
+    45, 46, 47, 48, 49, 60, 61, 62, 63, 64, 66, 67, 70, 71, 73, 74,
+    75, 76, 80, 81, 92, 93, 96, 97, 160, 161, 162, 163, 164, 165, 166,
+    167, 168, 169, 182, 183, 184, 185, 186, 187, 188, 321,
+}
+
+
+def cadenom_format(product_code: Optional[int]) -> str:
+    """
+    CADENOM: current account product code -> 'I' (Islamic) or 'D' (Domestic).
+    OTHER = 'D' also applies to missing values.
+    """
+    if missing(product_code):
+        return 'D'
+    return 'I' if product_code in _CADENOM_ISLAMIC else 'D'
+
+
+# ============================================================================
+# FORMAT: CAPROD - CURRENT ACCOUNT PRODUCT CODE -> BNM CODE
+# ============================================================================
+
+_CAPROD_MAPPINGS: Dict[int, str] = {
+    3:   '42110',  # OD/GGSM2
+    4:   '42110',  # OD/GGSM2-FOCUS
+    5:   '42110',  # CLF-I BAE GOVERN.GUARANTEE SCM MADANI
+    6:   '42110',  # CLF-I BAE GOVERN.GUARANTEE SCM MADANI-FOCUS
+    7:   '42110',  # CLF-i/PGGS-i(NEW FINANCING)
+    8:   '42110',  # CLF-i/PGGS-i(ADDITIONAL WORKING CAPITAL)
+    9:   '42110',  # PGGS-NEW FINACING
+    10:  '42110',  # PGGS-ADDITIONAL WORKING CAPITAL
+    11:  '42110',  # OD/GGSM
+    12:  '42110',  # OD/GGSM-FOCUS
+    13:  '42110',  # BAE CASH LINE FACILITY-I (BAE CLF-i)
+    14:  '42110',  # CLF-I/ BAE BNM SME AES-I (FLD)
+    15:  '42110',  # CASHLINE FACILITY-I/ SWIFT
+    16:  '42110',  # CASHLINE FACILITY-I/ SWIFT EXTRA
+    17:  '42110',  # CLF-I/ BAE BNM SME AES-I
+    18:  '42110',  # CLF-I/ WCGS-I EXPORT
+    19:  '42110',  # CLF-I/ WCGS-I WOMEN
+    20:  '42110',  # CLF-I/ BAE GGSM2
+    21:  '42110',  # CLF-I/ BAE GGSM2-Focus
+    22:  '42110',  # CLF-I BOOSTER(CASH LINE FACILITY-I BOOSTER)
+    23:  '42110',  # (CM) PCA-I
+    24:  '42110',  # (CM) PCA-I ENTERPRISE
+    25:  '42110',  # (CM) CURRENT ACC-I
+    26:  '42110',  # OD/WCGS EXPORT
+    27:  '42110',  # OD/WCGS IMPORT
+    30:  '34180',  # OD WRITE OFF (RETAIL)
+    31:  '34180',  # OD WRITE OFF (CORPORATE)
+    32:  '34180',  # RETAIL CLF-I WRITE OFF
+    33:  '34180',  # CORP CLF-I WRITE OFF
+    34:  '34240',  # RETAIL PB SHARE LINK WRITE OFF
+    35:  '42110',  # BNM SME(FLD)
+    36:  '42110',  # WCGS START-UP
+    37:  '42110',  # BNM SME
+    38:  '42110',  # BNM AGRICULTURAL
+    39:  '42110',  # BNM DISASTER RELIEF
+    40:  '42110',  # ACE ENTERPRISE
+    41:  '42110',  # CASH MANAGEMENT COLLECTION ACCOUNT
+    42:  '42110',  # PREMIER ACE-NORMAL
+    43:  '42110',  # PREMIER ACE-EXTERNAL
+    45:  '42110',  # COMM MURABAHAH CASH LINE FAC(CM CLF-I)
+    46:  '42110',  # CASH LINE FACILITY-I/WCGS-I START UP
+    47:  '42110',  # CASH LINE FACILITY-I/BNM SME
+    48:  '42110',  # CASH LINE FACILITY-I/BNM SME AGRICULTURAL
+    49:  '42110',  # CASH LINE FACILITY-I/BNM DISASTER RELIEF
+    50:  '42110',  # CORP NORMAL CURRENT ACCOUNT
+    51:  '42110',  # CORP GOVERNMENT ACCOUNT
+    52:  '42110',  # CORP EXTERNAL ACCOUNT
+    53:  '42180',  # CORP HOUSING DEVELOPER
+    54:  '42110',  # CORP BLOCK DISCOUNT
+    55:  '42110',  # CORP SWIFT
+    56:  '42110',  # CORP OCP
+    57:  '42110',  # CORP OD/OC
+    58:  '42110',  # CORP SMILAX OD
+    59:  '42110',  # CORP LOCAL CHEQUE PURCHASED
+    60:  '42310',  # CORP AL-WADIAH CURRENT A/C
+    61:  '42310',  # CORP AL-WADIAH GOVERNMENT
+    62:  '42310',  # CORP AL-WADIAH EXTERNAL A/C
+    63:  '42180',  # CORP AL-WADIAH HOUSING DEV
+    64:  '42310',  # CORP AL-WADIAH OUTWARD CHEQUE PURCHASE
+    65:  '42110',  # CORP OD/OC
+    66:  '42110',  # CURRENT ACCOUNT BY FI-I (NPB)
+    67:  '42110',  # CURRENT ACCOUNT BY FI-I (PB)
+    68:  '42110',  # CURRENT ACCOUNT BY FIN. INST. (NIB)
+    69:  '42110',  # CURRENT ACCOUNT BY FIN. INST. (IB)
+    70:  '42110',  # CORP CLF-I
+    71:  '42110',  # CORP PLUS CLF-I
+    72:  '42199',  # CURRENT A/C BY COMMERCIAL FI (NIB)
+    73:  '42110',  # CLF-I/NEF2
+    74:  '42310',  # CASH MANAGEMENT COLLECTION ACCOUNT-I
+    75:  '42110',  # CLF/APGS-I
+    76:  '42110',  # CLF/IPGS-I
+    77:  '42110',  # SHARELINK INDIVIDUAL
+    78:  '42110',  # CORPORATE SHARELINK
+    79:  '42199',  # UMA3
+    80:  '42199',  # UMA3
+    81:  '42110',  # EPLUS CA (NORMAL)
+    82:  '42110',  # EPLUS CA (EXTERNAL)
+    83:  '42110',  # EPLUS CA (STAFF)
+    84:  '42110',  # EPLUS CA (STAFF REL)
+    85:  '42110',  # OD PB TRADEPLUS (SME)
+    86:  '42110',  # OD PB TRADEPLUS (LARGE ENTERPRISES)
+    87:  '42110',  # WORKING CAPITAL GUARANTEE SCHEME
+    88:  '42110',  # INDUS RESTRUC LN GUARANTEE SCHEME (IRLGS)
+    89:  '42110',  # MAH SING OVERDRAFT
+    90:  '42110',  # BASIC CURRENT A/C
+    91:  '42110',  # BASIC 55 CURRENT A/C
+    92:  '42110',  # PCA-I ENTERPRISE
+    93:  '42110',  # AL WADIAH CURRENT
+    94:  '42110',  # WORKING CAPITAL GUARANTEE SCHEME-I
+    95:  '42110',  # INDUSTRY RESTRUCT. LOAN GUARANTEE SCHEME-I
+    96:  '42110',  # MUDHARABAH CURRENT
+    97:  '42110',  # MUDHARABAH CURRENT ACCT-I (S)
+    98:  'N',      # RM DEMAND DEPOSIT
+    100: '42110',  # NORMAL CURRENT ACCOUNT
+    101: '42110',  # GOVERNMENT ACCOUNT
+    102: '42110',  # EXTERNAL ACCOUNT
+    103: '42180',  # HOUSING DEVELOPER
+    104: '43110',  # VOSTRO LOCAL
+    105: '43110',  # VOSTRO FOREIGN
+    106: '42110',  # STAFF CURRENT ACCOUNT
+    107: 'N',      # PBCS
+    108: '42110',  # CGC
+    109: '42110',  # SLS
+    110: '42110',  # BLOCK DISCOUNT
+    111: '42110',  # R/C
+    112: '42110',  # PGS
+    113: '42110',  # SHARE MARGIN
+    114: '42110',  # NEF
+    115: '42110',  # PAS
+    116: '42110',  # HRS
+    117: '42110',  # AUSTRALIAN
+    118: '42110',  # CAIS
+    119: '42110',  # HOS (<25K - 100K)
+    120: '42110',  # HOS (>100K - 200K)
+    121: '42110',  # HICOM SHARE
+    122: '42110',  # SFFS
+    123: '42110',  # PETRONAS
+    124: '42110',  # OCP
+    125: '42110',  # OD/OC
+    126: 'N',      # NORMAL BANKERS CHEQUE
+    127: 'N',      # MIDF BANKERS CHEQUE
+    128: 'N',      # MIH BANKERS CHEQUE
+    129: 'N',      # DD NORMAL
+    130: 'N',      # USD C/A
+    131: '42110',  # GBP C/A
+    132: '42110',  # AUD C/A
+    133: '42110',  # PB SHARELINK - NON MARGIN
+    134: '42110',  # CORPORATE SHARELINK - NON MARGIN
+    135: '42110',  # EMC CODO DEALERS
+    136: 'N',      # HKD C/A
+    137: '42110',  # 5 HOME PLAN OD LEGEL FEE
+    138: '42110',  # MORE PLAN OD LEGEL FEE
+    139: 'N',      # HP COLLECTION ACCOUNT
+    140: 'N',      # SI-CLEARING ACCOUNT
+    141: 'N',      # ATM-PISA CLEARING ACCT
+    142: 'N',      # ATM-LOAN CLEARING ACCT
+    143: 'N',      # ATM-FD CLEARING ACCT
+    144: 'N',      # DD SHARE PUBLIC
+    145: 'N',      # DD SHARE BUMI
+    146: 'N',      # IBT COLLECTION ACCT
+    147: 'N',      # HO INTERBANK SETTLEMENT A/C
+    148: 'N',      # INTERBANK GIRO & MEPS CASH COLL
+    149: 'N',      # BNM BONDS COLLECTION ACCOUNT
+    150: '42110',  # ACE NORMAL
+    151: '42110',  # ACE STAFF
+    152: '42110',  # ACE EXTERNAL
+    153: '42110',  # OD LIFE EXTERNAL
+    154: '42110',  # MORE PLAN
+    155: '42110',  # 5 HOME PLAN
+    156: '42110',  # PB CURRENTLINK
+    157: '42110',  # EXTERNAL PB CURRENTLINK
+    158: '42110',  # STAFF PB CURRENTLINK
+    159: '42110',  # GLOBAL OD/OC - RETAIL
+    160: '42310',  # AL-WADIAH CURRENT A/C
+    161: '42310',  # AL-WADIAH GOVERNMENT
+    162: '42310',  # AL-WADIAH EXTERNAL A/C
+    163: '42180',  # AL-WADIAH HOUSING DEV
+    164: '42310',  # AL-WADIAH STAFF A/C
+    165: '42310',  # AL-WADIAH OCP
+    166: '42110',  # CASH LINE FACILITY
+    167: '42110',  # CLF-I BAE ENHANCER-I
+    168: '42110',  # PLUS CASH LINE FAC-I
+    169: '42110',  # CLF-I MURABAHAH ENHANCER-I
+    170: '42110',  # CASH LINE FACILITY-1
+    171: 'N',      # MYR OVERNIGHT A/C
+    172: 'N',      # MYR OVERNIGHT A/C
+    173: 'N',      # MYR OVERNIGHT A/C
+    174: '42110',  # SHARE SERVICES A/C
+    175: '42110',  # SHARE MARGIN  A/C
+    176: '42110',  # SMILAX OD
+    177: '42110',  # PBB SHARELINK SETTLEMENT A/C
+    178: '42110',  # PBB SHARELINK CORP.
+    180: '42110',  # STAFF REL - NORMAL C/A
+    181: '42110',  # STAFF REL - ACE A/C
+    182: '42310',  # STAFF REL - AL WADIAH
+    183: '42110',  # CASH LINE FACILITY-I (SSME)
+    184: '42110',  # CASH LINE FACILITY-I (UNIFLEX-I)
+    185: '42110',  # CLF-I SERVICES SECTOR (SSGS-I)
+    186: '42110',  # CLF-I FLOOD RELIEF FINANCIANG (FRFGS-I)
+    187: '42110',  # CLF-I FSMI2 - FREE LEGAL DOCUMENTATION
+    188: '42110',  # CLF-I FSMI2 - NON FREE LEGAL DOCUMENTATION
+    190: '42110',  # OD SME PORTFOLIO G'TEE CGC
+    191: '42110',  # LOCAL CHEQUE PURCHASED
+    192: '42110',  # MORE PLAN FIXED 3
+    193: '42110',  # MORE PLAN FIXED 5
+    194: '42110',  # 5 HOME PLAN FIXED 3
+    195: '42110',  # 5 HOME PLAN FIXED 5
+    196: '42110',  # SWIFT PLAN FREE LEGAL DOC
+    197: '42110',  # WORKING CAPITAL FOR CAR DEALERS
+    198: '42110',  # FINANCE/REFINANCING PRIME CUSTOMERS
+    320: 'N',      # RETAIL NEGOTIABLE INSTRUMENTS OF DEPOSIT
+    321: 'N',      # RETAIL NEGOTIABLE ISLAMIC DEBT CERTIFICATE
+    400: '42610',  # USD CURRENT ACCOUNT
+    401: '42610',  # GBP CURRENT ACCOUNT
+    402: '42610',  # AUD CURRENT ACCOUNT
+    403: '42610',  # SGD CURRENT ACCOUNT
+    404: '42610',  # JPY CURRENT ACCOUNT
+    405: '42610',  # CNY CURRENT ACCOUNT
+    406: '42610',  # HKD CURRENT ACCOUNT
+    407: '42610',  # EUR CURRENT ACCOUNT
+    408: '42610',  # CHF CURRENT ACCOUNT
+    409: '42610',  # NZD CURRENT ACCOUNT
+    410: '42610',  # THB CURRENT ACCOUNT
+    411: '42610',  # CAD CURRENT ACCOUNT
+    413: '42699',  # USD BY COMMERCIAL FI (IB)
+    420: '42610',  # USD TRADE
+    421: '42610',  # GBP TRADE
+    422: '42610',  # AUD TRADE
+    423: '42610',  # SGD TRADE
+    424: '42610',  # JPY TRADE
+    425: '42610',  # CNY TRADE
+    426: '42610',  # HKD TRADE
+    427: '42610',  # EUR TRADE
+    428: '42610',  # CHF TRADE
+    429: '42610',  # NZD TRADE
+    430: '42610',  # THB TRADE
+    431: '42610',  # CAD TRADE
+    432: '42610',  # THB SUB SNA -TRADE
+    433: '42610',  # IDR SUB SNA -TRADE
+    434: '42610',  # THB SUB SNA - INVESTMENT
+    440: '42610',  # USD QARDH CURRENT ACCOUNT-I
+    441: '42610',  # GBP QARDH CURRENT ACCOUNT-I
+    442: '42610',  # AUD QARDH CURRENT ACCOUNT-I
+    443: '42610',  # EUR QARDH CURRENT ACCOUNT-I
+    444: '42610',  # NZD QARDH CURRENT ACCOUNT-I
+    450: '42610',  # USD QCA-I TRADE
+    451: '42610',  # GBP QCA-I TRADE
+    452: '42610',  # AUD QCA-I TRADE
+    453: '42610',  # EUR QCA-I TRADE
+    454: '42610',  # NZD QCA-I TRADE
+    473: 'N',      # COLLECTION ACCT
+    474: 'N',      # COLLECTION ACCT
+    475: 'N',      # COLLECTION ACCT
+    476: 'N',      # COLLECTION ACCT
+    477: 'N',      # COLLECTION ACCT
+    478: 'N',      # COLLECTION ACCT
+    479: 'N',      # COLLECTION ACCT
+    549: 'N',      # GENERAL MASTER COLLECTION
+    550: 'N',      # MYR MASTER NOTE
+}
+_CAPROD_OTHER = '42110'
+
+
+def caprod_format(product_code: Optional[int]) -> str:
+    """CAPROD: current account product code -> BNM code (OTHER = '42110')."""
+    if missing(product_code):
+        return _CAPROD_OTHER
+    return _CAPROD_MAPPINGS.get(product_code, _CAPROD_OTHER)
+
+
+# ============================================================================
+# CUSTOMER CODE FORMATS: DPCUSTCD, SACUSTCD, FDCUSTCD, IFDCUSCD, DDCUSTCD
+# All five formats list the same customer-code keys. Each maps a key to a
+# 2-character BNM customer code; the tables below state, per format, which keys
+# map to something other than themselves (verified against the SAS VALUE
+# statements). Keys not listed fall to OTHER ('78' for DPCUSTCD, SACUSTCD,
+# FDCUSTCD, IFDCUSCD; '79' for DDCUSTCD).
+# ============================================================================
+
+_CUSTCD_DESC: Dict[int, str] = {
+    1: 'BANK NEGARA MALAYSIA',
+    2: 'COMMERCIAL BANKS',
+    3: 'ISLAMIC BANKS',
+    4: 'SUBSIDIARY STOCKBROKING COMPANIES',
+    5: 'ASSOCIATE STOCKBROKING COMPANIES',
+    6: 'OTHER STOCKBROKING COMPANIES',
+    10: 'DOMESTIC BANKING INSTITUTIONS',
+    11: 'FINANCE COMPANIES',
+    12: 'MERCHANT BANKS',
+    13: 'DISCOUNT HOUSES',
+    15: 'DOMESTIC NON-BANK ENTITIES',
+    17: 'CAGAMAS BERHAD',
+    20: 'DOMESTIC NON-BANK FINANCIAL INSTITUTIONS',
+    30: 'DOMESTIC OTHER NBFI',
+    31: 'SAVINGS INSTITUTIONS',
+    32: 'CREDIT CARD COMPANIES',
+    33: 'DEVELOPMENT FINANCE INSTITUTIONS',
+    34: 'BUILDING SOCIETIES',
+    35: 'CO-OPERATIVE SOCIETIES',
+    36: 'STOCKBROKING COMPANIES',
+    37: 'COMMODITY BROKERS',
+    38: 'CREDIT & LEASING COMPANIES',
+    39: 'UNIT TRUST COMPANIES',
+    40: 'INSURANCE AND INSURANCE RELATED COMPANIES',
+    41: 'DBE - BUMI CONTROLLED SME - MICRO',
+    42: 'DBE - BUMI CONTROLLED SME - SMALL',
+    43: 'DBE - BUMI CONTROLLED SME - MEDIUM',
+    44: 'DBE - NON-BUMI CONTROLLED SME - MICRO',
+    45: 'REHABILITATION INSTITUTIONS',
+    46: 'DBE - NON-BUMI CONTROLLED SME - SMALL',
+    47: 'DBE - NON-BUMI CONTROLLED SME - MEDIUM',
+    48: 'DBE - NON-RESIDENT CONTROL SME - MICRO',
+    49: 'DBE - NON-RESIDENT CONTROL SME - SMALL',
+    51: 'DBE - NON-RESIDENT CONTROL SME - MEDIUM',
+    52: 'DBE - GOVERNMENT CONTROLLED SME - MICRO',
+    53: 'DBE - GOVERNMENT CONTROLLED SME - SMALL',
+    54: 'DBE - GOVERNMENT CONTROLLED SME - MEDIUM',
+    50: 'RESIDENTS/DOMESTIC ENTITIES',
+    57: 'PETRONAS',
+    59: 'OTHER GOVERNMENT CONTROLLED DBE NIE',
+    60: 'DOMESTIC BUSINESS ENTERPRISES (DBE)',
+    61: 'BUMIPUTRA CONTROLLED DBE',
+    62: 'NON-BUMIPUTRA CONTROLLED DBE',
+    63: 'NON-RESIDENT CONTROLLED DBE',
+    64: 'GOVERNMENT CONTROLLED DBE',
+    65: 'SMALL MEDIUM INDUSTRIES (SMI)',
+    66: 'BUMIPUTRA CONTROLLED SMI',
+    67: 'NON-BUMIPUTRA CONTROLLED SMI',
+    68: 'NON-RESIDENT CONTROLLED SMI',
+    69: 'GOVERNMENT CONTROLLED SMI',
+    70: 'GOVERNMENT',
+    71: 'FEDERAL GOVERNMENT',
+    72: 'STATE GOVERNMENT',
+    73: 'LOCAL GOVERNMENT',
+    74: 'STATUTORY AUTHORITIES',
+    75: 'NFPE',
+    76: 'INDIVIDUALS',
+    77: 'BUMIPUTRA',
+    78: 'NON-BUMIPUTRA',
+    79: 'DOMESTIC OTHER ENTITIES NIE',
+    80: 'NON-RESIDENTS/FOREIGN ENTITIES',
+    81: 'FOREIGN BANKING INSTITUTIONS',
+    82: 'AFFILIATES ABROAD',
+    83: 'G7 COUNTRIES',
+    84: 'FOREIGN BANKS IN OTHER COUNTRIES',
+    85: 'FOREIGN NON-BANK ENTITIES',
+    86: 'FOREIGN BUSINESS ENTERPRISES',
+    87: 'FOREIGN BUSINESS ENTERPRISES - MICRO',
+    88: 'FOREIGN BUSINESS ENTERPRISES - SMALL',
+    89: 'FOREIGN BUSINESS ENTERPRISES - MEDIUM',
+    90: 'FOREIGN GOVERNMENTS',
+    91: 'FOREIGN CENTRAL BANKS',
+    92: "FRGN DIPLOMATIC REPRESENTATION IN M'SIA",
+    95: 'FOREIGN INDIVIDUALS',
+    96: "FOREIGNERS EMPLOYED/STUDYING IN M'SIA",
+    98: "FOREIGN NON-COMMERCIAL INTERNATIONAL ORGANIZATION IN M'SIA",
+    99: 'FOREIGN OTHER ENTITIES NIE',
+}
+
+_CUSTCD_KEYS: Tuple[int, ...] = tuple(_CUSTCD_DESC)
+
+
+def _custcd_table(overrides: Dict[int, str]) -> Dict[int, str]:
+    """Identity mapping ('01', '02', ...) for every key, with per-format overrides."""
+    table = {key: f'{key:02d}' for key in _CUSTCD_KEYS}
+    table.update(overrides)
+    return table
+
+
+# DPCUSTCD: every key maps to itself.
+_DPCUSTCD_MAPPINGS: Dict[int, str] = _custcd_table({})
+
+# SACUSTCD
+_SACUSTCD_MAPPINGS: Dict[int, str] = _custcd_table({
+    1: '30', 2: '30', 3: '30',            # BNM / COMMERCIAL / ISLAMIC BANKS
+    10: '30', 11: '30', 12: '30', 13: '30',
+    15: '78',
+    17: '30', 20: '30',
+    36: '06',                             # STOCKBROKING COMPANIES
+    50: '78',
+    57: '78', 59: '78',
+    60: '78', 61: '78', 62: '78', 63: '78', 64: '78', 65: '78', 66: '78',
+    67: '78', 68: '78', 69: '78', 70: '78', 71: '78', 72: '78', 73: '78',
+    74: '78', 75: '78', 76: '78',
+    80: '86', 81: '86', 82: '86', 83: '86', 84: '86', 85: '86', 86: '86',
+})
+
+# FDCUSTCD (IFDCUSCD is identical)
+_FDCUSTCD_MAPPINGS: Dict[int, str] = _custcd_table({
+    10: '02',
+    15: '62',
+    20: '30',
+    36: '06',
+    50: '78',
+    60: '62',
+    65: '67',
+    70: '71',
+    76: '78',
+    80: '86',
+    81: '84',
+    85: '86',
+})
+
+# DDCUSTCD
+_DDCUSTCD_MAPPINGS: Dict[int, str] = _custcd_table({
+    2: '30', 3: '30',
+    10: '30', 11: '30',
+    15: '62',
+    20: '30',
+    36: '06',
+    50: '78',
+    60: '62',
+    65: '44', 66: '41', 67: '44', 68: '48', 69: '52',
+    70: '71',
+    76: '78',
+    80: '86', 81: '86', 82: '86', 83: '86', 84: '86', 85: '86', 86: '86',
+})
+
+_DPCUSTCD_OTHER = '78'
+_SACUSTCD_OTHER = '78'
+_FDCUSTCD_OTHER = '78'
+_DDCUSTCD_OTHER = '79'
+
+
+def dpcustcd_format(cust_code: Optional[int]) -> str:
+    """DPCUSTCD: customer code -> 2-character BNM code (OTHER = '78')."""
+    if missing(cust_code):
+        return _DPCUSTCD_OTHER
+    return _DPCUSTCD_MAPPINGS.get(cust_code, _DPCUSTCD_OTHER)
+
+
+def sacustcd_format(cust_code: Optional[int]) -> str:
+    """SACUSTCD: customer code -> 2-character BNM code (OTHER = '78')."""
+    if missing(cust_code):
+        return _SACUSTCD_OTHER
+    return _SACUSTCD_MAPPINGS.get(cust_code, _SACUSTCD_OTHER)
+
+
+def fdcustcd_format(cust_code: Optional[int]) -> str:
+    """FDCUSTCD: customer code -> 2-character BNM code (OTHER = '78')."""
+    if missing(cust_code):
+        return _FDCUSTCD_OTHER
+    return _FDCUSTCD_MAPPINGS.get(cust_code, _FDCUSTCD_OTHER)
+
+
+def ifdcuscd_format(cust_code: Optional[int]) -> str:
+    """IFDCUSCD: same mapping as FDCUSTCD (OTHER = '78')."""
+    return fdcustcd_format(cust_code)
+
+
+def ddcustcd_format(cust_code: Optional[int]) -> str:
+    """DDCUSTCD: customer code -> 2-character BNM code (OTHER = '79')."""
+    if missing(cust_code):
+        return _DDCUSTCD_OTHER
+    return _DDCUSTCD_MAPPINGS.get(cust_code, _DDCUSTCD_OTHER)
+
+
+# ============================================================================
+# FORMAT: STATECD - BRANCH CODE -> STATE CODE
+# ============================================================================
+
+_STATECD_MAPPINGS: Dict[int, str] = {
+    1:   'W',  # HEAD OFFICE (HOE)
+    2:   'W',  # JALAN SULTAN SULAIMAN (JSS)
+    3:   'W',  # JALAN RAJA CHULAN (JRC)
+    4:   'M',  # MELAKA (MLK)
+    5:   'A',  # IPOH MAIN OFFICE (IMO)
+    6:   'P',  # P. PINANG (PPG)
+    7:   'J',  # JOHOR BAHRU (JBU)
+    8:   'C',  # KUANTAN (KTN)
+    9:   'A',  # JALAN YANG KALSOM (JYK)
+    10:  'K',  # ALOR SETAR (ASR)
+    11:  'K',  # GURUN (GRN)
+    12:  'D',  # PASIR PUTEH (PPH)
+    13:  'D',  # KOTA BHARU (KBU)
+    14:  'D',  # TANAH MERAH (TMH)
+    15:  'W',  # KEPONG (KPG)
+    16:  'N',  # NILAI (NLI)
+    17:  'N',  # TAMPIN (TPN)
+    18:  'B',  # PJ NEW TOWN (PJN)
+    19:  'B',  # DAMANSARA UTAMA (DUA)
+    20:  'B',  # TAMAN CHI LIUNG (TCL)
+    21:  'J',  # BATU PAHAT (BPT)
+    22:  'B',  # SEMENYIH (SMY)
+    23:  'A',  # KEMUNTING (KMT)
+    24:  'N',  # RASAH (RSH)
+    25:  'B',  # SHAH ALAM (SAM)
+    26:  'W',  # SERI PETALING (SPG)
+    27:  'P',  # NIBONG TEBAL (NTL)
+    28:  'J',  # MUAR (MUA)
+    29:  'W',  # JALAN RAJA LAUT (JRL)
+    30:  'T',  # K. TRENGGANU (KTU)
+    31:  'B',  # SEKINCHAN (SKC)
+    32:  'Q',  # KUCHING (KCG)
+    33:  'S',  # KOTA KINABALU (KKU)
+    34:  'R',  # KANGAR (KGR)
+    35:  'B',  # SERI SETIA (SSA)
+    36:  'B',  # SS2 (SS2)
+    37:  'J',  # TMN SENTOSA (TSA)
+    38:  'W',  # JALAN KELANG LAMA (JKL)
+    39:  'N',  # KUALA KELAWANG (KKG)
+    40:  'W',  # JALAN SG BESI (JSB)
+    41:  'W',  # JALAN IPOH (JIH)
+    42:  'P',  # BUKIT MERTAJAM (BMM)
+    43:  'B',  # BANTING (BTG)
+    44:  'S',  # TAWAU (TWU)
+    45:  'N',  # SEREMBAN (SRB)
+    46:  'B',  # AMPANG (APG)
+    47:  'J',  # SEGAMAT (SGM)
+    48:  'C',  # MENTAKAB (MTK)
+    49:  'A',  # JELAPANG (JLP)
+    50:  'Q',  # MIRI (MRI)
+    51:  'A',  # SERI MANJUNG (SMG)
+    52:  'J',  # ULU TIRAM (UTM)
+    53:  'W',  # TMN MALURI (TMI)
+    54:  'P',  # BANDAR BAYAN BARU (BBB)
+    55:  'L',  # LABUAN
+    56:  'B',  # KAJANG (KJG)
+    57:  'K',  # SUNGAI PETANI (SPI)
+    58:  'Q',  # SIBU (SBU)
+    59:  'J',  # PONTIAN KECIL (PKL)
+    60:  'P',  # BAGAN AJAM (BAM)
+    61:  'J',  # KULAI (KLI)
+    62:  'S',  # SANDAKAN (SDK)
+    63:  'N',  # GEMAS (GMS)
+    64:  'N',  # PORT DICKSON (PDN)
+    65:  'N',  # BAHAU (BHU)
+    66:  'W',  # BUKIT DAMANSARA (BDA)
+    67:  'A',  # CHEMOR (CMR)
+    68:  'P',  # SIMPANG AMPAT (SAT)
+    69:  'B',  # BATANG KALI (BKI)
+    70:  'K',  # POKOK SENA (PSA)
+    71:  'C',  # BRINCHANG (BCG)
+    72:  'S',  # PAPAR (PPR)
+    73:  'B',  # SUNGAI PELEK (SPK)
+    74:  'K',  # SIK (SIK)
+    75:  'J',  # CHAAH (CAH)
+    76:  'A',  # PANTAI REMIS (PRS)
+    77:  'K',  # PULAU LANGKAWI (PLI)
+    78:  'B',  # SUBANG JAYA (SJA)
+    79:  'J',  # MASAI (MSI)
+    80:  'A',  # MENGLEMBU (MLB)
+    81:  'B',  # SUNGAI BULOH (SBH)
+    82:  'D',  # MACHANG (MCG)
+    83:  'W',  # JALAN BUKIT BINTANG (JBB)
+    84:  'D',  # PASIR MAS (PMS)
+    85:  'A',  # SUNGAI SIPUT (SST)
+    86:  'K',  # CHANGLUN (CLN)
+    87:  'J',  # MERSING (MSG)
+    88:  'K',  # KULIM (KUM)
+    89:  'J',  # TAMPOI (TPI)
+    90:  'Q',  # BINTULU (BTL)
+    91:  'J',  # KLUANG (KUG)
+    92:  'B',  # KLANG (KLG)
+    93:  'J',  # ENDAU (EDU)
+    94:  'W',  # SETAPAK (STP)
+    95:  'A',  # TELUK INTAN (TIN)
+    96:  'B',  # SERI GOMBAK (SGK)
+    97:  'W',  # JALAN TUN H S LEE (HSL)
+    98:  'J',  # TMN CENTURY (TCY)
+    # 101   = 'W'         KAMPUNG BARU (KBR)   -- commented out in the SAS source
+    102: 'J',  # PARIT RAJA (PRJ)
+    103: 'W',  # JINJANG (JJG)
+    104: 'K',  # KUALA KETIL (KKL)
+    105: 'J',  # KOTA TINGGI (KTI)
+    106: 'T',  # CHUKAI (CKI)
+    107: 'P',  # JELUTONG (JLT)
+    108: 'A',  # BAGAN SERAI (BSI)
+    109: 'B',  # K. SELANGOR (KSR)
+    110: 'J',  # TMN JOHOR JAYA (TJJ)
+    111: 'M',  # AIR KEROH (AKH)
+    112: 'S',  # LIDO (LDO)
+    113: 'C',  # TEMERLOH (TML)
+    114: 'P',  # BANDAR BARU AIR ITAM (BBA)
+    115: 'S',  # KENINGAU (KNG)
+    116: 'C',  # TRIANG (TRI)
+    117: 'D',  # KUALA KRAI (KKI)
+    118: 'B',  # TMN MELAWATI (TMW)
+    119: 'A',  # BERCHAM N/V (BNV)
+    120: 'B',  # PANDAN INDAH (PIH)
+    121: 'P',  # PRAI (PRA)
+    122: 'B',  # SRI KEMBANGAN (SKN)
+    123: 'A',  # IPOH GARDEN (IGN)
+    124: 'B',  # SECTION 14 (S14)
+    125: 'B',  # KELANA JAYA (KJA)
+    126: 'P',  # PULAU TIKUS (PTS)
+    127: 'B',  # TMN SERI MUDA (TSM)
+    128: 'W',  # SEGAMBUT (SGB)
+    129: 'W',  # BANGSAR (BSR)
+    130: 'Q',  # JLN TUN ABANG HAJI OPENG (JTO)
+    131: 'B',  # TMN MAYANG (TMG)
+    133: 'B',  # PORT KLANG (PKG)
+    134: 'D',  # RANTAU PANJANG (RPG)
+    135: 'B',  # BANDAR SUNWAY (BSY)
+    136: 'W',  # TMN CHERAS (TCS)
+    137: 'A',  # JALAN PASIR PUTEH (JPP)
+    138: 'W',  # WANGSA MAJU (WMU)
+    139: 'C',  # JERANTUT (JRT)
+    140: 'S',  # CITY PARADE (CPE)
+    141: 'W',  # SENTUL (STL)
+    142: 'S',  # KOTA BELUD (KBD)
+    143: 'S',  # LAHAD DATU (LDU)
+    144: 'J',  # KAHANG (KHG)
+    145: 'B',  # BDR SRI DAMANSARA (BSD)
+    146: 'A',  # PUSING (PSG)
+    147: 'J',  # PEKAN NENAS (PNS)
+    148: 'B',  # PJ OLD TOWN (PJO)
+    149: 'S',  # BEAUFORT (BFT)
+    150: 'P',  # LEBOH MACALLUM (LMM)
+    151: 'W',  # SELAYANG (SLY)
+    152: 'A',  # AYER TAWAR (ATR)
+    153: 'B',  # USJ (USJ)
+    154: 'P',  # BDR SEBERANG JAYA (BSJ)
+    155: 'B',  # TMN TAMING JAYA (TTJ)
+    156: 'M',  # TMN MELAKA RAYA (TMR)
+    157: 'B',  # BDR PUCHONG JAYA (BPJ)
+    158: 'A',  # SIMPANG PULAI (SPL)
+    159: 'P',  # RELAU (RLU)
+    160: 'M',  # MASJID TANAH (MTH)
+    161: 'S',  # DONGGONGON (DGG)
+    162: 'B',  # SEA PARK (SEA)
+    163: 'W',  # JALAN KUCHAI LAMA (JKA)
+    164: 'P',  # KEPALA BATAS (KBS)
+    165: 'M',  # TENGKERA (TKA)
+    166: 'J',  # PASIR GUDANG (PGG)
+    167: 'B',  # BANDAR BUKIT BERUNTUNG (BBG)
+    168: 'W',  # KUALA LUMPUR CITY MAIN (KLC)
+    169: 'W',  # CHANGKAT THAMBI DOLLAH (CTD)
+    170: 'B',  # PANDAN JAYA  (PJA)
+    171: 'P',  # JALAN MACALLISTER (JMR)
+    172: 'M',  # TAMAN MALIM JAYA (TMJ)
+    173: 'B',  # SUNGAI CHUA (SCA)
+    174: 'J',  # BANDAR BARU PERMAS JAYA (BBP)
+    175: 'Q',  # LIMBANG (LBG)
+    176: 'J',  # TAMAN PERLING (TPG)
+    177: 'P',  # JALAN RAJA UDA (JRU)
+    178: 'W',  # MEDAN IDAMAN (MIN)
+    179: 'W',  # OVERSEAS UNION GARDEN (OUG)
+    180: 'B',  # KAMPUNG BARU SUBANG (KBG)
+    183: 'Q',  # JALAN CENTRAL, SIBU (JCL)
+    184: 'Q',  # JALAN PENRISSEN, KUCHING (JPN)
+    185: 'Q',  # JALAN TUN HJ OPENG, KUCHING (JTO)
+    186: 'Q',  # JALAN TUN ZAIDI, KUCHING (JTZ)
+    # 187   = 'Q'         CHINA STREET, MIRI (CST)   -- commented out in the SAS source
+    188: 'Q',  # PELITA, MIRI (PLT)
+    189: 'Q',  # BATU NIAH (BNH)
+    190: 'Q',  # BINTANGOR (BTR)
+    191: 'Q',  # KAPIT (KPT)
+    192: 'Q',  # MARUDI (MRD)
+    193: 'Q',  # MUKAH (MKH)
+    194: 'Q',  # SARIKEI (SRK)
+    195: 'W',  # BINTANG WALK BRANCH, KL (BWK)
+    196: 'W',  # JALAN HANG LEKIU (JHL)
+    197: 'W',  # TIONG NAM BRANCH, KL (TNM)
+    198: 'W',  # TAMAN DESA, JLN KELANG LAMA (TDA)
+    199: 'B',  # JALAN TAPAH, KLANG (JTH)
+    # 200   = 'B'         JALAN SK10/4, SERI KEMBANGAN (JSK)   -- commented out in the SAS source
+    201: 'B',  # PANDAMARAN, KLANG (PDA)
+    202: 'B',  # RAWANG (RWG)
+    203: 'B',  # SUNGAI JAROM (SJM)
+    204: 'P',  # BUTTERWORTH (BTW)
+    205: 'P',  # SUNGAI NIBONG (SNG)
+    206: 'P',  # TAMAN BUKIT MAS (TBM)
+    207: 'A',  # JALAN BERCHAM, IPOH (JBM)
+    208: 'A',  # JALAN SULTAN IDRIS SHAH, IPOH (JSI)
+    209: 'A',  # SITIAWAN (STW)
+    210: 'A',  # TANJUNG MALIM (TMM)
+    211: 'A',  # TANJUNG PIANDANG (TPD)
+    214: 'J',  # JALAN GEREJA, JOHOR BARU (JGA)
+    215: 'J',  # JALAN KUKUP, PONTIAN KECHIL (JKP)
+    216: 'J',  # SKUDAI (SKI)
+    217: 'J',  # T. MUNSHI IBRAHIM, TAMPOI (TMB)
+    220: 'C',  # GENTING HIGHLANDS BRANCH  (GHS)
+    221: 'B',  # TAMAN SENTOSA, KLANG(TSK)
+    222: 'J',  # TAMAN DESA CEMERLANG(TDC),ULU TIRAM
+    224: 'J',  # JALAN ABDULLAH, MUAR
+    225: 'B',  # TAMAN INDAH, SELANGOR
+    226: 'W',  # JALAN PASAR, KUALA LUMPUR
+    227: 'B',  # KAMPONG BARU, SG.BULOH, SELANGOR
+    228: 'S',  # INANAM, KOTA KINABALU
+    230: 'W',  # SALAK SOUTH, KUALA LUMPUR
+    231: 'M',  # BATU BERENDAM, MELAKA
+    232: 'W',  # TAMAN MIDAH, KUALA LUMPUR
+    233: 'C',  # BENTONG, PAHANG
+    234: 'J',  # SIMPANG RENGAM, JOHORE
+    235: 'B',  # SABAK BERNAM, SELANGOR
+    237: 'C',  # KUALA LIPIS  (KLS)
+    238: 'K',  # JALAN KOTA, ALOR SETAR (JKT)
+    239: 'C',  # KEMAYAN, PAHANG (KMY)
+    240: 'B',  # KAPAR, SELANGOR (KAP)
+    241: 'B',  # DAMANSARA JAYA, SELANGOR (DJA)
+    242: 'J',  # TANGKAK JOHOR (TKK)
+    243: 'A',  # KUALA KANGSAR PERAK (KKR)
+    244: 'A',  # GUNUNG RAPAT IPOH PERAK (GRT)
+    245: 'A',  # BIDOR PERAK (BDR)
+    246: 'A',  # BATU GAJAH PERAK (BGH)
+    247: 'J',  # BUKIT PASIR MUAR JOHOR (BPR)
+    248: 'W',  # BUKIT PASIR MUAR JOHOR (JTS)
+    249: 'A',  # TAIPING PERAK (TAI)
+    250: 'B',  # TAMAN ENG ANN KELANG SELANGOR (TEA)
+    251: 'A',  # KAMPAR PERAK (KPR)
+    252: 'B',  # TAMAN MUDA AMPANG SELANGOR (TMA)
+    253: 'P',  # JALAN TANJONG TOKONG P.PINANG (JTT)
+    254: 'N',  # KUALA PILAH NEGERI SEMBILAN (KPH)
+    256: 'A',  # PARIT BUNTAR PERAK (PBR)
+    257: 'C',  # RAUB PAHANG (RAU)
+    258: 'K',  # JITRA KEDAH (JTA)
+    259: 'Q',  # SRI AMAN SARAWAK (SAN)
+    260: 'T',  # KUALA DUNGUN TERENGGANU (KDN)
+    261: 'D',  # GUA MUSANG KELANTAN (GMG)
+    262: 'W',  # TAMAN CONNAUGHT KUALA LUMPUR (TCT)
+    263: 'C',  # BENTA PAHANG (BTA)
+    264: 'C',  # JALAN BESERAH PAHANG (JBH)
+    265: 'P',  # JALAN AIR ITAM PENANG(JAI)
+    266: 'P',  # JALAN DATUK KERAMAT PENANG (JDK)
+    267: 'W',  # TMN TUN DR ISMAIL WILAYAH (TDI)
+    268: 'B',  # BANDAR BUKIT TINGGI (BBT)
+    269: 'W',  # MONT KIARA (MKA)
+    270: 'B',  # BANDAR PUTERI PUCHONG (BPI)
+    273: 'Q',  # LI HUA SARAWAK(LHA)
+    277: 'D',  # WAKAF SIKU (WSU)
+    278: 'S',  # JALAN PANTAI SABAH(JPI)
+    274: 'Q',  # STUTONG, SARAWAK(STG)
+    275: 'Q',  # MEDAN SENTRAL, SARAWAK(MSL)
+    276: 'S',  # JALAN APAS, SABAH (JAS)
+    279: 'W',  # PUTRAJAYA (PTJ)
+    280: 'B',  # KOTA DAMANSARA (KDA)
+    281: 'Q',  # PELITA (PLT)
+    282: 'S',  # PUTATAN (PTT)
+    283: 'S',  # PRIMA SQUARE (PSE)
+    284: 'W',  # BANDAR SRI PERMAISURI (BSP)
+    285: 'B',  # BANDAR MAHKOTA CHERAS (BMC)
+    286: 'J',  # BUKIT INDAH BRANCH    (BIH)
+    287: 'J',  # SUTERA UTAMA BRANCH (SUA)
+    288: 'W',  # STARPARC POINT BRANCH (SPT)
+    289: 'B',  # TAMANEQUINE BRANCH (TEE)
+    290: 'J',  # TAMAN DAYA (TDY)
+    291: 'B',  # BANDAR SUNGAI LONG
+    292: 'W',  # BANDAR MENJALARA (BMJ)
+    293: 'B',  # BANDAR SETIA ALAM (BSA)
+    294: 'B',  # KOTA KEMUNING (KKM)
+    295: 'B',  # BANDAR KINRARA (BKR)
+    296: 'W',  # BUKIT JALIL (BJL)
+    701: 'W',  # KAMPUNG BARU (IKB) ISLAMIC: 090810
+    702: 'W',  # PUTRAJAYA BRANCH (IPJ)
+    703: 'D',  # ISLAMIC WAKAF SIKU (IWS)
+    704: 'K',  # ISLAMIC JALAN KOTA (IJK)
+    800: 'N',
+    801: 'P',
+    802: 'W',
+    803: 'S',
+    804: 'J',
+    805: 'J',
+    806: 'K',
+    807: 'M',
+    808: 'P',
+    809: 'A',
+    811: 'W',
+    812: 'W',
+    813: 'Q',
+    814: 'B',
+    815: 'B',
+    816: 'B',
+    817: 'P',
+    818: 'W',
+    819: 'C',
+    820: 'B',
+    821: 'W',
+    822: 'W',
+    823: 'A',
+    824: 'K',
+    825: 'B',
+    826: 'P',
+    827: 'D',
+}
+_STATECD_OTHER = 'B'
+
+
+def statecd_format(branch_code: Optional[int]) -> str:
+    """STATECD: branch code -> single-character state code (OTHER = 'B')."""
+    if missing(branch_code):
+        return _STATECD_OTHER
+    return _STATECD_MAPPINGS.get(branch_code, _STATECD_OTHER)
+
+
+# ============================================================================
+# FORMAT: FDORGMT - FD ORIGINAL TERM (MONTHS) -> 2-CHARACTER BUCKET CODE
+#   LOW-1='12' 1-2='13' 2-3='14' 3-6='15' 6-9='16' 9-12='17' 12-15='21'
+#   15-18='22' 18-24='23' 24-36='24' 36-48='25' 48-60='26' 60-HIGH='30'
+# Both ends of each SAS range are inclusive; the first listed range wins, so a
+# value equal to a boundary belongs to the lower bucket (bisect_left).
+# LOW excludes missing values and there is no OTHER, so missing shows as '.'.
+# ============================================================================
+
+_FDORGMT_BOUNDS: Tuple[int, ...] = (1, 2, 3, 6, 9, 12, 15, 18, 24, 36, 48, 60)
+_FDORGMT_CODES: Tuple[str, ...] = (
+    '12',  # ORG. MAT. <= 1 MTH
+    '13',  # ORG. MAT. >1 - 2 MTHS
+    '14',  # ORG. MAT. >2 - 3 MTHS
+    '15',  # ORG. MAT. >3 - 6 MTHS
+    '16',  # ORG. MAT. >6 - 9 MTHS
+    '17',  # ORG. MAT. >9 - 12 MTHS
+    '21',  # ORG. MAT. >12 - 15 MTHS
+    '22',  # ORG. MAT. >15 - 18 MTHS
+    '23',  # ORG. MAT. >18 - 24 MTHS
+    '24',  # ORG. MAT. >24 - 36 MTHS
+    '25',  # ORG. MAT. >36 - 48 MTHS
+    '26',  # ORG. MAT. >48 - 60 MTHS
+)
+_FDORGMT_HIGH = '30'  # ORG. MAT. > 60 MTHS
+
+
+def fdorgmt_format(orgmth: Optional[float]) -> str:
+    """FDORGMT: original term in months -> 2-character bucket code ('.' if missing)."""
+    if missing(orgmth):
         return '.'
-    # return str(value) if name.startswith('$') else format(value, 'g')
-    return str(value) if name.startswith('$') else best12(value)
+    idx = bisect_left(_FDORGMT_BOUNDS, orgmth)
+    return _FDORGMT_CODES[idx] if idx < len(_FDORGMT_CODES) else _FDORGMT_HIGH
 
 
-def library_cli(formats, macros):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--list', action='store_true')
-    parser.add_argument('format', nargs='?')
-    parser.add_argument('value', nargs='?')
-    args = parser.parse_args()
-    if args.list:
-        print('\n'.join(formats))
-    elif args.format is not None and args.value is not None:
-        print(lookup(formats, args.format, args.value, macros))
-    else:
-        parser.error('Use --list or FORMAT VALUE')
+# ============================================================================
+# FORMAT: FDRMMT - FD REMAINING TERM (MONTHS) -> 2-CHARACTER BUCKET CODE
+#   LOW-0='51' 0-1='52' 1-2='53' 2-3='54' 3-6='55' 6-9='56' 9-12='57'
+#   12-24='61' 24-36='62' 36-48='63' 48-60='64' 60-HIGH='70'
+# ============================================================================
 
-# Compact declarations expand to the original ordered SAS rules.
+_FDRMMT_BOUNDS: Tuple[int, ...] = (0, 1, 2, 3, 6, 9, 12, 24, 36, 48, 60)
+_FDRMMT_CODES: Tuple[str, ...] = (
+    '51',  # REM. MAT. OVERDUE
+    '52',  # REM. MAT. <= 1 MTH
+    '53',  # REM. MAT. > 1 - 2 MTHS
+    '54',  # REM. MAT. > 2 - 3 MTHS
+    '55',  # REM. MAT. > 3 - 6 MTHS
+    '56',  # REM. MAT. > 6 - 9 MTHS
+    '57',  # REM. MAT. > 9 - 12 MTHS
+    '61',  # REM. MAT. > 1 - 2 YEARS
+    '62',  # REM. MAT. > 2 - 3 YEARS
+    '63',  # REM. MAT. > 3 - 4 YEARS
+    '64',  # REM. MAT. > 4 - 5 YEARS
+)
+_FDRMMT_HIGH = '70'  # REM. MAT. > 5 YEARS
+
+
+def fdrmmt_format(remmth: Optional[float]) -> str:
+    """FDRMMT: remaining term in months -> 2-character bucket code ('.' if missing)."""
+    if missing(remmth):
+        return '.'
+    idx = bisect_left(_FDRMMT_BOUNDS, remmth)
+    return _FDRMMT_CODES[idx] if idx < len(_FDRMMT_CODES) else _FDRMMT_HIGH
+
+
+# ============================================================================
+# FORMAT: RMFDORGMT - RMFD PRODUCT CODE -> ORIGINAL MATURITY BUCKET CODE
+# No OTHER in SAS: an unmatched value is displayed as the value itself.
+# ============================================================================
+
+_RMFDORGMT_MAPPINGS: Dict[int, str] = {
+    272: '12', 284: '12',                                              # 30 DAYS
+    273: '13', 285: '13',                                              # 31-60 DAYS
+    274: '14', 286: '14',                                              # 61-90 DAYS
+    275: '15', 276: '15', 277: '15', 287: '15', 288: '15', 289: '15',  # 91-180 DAYS
+    278: '16', 279: '16', 280: '16', 290: '16', 291: '16', 292: '16',  # 181-270 DAYS
+    281: '17', 282: '17', 283: '17', 293: '17', 294: '17', 295: '17',  # 271-366 DAYS
+}
+
+
+def rmfdorgmt_format(product_code: Optional[int]) -> str:
+    """
+    RMFDORGMT: RMFD product code -> original maturity bucket code.
+    An unmatched value is returned as text (SAS shows the value itself);
+    a missing value is returned as '.'.
+    """
+    if missing(product_code):
+        return '.'
+    code = _RMFDORGMT_MAPPINGS.get(product_code)
+    return code if code is not None else best12(product_code)
+
+
+# ============================================================================
+# INVALUES: SDRANGE, S1RANGE, S2RANGE, DDRANGE - BALANCE RANGE (UPPER BOUND)
+# Each SAS range is "lower - upper = upper"; the first listed range wins, so a
+# balance equal to a boundary takes that boundary (bisect_left). LOW excludes
+# missing values, so a missing balance returns None (SAS missing).
+# ============================================================================
+
+_SDRANGE_BOUNDS: Tuple[int, ...] = (
+    5, 10, 50, 100, 500, 1000, 1500, 2000, 2500, 3000,
+    3500, 4000, 4500, 5000, 6000, 7000, 8000, 9000, 10000,
+    15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000,
+    55000, 60000, 65000, 70000, 75000, 80000, 85000, 90000,
+    95000, 100000, 150000, 200000, 300000, 500000,
+    1000000, 2000000, 3000000, 4000000, 5000000, 10000000,
+)
+_SDRANGE_HIGH = 10000001
+
+_S1RANGE_BOUNDS: Tuple[int, ...] = (
+    5, 10, 50, 100, 500, 1000, 1500, 2000, 2500, 3000,
+    3500, 4000, 4500, 5000, 6000, 7000, 8000, 9000, 10000,
+    15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000,
+    55000, 60000, 65000, 70000, 75000, 80000, 85000, 90000,
+    95000, 100000, 150000, 200000, 300000, 350000, 360000,
+    500000, 510000, 550000, 850000, 860000, 1000000,
+    2000000, 3000000, 4000000, 5000000, 10000000,
+)
+_S1RANGE_HIGH = 10000001
+
+# LOW-0 = 0 is the first range of S2RANGE, hence 0 is the first bound.
+_S2RANGE_BOUNDS: Tuple[int, ...] = (
+    0, 5, 10, 50, 100, 500, 1000, 1500, 2000, 2500, 3000,
+    3500, 4000, 4500, 5000, 6000, 7000, 8000, 9000, 10000,
+    15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000,
+    55000, 60000, 65000, 70000, 75000, 80000, 85000, 90000,
+    95000, 100000, 150000, 200000, 300000, 350000, 360000,
+    500000, 510000, 550000, 600000, 700000, 800000, 850000,
+    860000, 900000, 1000000, 1100000, 1200000, 1300000, 1400000,
+    1500000, 1600000, 1700000, 1800000, 1900000, 2000000,
+    3000000, 4000000, 5000000, 10000000,
+)
+_S2RANGE_HIGH = 10000001
+
+_DDRANGE_BOUNDS: Tuple[int, ...] = (
+    1000, 2000, 2500, 3000, 5000, 10000, 20000, 30000, 40000,
+    50000, 75000, 100000, 150000, 200000, 250000, 500000,
+    1000000, 2000000, 3000000, 4000000, 5000000,
+)
+_DDRANGE_HIGH = 5000001
+
+
+def _range_bucket(balance: Optional[float], bounds: Tuple[int, ...],
+                  high: int) -> Optional[float]:
+    """Upper-bound bucket of a balance; None when the balance is missing."""
+    if missing(balance):
+        return None
+    idx = bisect_left(bounds, balance)
+    return float(bounds[idx]) if idx < len(bounds) else float(high)
+
+
+def sdrange_format(balance: Optional[float]) -> Optional[float]:
+    """SDRANGE invalue: savings deposit balance -> upper-bound bucket value."""
+    return _range_bucket(balance, _SDRANGE_BOUNDS, _SDRANGE_HIGH)
+
+
+def s1range_format(balance: Optional[float]) -> Optional[float]:
+    """S1RANGE invalue: balance -> upper-bound bucket value (variant 1)."""
+    return _range_bucket(balance, _S1RANGE_BOUNDS, _S1RANGE_HIGH)
+
+
+def s2range_format(balance: Optional[float]) -> Optional[float]:
+    """S2RANGE invalue: balance -> upper-bound bucket value (variant 2, LOW-0 = 0)."""
+    return _range_bucket(balance, _S2RANGE_BOUNDS, _S2RANGE_HIGH)
+
+
+def ddrange_format(balance: Optional[float]) -> Optional[float]:
+    """DDRANGE invalue: demand deposit balance -> upper-bound bucket value."""
+    return _range_bucket(balance, _DDRANGE_BOUNDS, _DDRANGE_HIGH)
+
+
+# ============================================================================
+# FORMAT: $RACE - RACE CODE ('0'-'3' pass through, OTHER = '0')
+# ============================================================================
+
+def race_format(race_code: Optional[str]) -> str:
+    """$RACE: passes '0', '1', '2', '3' through; everything else returns '0'."""
+    if missing(race_code):
+        return '0'
+    code = str(race_code).rstrip()
+    return code if code in ('0', '1', '2', '3') else '0'
+
+
+# ============================================================================
+# FORMAT: BRANCHCD - BRANCH CODE -> BRANCH NAME
+# (labels are returned without the trailing blanks found in the SAS source)
+# ============================================================================
+
+_BRANCHCD_MAPPINGS: Dict[int, str] = {
+    1:   'HEAD OFFICE',
+    2:   'JLN SULTAN SULAIMAN',
+    3:   'JLN RAJA CHULAN',
+    4:   'MELAKA',
+    5:   'IPOH MAIN OFFICE',
+    6:   'PENANG',
+    7:   'JOHOR BAHRU',
+    8:   'KUANTAN',
+    9:   'JLN YANG KALSOM',
+    10:  'ALOR SETAR',
+    11:  'GURUN',
+    12:  'PASIR PUTEH',
+    13:  'KOTA BHARU',
+    14:  'TANAH MERAH',
+    15:  'KEPUNG',
+    16:  'NILAI',
+    17:  'TAMPIN',
+    18:  'PJ NEW TOWN',
+    19:  'DAMANSARA UTAMA',
+    20:  'TMN CHI LIUNG',
+    21:  'BATU PAHAT',
+    22:  'SEMENYIH',
+    23:  'KAMUNTING',
+    24:  'RASAH',
+    25:  'SHAH ALAM',
+    26:  'SERI PETALING',
+    27:  'NIBONG TEBAL',
+    28:  'MUAR',
+    29:  'JLN RAJA LAUT',
+    30:  'KUALA TRENGGANU',
+    31:  'SEKINCHAN',
+    32:  'WISMA SABERKAS (WSS)',
+    33:  'KOTA KINABALU',
+    34:  'KANGAR',
+    35:  'SERI SETIA',
+    36:  'S S 2',
+    37:  'TMN SENTOSA',
+    38:  'JLN KELANG LAMA',
+    39:  'KUALA KELAWANG',
+    40:  'JLN SUNGEI BESI',
+    41:  'JLN IPOH',
+    42:  'BKT MERTAJAM',
+    43:  'BANTING',
+    44:  'TAWAU',
+    45:  'SEREMBAN',
+    46:  'AMPANG',
+    47:  'SEGAMAT',
+    48:  'MENTAKAB',
+    49:  'JELAPANG',
+    50:  'MIRI',
+    51:  'SERI MANJUNG',
+    52:  'ULU TIRAM',
+    53:  'TMN MALURI',
+    54:  'BDR BAYAN BARU',
+    55:  'LABUAN',
+    56:  'KAJANG',
+    57:  'SG PETANI',
+    58:  'SIBU',
+    59:  'PONTIAN KECIL',
+    60:  'BAGAN AJAM',
+    61:  'KULAI',
+    62:  'SANDAKAN',
+    63:  'GEMAS',
+    64:  'PORT DICKSON',
+    65:  'BAHAU',
+    66:  'BKT DAMANSARA',
+    67:  'CHEMOR',
+    68:  'SIMPANG AMPAT',
+    69:  'BATANG KALI',
+    70:  'POKOK SENA',
+    71:  'BRINCHANG',
+    72:  'PAPAR',
+    73:  'SG PELEK',
+    74:  'SIK',
+    75:  'CHAAH',
+    76:  'PANTAI REMIS',
+    77:  'PULAU LANGKAWI',
+    78:  'SUBANG JAYA',
+    79:  'MASAI',
+    80:  'MENGLEMBU',
+    81:  'SG BULOH',
+    82:  'MACHANG',
+    83:  'JLN BUKIT BINTANG',
+    84:  'PASIR MAS',
+    85:  'SG SIPUT',
+    86:  'CHANGLUN',
+    87:  'MERSING',
+    88:  'KULIM',
+    89:  'TAMPOI',
+    90:  'BINTULU',
+    91:  'KLUANG',
+    92:  'KLANG',
+    93:  'ENDAU',
+    94:  'SETAPAK',
+    95:  'TELUK INTAN',
+    96:  'SERI GOMBAK',
+    97:  'JLN TUN H S LEE',
+    98:  'TMN CENTURY',
+    101: 'KAMPONG BAHRU',
+    102: 'PARIT RAJA',
+    103: 'JINJANG',
+    104: 'KUALA KETIL',
+    105: 'KOTA TINGGI',
+    106: 'CHUKAI',
+    107: 'JELUTONG',
+    108: 'BAGAN SERAI',
+    109: 'KUALA SELANGOR',
+    110: 'TMN JOHOR JAYA',
+    111: 'AIR KEROH',
+    112: 'LIDO',
+    113: 'TEMERLOH',
+    114: 'BANDAR BARU AIR ITAM',
+    115: 'KENINGAU',
+    116: 'TRIANG',
+    117: 'KUALA KRAI',
+    118: 'TMN MELAWATI',
+    120: 'PANDAN INDAH',
+    121: 'PRAI',
+    122: 'SERI KEMBANGAN',
+    123: 'IPOH GARDEN',
+    124: 'SECTION 14',
+    125: 'KELANA JAYA',
+    126: 'PULAU TIKUS',
+    127: 'TMN SERI MUDA',
+    128: 'SEGAMBUT',
+    129: 'BANGSAR',
+    130: 'PADUNGAN',
+    131: 'TMN MAYANG',
+    133: 'PORT KLANG',
+    134: 'RANTAU PANJANG',
+    135: 'BDR SUNWAY',
+    136: 'TMN CHERAS',
+    137: 'JLN PASIR PUTEH',
+    138: 'WANGSA MAJU',
+    139: 'JERANTUT',
+    140: 'CITY PARADE',
+    141: 'SENTUL',
+    142: 'KOTA BELUD',
+    143: 'LAHAD DATU',
+    144: 'KAHANG',
+    145: 'BDR SRI DAMANSARA',
+    146: 'PUSING',
+    147: 'PEKAN NENAS',
+    148: 'PJ OLD TOWN',
+    149: 'BEAUFORT',
+    150: 'LEBOH MACALLUM',
+    151: 'SELAYANG',
+    152: 'AIR TAWAR',
+    153: 'USJ',
+    154: 'BDR SEBERANG JAYA',
+    155: 'TMN TAMING JAYA',
+    156: 'TMN MELAKA RAYA',
+    157: 'BDR PUCHONG JAYA',
+    158: 'SIMPANG PULAI',
+    159: 'RELAU',
+    160: 'MASJID TANAH',
+    161: 'DONGGONGON',
+    162: 'SEA PARK',
+    163: 'JLN KUCHAI LAMA',
+    164: 'KEPALA BATAS',
+    165: 'TENGKERA',
+    166: 'PASIR GUDANG',
+    167: 'BKT BERUNTUNG',
+    168: 'KLCITY MAIN',
+    169: 'CKT THAMBI DOLLAH',
+    170: 'PANDAN JAYA',
+    171: 'JLN MACALLISTER',
+    172: 'TMN MALIM JAYA',
+    173: 'SG CHUA',
+    174: 'BDR BARU PERMAS JAYA',
+    175: 'LIMBANG',
+    176: 'TMN PERLING',
+    177: 'JLN RAJA UDA',
+    178: 'MEDAN IDAMAN',
+    179: 'OVERSEAS UNION GDN',
+    180: 'KG BARU SUBANG',
+    183: 'JLN CENTRAL, SIBU',
+    184: 'JLN PENRISSEN, KUCHING',
+    185: 'KUCHING CITY (KCY)',
+    186: 'JLN TUN ZAIDI, KUCHING',
+    # 187: 'CHINA STREET, MIRI'  -- commented out in the SAS source
+    188: 'PELITA, MIRI',
+    189: 'BATU NIAH',
+    190: 'BINTANGOR',
+    191: 'KAPIT',
+    192: 'MARUDI',
+    193: 'MUKAH',
+    194: 'SARIKEI',
+    195: 'BINTANG WALK, KL',
+    196: 'JLN HANG LEKIU',
+    197: 'TIONG NAM, KL',
+    198: 'TMN DESA,JLN KELANG LAMA',
+    199: 'JLN TAPAH,KLANG',
+    # 200: 'JLN SK10/4,SERI KEMBANGAN'  -- commented out in the SAS source
+    201: 'PANDAMARAN, KLANG',
+    202: 'RAWANG',
+    203: 'SG JAROM',
+    204: 'BUTTERWORTH',
+    205: 'SG NIBONG',
+    206: 'TAMAN BUKIT MAS',
+    207: 'BERCHAM (BCM)',
+    208: 'JLN SULTAN IDRIS SHAH, IPOH',
+    209: 'SITIAWAN',
+    210: 'TANJUNG MALIM',
+    211: 'TANJUNG PIANDANG',
+    214: 'JLN GEREJA, JOHOR BARU',
+    215: 'JLN KUKUP, PONTIAN KECHIL',
+    216: 'SKUDAI',
+    217: 'TMN MUNSHI IBRAHIM, TAMPOI',
+    220: 'GENTING HIGHLANDS, PAHANG',
+    221: 'TMN SENTOSA, KLANG',
+    222: 'TMN DESA CEMERLANG,JOHOR',
+    224: 'JLN ABDULLAH, MUAR',
+    225: 'TMN INDAH, SELANGOR',
+    226: 'JLN PASAR, KUALA LUMPUR',
+    228: 'INANAM, KOTA KINABALU',
+    230: 'SALAK SOUTH, KUALA LUMPUR',
+    231: 'BATU BERENDAM, MELAKA',
+    232: 'TMN MIDAH, KUALA LUMPUR',
+    233: 'BENTONG',
+    234: 'SIMPANG RENGAM',
+    235: 'SABAK BERNAM, SELANGOR',
+    237: 'KUALA LIPIS, PAHANG',
+    238: 'JALAN KOTA, KEDAH',
+    239: 'KEMAYAN, PAHANG',
+    240: 'KAPAR, SELANGOR',
+    241: 'DAMANSARA JAYA, SELANGOR',
+    242: 'TANGKAK JOHOR',
+    243: 'KUALA KANGSAR PERAK',
+    244: 'GUNUNG RAPAT IPOH PERAK',
+    245: 'BIDOR PERAK',
+    247: 'BUKIT PASIR MUAR JOHOR',
+    248: 'JLN TUN SAMBANTHAN KL',
+    249: 'TAIPING PERAK',
+    250: 'TAMAN ENG ANN SELANGOR',
+    251: 'KAMPAR PERAK',
+    252: 'TAMAN MUDA SELANGOR',
+    253: 'JLN TANJONG TOKONG P.PINANG',
+    254: 'KUALA PILAH N. SEMBILAN',
+    256: 'PARIT BUNTAR PERAK',
+    257: 'RAUB PAHANG',
+    258: 'JITRA KEDAH',
+    259: 'SRI AMAN SARAWAK',
+    260: 'KUALA DUNGUN TERENGGANU',
+    261: 'GUA MUSANG KELANTAN',
+    262: 'TAMAN CONNAUGHT CHERAS',
+    263: 'BENTA PAHANG',
+    264: 'JALAN BESERAH PAHANG',
+    265: 'JALAN AIR ITAM PENANG',
+    266: 'JALAN DATUK KERAMAT PENANG',
+    267: 'TMN TUN DR ISMAIL WILAYAH',
+    268: 'BANDAR BUKIT TINGGI',
+    269: 'MONT KIARA',
+    270: 'BANDAR PUTERI PUCHONG',
+    273: 'LI HUA SARAWAK',
+    277: 'WAKAF SIKU KELANTAN',
+    278: 'JALAN PANTAI SABAH',
+    274: 'STUTONG SARAWAK',
+    275: 'MEDAN SENTRAL SARAWAK',
+    276: 'JALAN APAS SABAH',
+    279: 'PUTRAJAYA',
+    280: 'KOTA DAMANSARA',
+    281: 'PELITA',
+    282: 'PUTATAN',
+    283: 'PRIMA SQUARE',
+    284: 'BANDAR SRI PERMAISURI',
+    285: 'BANDAR MAHKOTA CHERAS',
+    286: 'BUKIT INDAH BRANCH',
+    287: 'SUTERA UTAMA',
+    288: 'STARPARC POINT',
+    289: 'TAMAN EQUINE',
+    290: 'TAMAN DAYA',
+    291: 'BANDAR SUNGAI LONG',
+    292: 'BANDAR MENJALARA',
+    293: 'BANDAR SETIA ALAM',
+    294: 'KOTA KEMUNING',
+    295: 'BANDAR KINRARA',
+    296: 'BUKIT JALIL',
+    702: 'PUTRAJAYA',
+    703: 'ISLAMIC WAKAF SIKU',
+    704: 'ISLAMIC JALAN KOTA',
+}
+_BRANCHCD_OTHER = 'OTHER'
+
+
+def branchcd_format(branch_code: Optional[int]) -> str:
+    """BRANCHCD: branch code -> branch name (OTHER = 'OTHER')."""
+    if missing(branch_code):
+        return _BRANCHCD_OTHER
+    return _BRANCHCD_MAPPINGS.get(branch_code, _BRANCHCD_OTHER)
+
+
+# ============================================================================
+# BACKWARD-COMPATIBLE CLASS WRAPPERS
+# (kept so that programs converted against the class-based API keep working)
+# ============================================================================
+
+class ProductLists:
+    """Container for product groupings used across deposit products."""
+    ACE_PRODUCTS: Set[int] = ACE
+    FCY_PRODUCTS: Set[int] = FCY
+    CURX_PRODUCTS: Set[int] = CURX
+
+
+class SADenomFormat:
+    ISLAMIC_PRODUCTS: Set[int] = _SADENOM_ISLAMIC
+
+    @staticmethod
+    def format(product_code: Optional[int]) -> str:
+        return sadenom_format(product_code)
+
+
+class SAProductFormat:
+    MAPPINGS: Dict[int, str] = _SAPROD_MAPPINGS
+
+    @staticmethod
+    def format(product_code: Optional[int]) -> str:
+        return saprod_format(product_code)
+
+
+class FDDenomFormat:
+    ISLAMIC_RANGES: List[Tuple[int, int]] = _FDDENOM_ISLAMIC_RANGES
+    ISLAMIC_SINGLES: Set[int] = _FDDENOM_ISLAMIC_SINGLES
+
+    @staticmethod
+    def format(product_code: Optional[int]) -> str:
+        return fddenom_format(product_code)
+
+
+class FDProductFormat:
+    MAPPINGS: Dict[int, str] = _FDPROD_MAPPINGS
+
+    @staticmethod
+    def format(product_code: Optional[int]) -> str:
+        return fdprod_format(product_code)
+
+
+class CADenomFormat:
+    ISLAMIC_PRODUCTS: Set[int] = _CADENOM_ISLAMIC
+
+    @staticmethod
+    def format(product_code: Optional[int]) -> str:
+        return cadenom_format(product_code)
+
+
+class CAProductFormat:
+    MAPPINGS: Dict[int, str] = _CAPROD_MAPPINGS
+
+    @staticmethod
+    def format(product_code: Optional[int]) -> str:
+        return caprod_format(product_code)
+
+
+class FCYTermFormat:
+    TERM_1_MONTH: Set[int] = _FCYTERM_1_MONTH
+    TERM_3_MONTHS: Set[int] = _FCYTERM_3_MONTHS
+    TERM_6_MONTHS: Set[int] = _FCYTERM_6_MONTHS
+    TERM_12_MONTHS: Set[int] = _FCYTERM_12_MONTHS
+
+    @staticmethod
+    def format(intplan_code: Optional[int]) -> Optional[int]:
+        return fcyterm_format(intplan_code)
+
+
+# ============================================================================
+# GENERIC RULE ENGINE (SAS-style lookup over ordered rules)
+# FORMATS below is generated from the mapping tables above, so there is a
+# single source of truth. The fast per-format functions are used by put(),
+# format_value() and apply_format(); lookup() is the literal SAS-rule
+# interpreter and is used by selfcheck() to prove both agree.
+# ============================================================================
+
 _LOW = {'special': 'LOW'}
 _HIGH = {'special': 'HIGH'}
 _OTHER = {'special': 'OTHER'}
@@ -157,3003 +2550,304 @@ def _map(result, *selectors, options=None):
         rules.append((*bounds, result, dict(options or {})))
     return rules
 
-# SAS macro constants
-MOREPLAN = [116, 119, 234, 235, 236, 242]
 
-MOREISLM = [116, 119]
+def resolve(value, macros):
+    if isinstance(value, dict) and 'macro' in value:
+        return macros[value['macro']]
+    return value
 
-HP = [128, 130, 131, 132, 380, 381, 700, 705, 720, 725, 983, 993, 996, 678, 679, 698, 699]
 
-HPD = [128, 130, 131, 132, 380, 381, 700, 705, 720, 725]
+def matches(value, lo, hi, exlo, exhi):
+    if isinstance(lo, dict) and 'missing' in lo:
+        return missing(value) if lo['missing'] == '.' else value == lo['missing']
+    if missing(value):
+        return False  # SAS LOW excludes numeric missing values.
+    lower = isinstance(lo, dict) and lo.get('special') == 'LOW'
+    upper = isinstance(hi, dict) and hi.get('special') == 'HIGH'
+    return ((lower or (value > lo if exlo else value >= lo))
+            and (upper or (value < hi if exhi else value <= hi)))
 
-AITAB = [128, 130, 131, 132]
 
-HOMEIS = [113, 115, 117, 118]
+def _format_key(formats, name):
+    """Normalise a format name ('sadenom.', 'RACE' -> '$RACE')."""
+    key = name.strip().upper().rstrip('.')
+    if key not in formats and '$' + key in formats:
+        key = '$' + key
+    return key
 
-HOMECV = [227, 228, 230, 231, 237, 238, 239, 240, 241]
 
-SWIFTIS = [126, 127]
+def lookup(formats, name, value, macros=None):
+    """Apply one format by walking its ordered SAS rules (first match wins)."""
+    name = _format_key(formats, name)
+    spec = formats[name]
+    macros = macros or {}
+    if isinstance(value, bytes):
+        value = value.decode('utf-8')
+    if name.startswith('$'):
+        value = '' if missing(value) else str(value).rstrip()
+    elif not missing(value):
+        value = float(value)
+    fallback = None
+    for lo, hi, exlo, exhi, label, _options in spec['rules']:
+        lo, hi = resolve(lo, macros), resolve(hi, macros)
+        if isinstance(lo, dict) and lo.get('special') == 'OTHER':
+            fallback = label
+            continue
+        if matches(value, lo, hi, exlo, exhi):
+            return label
+    if fallback is not None:
+        return fallback
+    if spec['kind'] == 'INVALUE':
+        return None  # no match in an INVALUE gives SAS missing
+    if missing(value):
+        return '.'
+    return str(value) if name.startswith('$') else best12(value)
 
-SWIFTCV = [359]
 
-FCY = [
-    800, 801, 802, 803, 804, 805, 806, 807, 808, 816, 817, 809, 810, 811, 812, 813, 814, 815, 851,
-    852, 853, 854, 855, 856, 857, 858, 859, 860,
-]
+def _rules_from_mapping(mapping, other=None):
+    rules = [(key, key, False, False, label, {}) for key, label in mapping.items()]
+    if other is not None:
+        rules.append((_OTHER, _OTHER, False, False, other, {}))
+    return rules
 
-COUNTRYCD = [
-    'AF', 'AL', 'DZ', 'AS', 'AD', 'AO', 'AI', 'AQ', 'AG', 'AR', 'AM', 'AW', 'AU', 'AT', 'AZ', 'BS',
-    'BH', 'BD', 'BB', 'BY', 'BE', 'BZ', 'BJ', 'BM', 'BT', 'BO', 'BA', 'BW', 'BV', 'BR', 'IO', 'BN',
-    'BG', 'BF', 'BI', 'KH', 'CM', 'CA', 'CV', 'KY', 'CF', 'TD', 'CL', 'CN', 'TW', 'CX', 'CC', 'CO',
-    'KM', 'CG', 'CD', 'CK', 'CR', 'CI', 'HR', 'CU', 'CY', 'CZ', 'DK', 'DJ', 'DM', 'DO', 'TP', 'EC',
-    'EG', 'SV', 'GQ', 'ER', 'EE', 'ET', 'XE', 'FO', 'FK', 'FJ', 'FI', 'FR', 'GF', 'PF', 'TF', 'GA',
-    'GM', 'GE', 'DE', 'GH', 'GI', 'GR', 'GL', 'GD', 'GP', 'GU', 'GT', 'GG', 'GN', 'GW', 'GY', 'HT',
-    'HM', 'VA', 'HN', 'HK', 'HU', 'IS', 'IN', 'ID', 'IR', 'IQ', 'IE', 'IM', 'IL', 'IT', 'JM', 'JP',
-    'JE', 'JO', 'KZ', 'KE', 'KI', 'KP', 'KR', 'KW', 'KG', 'LN', 'LA', 'LV', 'LB', 'LS', 'LR', 'LY',
-    'LI', 'LT', 'LU', 'MO', 'MK', 'MG', 'MW', 'MV', 'ML', 'MT', 'MH', 'MQ', 'MR', 'MU', 'YT', 'MX',
-    'FM', 'MD', 'MC', 'MN', 'MS', 'MA', 'MZ', 'MM', 'NA', 'NR', 'NP', 'NL', 'AN', 'NT', 'NC', 'NZ',
-    'NI', 'NE', 'NG', 'NU', 'NF', 'MP', 'NO', 'OM', 'OT', 'PK', 'PW', 'PS', 'PA', 'PZ', 'PG', 'PY',
-    'PE', 'PH', 'PN', 'PL', 'PT', 'PR', 'QA', 'RE', 'ME', 'RS', 'RO', 'RU', 'RW', 'SH', 'KN', 'LC',
-    'PM', 'VC', 'WS', 'SM', 'ST', 'SA', 'SN', 'SC', 'SL', 'SG', 'SK', 'SI', 'SB', 'SO', 'ZA', 'GS',
-    'ES', 'LK', 'SD', 'SR', 'SJ', 'SZ', 'SE', 'CH', 'SY', 'TJ', 'TZ', 'TH', 'TG', 'TK', 'TO', 'TT',
-    'TN', 'TR', 'TM', 'TC', 'TV', 'UG', 'UA', 'AE', 'GB', 'US', 'UM', 'UY', 'UZ', 'VU', 'VE', 'VN',
-    'VG', 'VI', 'WF', 'EH', 'YE', 'YU', 'ZM', 'ZW',
-]
 
-POSTCD = [
-    '79000', '79050', '79100', '79150', '79200', '79250', '79502', '79503', '79504', '79505',
-    '79511', '79513', '79514', '79517', '79518', '79520', '79521', '79523', '79532', '79538',
-    '79540', '79546', '79548', '79550', '79552', '79555', '79570', '79575', '79576', '79592',
-    '79601', '79603', '79605', '79606', '79612', '79626', '79630', '79632', '79646', '79658',
-    '79660', '79680', '79681', '79683', '80000', '80050', '80100', '80150', '80200', '80250',
-    '80300', '80350', '80400', '80500', '80506', '80508', '80516', '80519', '80534', '80536',
-    '80542', '80546', '80558', '80560', '80564', '80568', '80578', '80584', '80586', '80590',
-    '80592', '80594', '80596', '80600', '80604', '80608', '80620', '80622', '80628', '80644',
-    '80648', '80662', '80664', '80668', '80670', '80672', '80673', '80676', '80700', '80710',
-    '80720', '80730', '80900', '80902', '80904', '80906', '80908', '80988', '80990', '81000',
-    '81100', '81200', '81300', '81310', '81400', '81440', '81450', '81500', '81550', '81600',
-    '81700', '81750', '81800', '81850', '81900', '81920', '81930', '82000', '82100', '82200',
-    '82300', '83000', '83100', '83200', '83300', '83400', '83500', '83600', '83700', '84000',
-    '84150', '84200', '84300', '84400', '84500', '84600', '84700', '84800', '84900', '85000',
-    '85100', '85200', '85300', '85400', '86000', '86100', '86200', '86300', '86400', '86500',
-    '86600', '86700', '86800', '86810', '86888', '86900', '05000', '05050', '05100', '05150',
-    '05200', '05250', '05300', '05350', '05400', '05460', '05500', '05502', '05503', '05504',
-    '05505', '05506', '05508', '05512', '05514', '05516', '05517', '05518', '05520', '05532',
-    '05534', '05536', '05538', '05550', '05551', '05552', '05556', '05558', '05560', '05564',
-    '05576', '05578', '05580', '05582', '05586', '05590', '05592', '05594', '05600', '05604',
-    '05610', '05612', '05614', '05620', '05621', '05622', '05626', '05628', '05630', '05632',
-    '05644', '05660', '05661', '05664', '05670', '05672', '05673', '05674', '05675', '05676',
-    '05680', '05690', '05696', '05700', '05710', '05720', '05990', '06000', '06007', '06009',
-    '06010', '06050', '06100', '06150', '06200', '06207', '06209', '06250', '06300', '06350',
-    '06400', '06500', '06507', '06509', '06550', '06570', '06600', '06650', '06660', '06700',
-    '06707', '06709', '06710', '06720', '06750', '06760', '06800', '06900', '06910', '07000',
-    '07007', '07009', '08000', '08007', '08009', '08010', '08100', '08110', '08200', '08210',
-    '08300', '08320', '08330', '08340', '08400', '08407', '08409', '08500', '08507', '08509',
-    '08600', '08700', '08800', '09000', '09007', '09009', '09010', '09020', '09100', '09110',
-    '09120', '09130', '09200', '09300', '09310', '09400', '09410', '09600', '09700', '09800',
-    '09810', '14290', '14390', '34950', '15000', '15050', '15100', '15150', '15159', '15200',
-    '15300', '15350', '15400', '15500', '15502', '15503', '15504', '15505', '15506', '15508',
-    '15512', '15514', '15516', '15517', '15518', '15519', '15520', '15524', '15529', '15532',
-    '15534', '15536', '15538', '15540', '15546', '15548', '15550', '15551', '15556', '15558',
-    '15560', '15564', '15570', '15572', '15576', '15578', '15582', '15586', '15590', '15592',
-    '15594', '15596', '15600', '15604', '15608', '15609', '15612', '15614', '15616', '15622',
-    '15623', '15626', '15628', '15630', '15632', '15634', '15644', '15646', '15648', '15658',
-    '15660', '15661', '15664', '15670', '15672', '15673', '15674', '15676', '15680', '15690',
-    '15710', '15720', '15730', '15740', '15988', '15990', '16010', '16020', '16030', '16040',
-    '16050', '16060', '16070', '16080', '16090', '16100', '16109', '16150', '16200', '16210',
-    '16250', '16300', '16310', '16320', '16400', '16450', '16500', '16600', '16700', '16800',
-    '16810', '17000', '17007', '17009', '17010', '17020', '17030', '17040', '17050', '17060',
-    '17070', '17200', '17500', '17507', '17509', '17510', '17600', '17610', '17700', '18000',
-    '18050', '18200', '18300', '18400', '18500', '75000', '75050', '75100', '75150', '75200',
-    '75250', '75260', '75300', '75350', '75400', '75450', '75460', '75500', '75502', '75503',
-    '75504', '75505', '75506', '75508', '75510', '75512', '75514', '75516', '75517', '75518',
-    '75519', '75532', '75536', '75538', '75540', '75542', '75546', '75550', '75551', '75552',
-    '75560', '75564', '75566', '75570', '75572', '75576', '75578', '75582', '75584', '75586',
-    '75590', '75592', '75594', '75596', '75600', '75604', '75606', '75608', '75609', '75610',
-    '75612', '75618', '75620', '75622', '75626', '75628', '75630', '75632', '75646', '75648',
-    '75662', '75670', '75672', '75673', '75674', '75676', '75690', '75700', '75710', '75720',
-    '75730', '75740', '75750', '75760', '75900', '75902', '75904', '75906', '75908', '75910',
-    '75912', '75914', '75916', '75918', '75990', '76100', '76109', '76200', '76300', '76400',
-    '76409', '76450', '77000', '77007', '77008', '77009', '77100', '77109', '77200', '77300',
-    '77309', '77400', '77409', '77500', '78000', '78009', '78100', '78200', '78300', '78307',
-    '78309', '70000', '70100', '70200', '70300', '70400', '70450', '70500', '70502', '70503',
-    '70504', '70505', '70506', '70508', '70512', '70516', '70517', '70518', '70532', '70534',
-    '70536', '70540', '70546', '70548', '70550', '70551', '70558', '70560', '70564', '70570',
-    '70572', '70576', '70578', '70582', '70586', '70590', '70592', '70594', '70596', '70600',
-    '70604', '70606', '70608', '70609', '70610', '70620', '70626', '70628', '70632', '70634',
-    '70644', '70646', '70648', '70658', '70664', '70670', '70672', '70673', '70674', '70676',
-    '70690', '70700', '70710', '70720', '70730', '70740', '70750', '70990', '71000', '71007',
-    '71009', '71010', '71050', '71059', '71100', '71109', '71150', '71159', '71200', '71209',
-    '71250', '71259', '71300', '71309', '71350', '71359', '71400', '71409', '71450', '71459',
-    '71500', '71509', '71550', '71559', '71600', '71609', '71650', '71659', '71700', '71707',
-    '71709', '71750', '71759', '71760', '71770', '71800', '71807', '71809', '71900', '71907',
-    '71909', '71950', '71960', '72000', '72007', '72009', '72100', '72107', '72109', '72120',
-    '72127', '72129', '72200', '72207', '72209', '72300', '72307', '72309', '72400', '72409',
-    '72500', '72507', '72509', '73000', '73007', '73009', '73100', '73109', '73200', '73207',
-    '73209', '73300', '73309', '73400', '73409', '73420', '73430', '73440', '73450', '73460',
-    '73470', '73480', '73500', '73507', '73509', '25000', '25050', '25100', '25150', '25200',
-    '25250', '25300', '25350', '25500', '25502', '25503', '25504', '25505', '25506', '25508',
-    '25509', '25512', '25514', '25516', '25517', '25518', '25520', '25524', '25529', '25532',
-    '25534', '25536', '25538', '25540', '25546', '25548', '25550', '25551', '25552', '25556',
-    '25558', '25560', '25564', '25570', '25576', '25578', '25582', '25584', '25586', '25590',
-    '25592', '25594', '25596', '25598', '25600', '25604', '25606', '25608', '25609', '25610',
-    '25612', '25614', '25620', '25622', '25626', '25628', '25630', '25632', '25644', '25646',
-    '25648', '25656', '25660', '25661', '25662', '25670', '25672', '25673', '25674', '25676',
-    '25690', '25700', '25710', '25720', '25730', '25740', '25750', '25990', '26010', '26040',
-    '26050', '26060', '26070', '26080', '26090', '26100', '26140', '26150', '26180', '26190',
-    '26200', '26250', '26300', '26310', '26320', '26330', '26340', '26350', '26360', '26370',
-    '26400', '26410', '26420', '26430', '26440', '26450', '26460', '26485', '26490', '26500',
-    '26600', '26607', '26609', '26610', '26620', '26630', '26640', '26650', '26660', '26680',
-    '26690', '26700', '26800', '26810', '26820', '26900', '27000', '27010', '27020', '27030',
-    '27040', '27050', '27060', '27070', '27090', '27100', '27150', '27200', '27207', '27209',
-    '27210', '27300', '27310', '27400', '27600', '27607', '27609', '27610', '27620', '27630',
-    '27650', '27660', '27670', '28000', '28007', '28009', '28010', '28020', '28030', '28040',
-    '28050', '28100', '28200', '28300', '28310', '28320', '28330', '28340', '28380', '28400',
-    '28407', '28409', '28500', '28600', '28610', '28620', '28700', '28707', '28709', '28730',
-    '28740', '28750', '28800', '39000', '39007', '39009', '39010', '39100', '39200', '49000',
-    '69000', '30000', '30010', '30020', '30100', '30200', '30250', '30300', '30350', '30450',
-    '30500', '30502', '30503', '30504', '30505', '30506', '30508', '30510', '30512', '30516',
-    '30517', '30518', '30519', '30520', '30524', '30532', '30534', '30536', '30540', '30542',
-    '30546', '30548', '30550', '30551', '30552', '30554', '30556', '30560', '30564', '30570',
-    '30576', '30580', '30582', '30586', '30590', '30592', '30594', '30596', '30600', '30604',
-    '30606', '30609', '30610', '30612', '30614', '30620', '30621', '30622', '30626', '30628',
-    '30630', '30632', '30634', '30644', '30646', '30648', '30656', '30658', '30660', '30661',
-    '30662', '30664', '30668', '30670', '30673', '30674', '30676', '30682', '30690', '30700',
-    '30710', '30720', '30730', '30740', '30750', '30760', '30770', '30780', '30790', '30800',
-    '30810', '30820', '30830', '30840', '30900', '30902', '30904', '30906', '30908', '30910',
-    '30912', '30988', '30990', '31000', '31007', '31009', '31050', '31100', '31150', '31200',
-    '31250', '31300', '31350', '31400', '31407', '31409', '31450', '31500', '31550', '31560',
-    '31600', '31610', '31650', '31700', '31750', '31800', '31850', '31900', '31907', '31909',
-    '31910', '31920', '31950', '32000', '32040', '32100', '32200', '32300', '32400', '32500',
-    '32600', '32610', '32700', '32800', '32900', '33000', '33007', '33009', '33010', '33020',
-    '33030', '33040', '33100', '33200', '33300', '33310', '33320', '33400', '33410', '33420',
-    '33500', '33600', '33700', '33800', '34000', '34007', '34008', '34009', '34010', '34020',
-    '34030', '34100', '34120', '34130', '34140', '34200', '34250', '34300', '34310', '34350',
-    '34400', '34500', '34510', '34520', '34600', '34650', '34700', '34750', '34800', '34850',
-    '34900', '35000', '35007', '35009', '35300', '35350', '35400', '35500', '35600', '35700',
-    '35800', '35820', '35900', '35907', '35909', '35910', '35950', '36000', '36007', '36008',
-    '36009', '36010', '36020', '36030', '36100', '36110', '36200', '36207', '36209', '36300',
-    '36307', '36309', '36400', '36500', '36600', '36700', '36750', '36800', '36810', '01000',
-    '01007', '01009', '01500', '01502', '01503', '01504', '01505', '01506', '01508', '01512',
-    '01514', '01516', '01517', '01518', '01524', '01529', '01532', '01538', '01540', '01546',
-    '01550', '01551', '01556', '01560', '01564', '01570', '01572', '01576', '01578', '01582',
-    '01586', '01590', '01592', '01594', '01596', '01598', '01600', '01604', '01606', '01608',
-    '01609', '01610', '01612', '01614', '01620', '01622', '01626', '01628', '01630', '01632',
-    '01634', '01644', '01646', '01648', '01660', '01664', '01670', '01672', '01673', '01674',
-    '01676', '01680', '01694', '02000', '02100', '02200', '02400', '02450', '02500', '02600',
-    '02607', '02609', '02700', '02707', '02709', '02800', '10000', '10050', '10100', '10150',
-    '10200', '10250', '10300', '10350', '10400', '10450', '10460', '10470', '10500', '10502',
-    '10503', '10504', '10505', '10506', '10508', '10512', '10514', '10516', '10518', '10524',
-    '10534', '10538', '10540', '10542', '10546', '10550', '10551', '10552', '10558', '10560',
-    '10564', '10566', '10570', '10576', '10578', '10582', '10590', '10592', '10593', '10594',
-    '10596', '10600', '10604', '10609', '10610', '10612', '10620', '10622', '10626', '10628',
-    '10634', '10646', '10648', '10660', '10661', '10662', '10670', '10672', '10673', '10674',
-    '10676', '10690', '10710', '10720', '10730', '10740', '10750', '10760', '10770', '10780',
-    '10790', '10800', '10810', '10820', '10830', '10840', '10850', '10910', '10920', '10990',
-    '11000', '11010', '11020', '11050', '11060', '11100', '11200', '11300', '11400', '11409',
-    '11500', '11600', '11609', '11700', '11800', '11900', '11910', '11920', '11950', '11960',
-    '12000', '12100', '12200', '12300', '12700', '12710', '12720', '12990', '13000', '13009',
-    '13020', '13050', '13100', '13110', '13200', '13210', '13220', '13300', '13310', '13400',
-    '13409', '13500', '13600', '13700', '13800', '14000', '14007', '14009', '14020', '14100',
-    '14101', '14110', '14120', '14200', '14300', '14310', '14320', '14400', '88000', '88100',
-    '88200', '88300', '88400', '88450', '88460', '88500', '88502', '88504', '88505', '88506',
-    '88508', '88510', '88512', '88514', '88516', '88518', '88520', '88526', '88527', '88532',
-    '88534', '88538', '88540', '88546', '88550', '88551', '88552', '88554', '88556', '88558',
-    '88560', '88562', '88564', '88566', '88568', '88570', '88572', '88576', '88580', '88582',
-    '88586', '88590', '88592', '88594', '88596', '88598', '88600', '88602', '88604', '88606',
-    '88608', '88609', '88610', '88612', '88614', '88617', '88618', '88620', '88621', '88622',
-    '88624', '88626', '88628', '88630', '88632', '88634', '88644', '88646', '88648', '88656',
-    '88658', '88660', '88661', '88662', '88670', '88672', '88673', '88675', '88676', '88680',
-    '88690', '88700', '88721', '88722', '88723', '88724', '88725', '88757', '88758', '88759',
-    '88760', '88761', '88762', '88763', '88764', '88765', '88766', '88767', '88768', '88769',
-    '88770', '88771', '88772', '88773', '88774', '88775', '88776', '88777', '88778', '88779',
-    '88780', '88781', '88782', '88783', '88784', '88785', '88786', '88787', '88788', '88789',
-    '88790', '88800', '88801', '88802', '88803', '88804', '88805', '88806', '88807', '88808',
-    '88809', '88810', '88811', '88812', '88813', '88814', '88815', '88816', '88817', '88818',
-    '88819', '88820', '88821', '88822', '88823', '88824', '88825', '88826', '88827', '88828',
-    '88829', '88830', '88831', '88832', '88833', '88834', '88835', '88836', '88837', '88838',
-    '88839', '88840', '88841', '88842', '88843', '88844', '88845', '88846', '88847', '88848',
-    '88849', '88850', '88851', '88852', '88853', '88854', '88855', '88856', '88857', '88858',
-    '88860', '88861', '88862', '88863', '88865', '88866', '88867', '88868', '88869', '88870',
-    '88871', '88872', '88873', '88874', '88875', '88900', '88901', '88902', '88903', '88904',
-    '88905', '88906', '88988', '88990', '88991', '88992', '88993', '88994', '88995', '88996',
-    '88997', '88998', '88999', '89000', '89007', '89008', '89009', '89050', '89057', '89058',
-    '89059', '89100', '89107', '89108', '89109', '89130', '89137', '89138', '89139', '89150',
-    '89157', '89158', '89159', '89200', '89207', '89208', '89209', '89250', '89257', '89258',
-    '89259', '89260', '89300', '89307', '89308', '89309', '89320', '89327', '89328', '89329',
-    '89330', '89337', '89338', '89339', '89500', '89507', '89508', '89509', '89600', '89607',
-    '89608', '89609', '89650', '89657', '89658', '89659', '89700', '89707', '89708', '89709',
-    '89720', '89727', '89728', '89729', '89740', '89747', '89748', '89749', '89760', '89767',
-    '89768', '89769', '89800', '89807', '89808', '89809', '89850', '89857', '89858', '89859',
-    '89900', '89907', '89908', '89909', '89950', '89957', '89958', '89959', '90000', '90009',
-    '90100', '90107', '90109', '90200', '90300', '90307', '90400', '90700', '90701', '90702',
-    '90703', '90704', '90705', '90706', '90707', '90708', '90709', '90711', '90712', '90713',
-    '90714', '90715', '90716', '90717', '90718', '90719', '90720', '90721', '90722', '90723',
-    '90724', '90725', '90726', '90727', '90728', '90729', '90730', '90731', '90732', '90733',
-    '90734', '90735', '90736', '90737', '90738', '90739', '90740', '90741', '91000', '91007',
-    '91008', '91009', '91010', '91011', '91012', '91013', '91014', '91015', '91016', '91017',
-    '91018', '91019', '91020', '91021', '91022', '91023', '91024', '91025', '91026', '91027',
-    '91028', '91029', '91030', '91031', '91032', '91033', '91034', '91035', '91100', '91109',
-    '91110', '91111', '91112', '91113', '91114', '91115', '91116', '91117', '91118', '91119',
-    '91120', '91121', '91122', '91123', '91124', '91125', '91126', '91127', '91128', '91150',
-    '91200', '91207', '91209', '91300', '91307', '91308', '91309', '93000', '93010', '93050',
-    '93100', '93150', '93200', '93250', '93300', '93350', '93400', '93450', '93500', '93502',
-    '93503', '93504', '93505', '93506', '93507', '93508', '93514', '93516', '93517', '93518',
-    '93519', '93520', '93527', '93529', '93532', '93540', '93550', '93551', '93552', '93554',
-    '93556', '93558', '93560', '93564', '93566', '93570', '93572', '93576', '93578', '93582',
-    '93586', '93590', '93592', '93594', '93596', '93600', '93604', '93606', '93608', '93609',
-    '93610', '93612', '93614', '93618', '93619', '93620', '93626', '93628', '93632', '93634',
-    '93648', '93658', '93660', '93661', '93662', '93670', '93672', '93677', '93690', '93694',
-    '93700', '93702', '93704', '93706', '93708', '93710', '93712', '93714', '93716', '93718',
-    '93720', '93722', '93724', '93726', '93728', '93730', '93732', '93734', '93736', '93738',
-    '93740', '93742', '93744', '93746', '93748', '93750', '93752', '93754', '93756', '93758',
-    '93760', '93762', '93764', '93900', '93902', '93904', '93906', '93908', '93910', '93912',
-    '93914', '93916', '93990', '94000', '94007', '94009', '94200', '94300', '94500', '94507',
-    '94509', '94600', '94650', '94700', '94707', '94709', '94750', '94760', '94800', '94807',
-    '94809', '94850', '94900', '94950', '95000', '95007', '95008', '95009', '95300', '95400',
-    '95407', '95409', '95500', '95600', '95700', '95707', '95709', '95800', '95900', '96000',
-    '96007', '96008', '96009', '96100', '96107', '96108', '96109', '96150', '96200', '96250',
-    '96300', '96307', '96309', '96350', '96400', '96410', '96500', '96507', '96508', '96509',
-    '96600', '96700', '96707', '96709', '96800', '96807', '96809', '96850', '96900', '96950',
-    '97000', '97007', '97008', '97009', '97010', '97011', '97012', '97013', '97014', '97015',
-    '97100', '97200', '97300', '98000', '98007', '98008', '98009', '98050', '98057', '98058',
-    '98059', '98100', '98107', '98109', '98150', '98157', '98159', '98200', '98300', '98700',
-    '98707', '98708', '98709', '98750', '98800', '98850', '98857', '98859', '40000', '40100',
-    '40150', '40160', '40170', '40200', '40300', '40400', '40450', '40460', '40470', '40500',
-    '40502', '40503', '40505', '40512', '40517', '40520', '40529', '40542', '40548', '40550',
-    '40551', '40560', '40564', '40570', '40572', '40576', '40578', '40582', '40590', '40592',
-    '40594', '40596', '40598', '40604', '40607', '40608', '40610', '40612', '40620', '40622',
-    '40626', '40632', '40646', '40648', '40660', '40664', '40670', '40672', '40673', '40674',
-    '40675', '40676', '40680', '40690', '40700', '40702', '40704', '40706', '40708', '40710',
-    '40712', '40714', '40716', '40718', '40720', '40722', '40724', '40726', '40728', '40730',
-    '40732', '40800', '40802', '40804', '40806', '40808', '40810', '40990', '41000', '41050',
-    '41100', '41150', '41200', '41250', '41300', '41400', '41506', '41560', '41586', '41672',
-    '41700', '41710', '41720', '41900', '41902', '41904', '41906', '41908', '41910', '41912',
-    '41914', '41916', '41918', '41990', '42000', '42009', '42100', '42200', '42300', '42425',
-    '42500', '42507', '42509', '42600', '42610', '42700', '42800', '42920', '42940', '42960',
-    '43000', '43007', '43009', '43100', '43200', '43207', '43300', '43400', '43500', '43558',
-    '43600', '43650', '43700', '43800', '43807', '43900', '43950', '44000', '44010', '44020',
-    '44100', '44110', '44200', '44300', '45000', '45100', '45200', '45207', '45209', '45300',
-    '45400', '45500', '45600', '45607', '45609', '45620', '45700', '45800', '46000', '46050',
-    '46100', '46150', '46200', '46300', '46350', '46400', '46506', '46547', '46549', '46551',
-    '46564', '46582', '46598', '46662', '46667', '46668', '46672', '46675', '46700', '46710',
-    '46720', '46730', '46740', '46750', '46760', '46770', '46780', '46781', '46782', '46783',
-    '46784', '46785', '46786', '46787', '46788', '46789', '46790', '46791', '46792', '46793',
-    '46794', '46795', '46796', '46797', '46798', '46799', '46800', '46801', '46802', '46803',
-    '46804', '46805', '46806', '46860', '46870', '46960', '46962', '46964', '46966', '46968',
-    '46970', '46972', '46974', '46976', '46978', '47000', '47100', '47110', '47120', '47130',
-    '47140', '47150', '47160', '47170', '47180', '47190', '47200', '47300', '47301', '47307',
-    '47308', '47400', '47410', '47500', '47507', '47600', '47610', '47620', '47630', '47640',
-    '47650', '47800', '47810', '47820', '47830', '48000', '48010', '48020', '48050', '48100',
-    '48200', '48300', '63000', '63100', '63200', '63300', '64000', '68000', '68100', '20000',
-    '20050', '20100', '20200', '20300', '20400', '20500', '20502', '20503', '20504', '20505',
-    '20506', '20508', '20512', '20514', '20516', '20517', '20518', '20519', '20520', '20532',
-    '20534', '20536', '20538', '20540', '20542', '20546', '20548', '20550', '20551', '20552',
-    '20554', '20556', '20560', '20564', '20566', '20568', '20570', '20572', '20576', '20578',
-    '20582', '20586', '20590', '20592', '20596', '20600', '20604', '20606', '20608', '20609',
-    '20610', '20612', '20614', '20618', '20620', '20622', '20626', '20628', '20630', '20632',
-    '20646', '20648', '20656', '20658', '20660', '20661', '20662', '20664', '20668', '20670',
-    '20672', '20673', '20674', '20676', '20680', '20690', '20698', '20700', '20710', '20720',
-    '20900', '20902', '20904', '20906', '20908', '20910', '20912', '20914', '20916', '20918',
-    '20920', '20922', '20924', '20926', '20928', '20930', '20990', '21000', '21009', '21010',
-    '21020', '21030', '21040', '21060', '21070', '21080', '21090', '21100', '21109', '21200',
-    '21209', '21210', '21220', '21300', '21309', '21400', '21450', '21500', '21600', '21610',
-    '21700', '21800', '21810', '21820', '22000', '22010', '22020', '22100', '22107', '22109',
-    '22110', '22120', '22200', '22300', '22307', '22309', '23000', '23007', '23009', '23050',
-    '23100', '23200', '23300', '23400', '24000', '24007', '24009', '24050', '24060', '24100',
-    '24107', '24109', '24200', '24207', '24209', '24300', '50000', '50050', '50088', '50100',
-    '50150', '50200', '50250', '50300', '50350', '50400', '50450', '50460', '50470', '50480',
-    '50490', '50500', '50502', '50504', '50505', '50506', '50507', '50508', '50512', '50514',
-    '50515', '50519', '50528', '50529', '50530', '50532', '50534', '50536', '50540', '50544',
-    '50546', '50548', '50550', '50551', '50552', '50554', '50556', '50560', '50562', '50564',
-    '50566', '50568', '50572', '50576', '50578', '50580', '50582', '50586', '50588', '50590',
-    '50592', '50594', '50596', '50598', '50599', '50600', '50603', '50604', '50605', '50608',
-    '50609', '50610', '50612', '50614', '50620', '50621', '50622', '50623', '50626', '50632',
-    '50634', '50636', '50638', '50640', '50642', '50644', '50646', '50648', '50650', '50652',
-    '50653', '50656', '50658', '50660', '50661', '50662', '50664', '50666', '50668', '50670',
-    '50672', '50673', '50676', '50677', '50678', '50680', '50682', '50684', '50688', '50694',
-    '50700', '50702', '50704', '50706', '50708', '50710', '50712', '50714', '50716', '50718',
-    '50720', '50722', '50724', '50726', '50728', '50730', '50732', '50734', '50736', '50738',
-    '50740', '50742', '50744', '50746', '50748', '50750', '50752', '50754', '50758', '50760',
-    '50762', '50764', '50766', '50768', '50770', '50772', '50774', '50776', '50778', '50780',
-    '50782', '50784', '50786', '50788', '50790', '50792', '50794', '50796', '50798', '50800',
-    '50802', '50804', '50806', '50808', '50810', '50812', '50814', '50816', '50818', '50901',
-    '50902', '50903', '50904', '50906', '50907', '50908', '50909', '50910', '50911', '50912',
-    '50913', '50914', '50915', '50916', '50917', '50918', '50919', '50920', '50921', '50922',
-    '50923', '50924', '50925', '50926', '50927', '50928', '50929', '50930', '50931', '50932',
-    '50933', '50934', '50935', '50936', '50937', '50938', '50939', '50940', '50941', '50942',
-    '50943', '50944', '50945', '50946', '50947', '50948', '50949', '50950', '50988', '50989',
-    '50990', '51000', '51100', '51200', '51700', '51990', '52000', '52100', '52200', '53000',
-    '53100', '53200', '53300', '53700', '53800', '53990', '54000', '54100', '54200', '55000',
-    '55100', '55200', '55300', '55700', '55710', '55720', '55900', '55902', '55904', '55906',
-    '55908', '55910', '55912', '55914', '55916', '55918', '55920', '55922', '55924', '55926',
-    '55928', '55930', '55932', '55934', '55990', '56000', '56100', '57000', '57100', '57700',
-    '57990', '58000', '58100', '58200', '58700', '58990', '59000', '59100', '59200', '59700',
-    '59800', '59990', '60000', '62000', '62007', '62050', '62100', '62150', '62200', '62250',
-    '62300', '62502', '62504', '62505', '62506', '62510', '62512', '62514', '62516', '62517',
-    '62518', '62519', '62520', '62522', '62524', '62526', '62527', '62530', '62532', '62536',
-    '62540', '62542', '62546', '62550', '62551', '62570', '62574', '62576', '62582', '62584',
-    '62590', '62592', '62596', '62602', '62604', '62605', '62606', '62616', '62618', '62620',
-    '62623', '62624', '62628', '62630', '62632', '62648', '62652', '62654', '62662', '62668',
-    '62670', '62674', '62675', '62676', '62677', '62686', '62692', '62988', '87000', '87010',
-    '87011', '87012', '87013', '87014', '87015', '87016', '87017', '87018', '87019', '87020',
-    '87021', '87022', '87023', '87024', '87025', '87026', '87027', '87028', '87029', '87030',
-    '87031', '87032', '87033',
-]
+def _rules_from_buckets(bounds, labels, high_label):
+    """Rules LOW-b0, b0-b1, ... , bN-HIGH (both ends inclusive, first match wins)."""
+    rules = []
+    for i, bound in enumerate(bounds):
+        lower = _LOW if i == 0 else bounds[i - 1]
+        rules.append((lower, bound, False, False, labels[i], {}))
+    rules.append((bounds[-1], _HIGH, False, False, high_label, {}))
+    return rules
+
+
+FORMATS = {
+    'SADENOM': {
+        'kind': 'VALUE',
+        'rules': [*_map('I', *sorted(_SADENOM_ISLAMIC)), *_map('D', _OTHER)],
+    },
+    'SAPROD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_SAPROD_MAPPINGS, _SAPROD_OTHER),
+    },
+    'FDDENOM': {
+        'kind': 'VALUE',
+        'rules': [
+            *_map('I', *[_span(a, b) for a, b in _FDDENOM_ISLAMIC_RANGES],
+                  *sorted(_FDDENOM_ISLAMIC_SINGLES)),
+            *_map('D', _OTHER),
+        ],
+    },
+    'FDPROD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_FDPROD_MAPPINGS, _FDPROD_OTHER),
+    },
+    'FDPRODD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_FDPRODD_MAPPINGS, _FDPRODD_OTHER),
+    },
+    'FDPRD': {
+        'kind': 'VALUE',
+        'rules': [
+            *_map('N', *[_span(a, b) for a, b in _FDPRD_NORMAL_RANGES],
+                  *sorted(_FDPRD_NORMAL_SINGLES)),
+            *_map('L', *[_span(a, b) for a, b in _FDPRD_LIFE_RANGES]),
+            *_map('M', *[_span(a, b) for a, b in _FDPRD_MGIA_RANGES]),
+            *_map(' ', _OTHER),
+        ],
+    },
+    'FCYTERM': {
+        'kind': 'INVALUE',
+        'rules': [
+            *_map(1, *sorted(_FCYTERM_1_MONTH)),
+            *_map(3, *sorted(_FCYTERM_3_MONTHS)),
+            *_map(6, *sorted(_FCYTERM_6_MONTHS)),
+            *_map(12, *sorted(_FCYTERM_12_MONTHS)),
+        ],
+    },
+    'CADENOM': {
+        'kind': 'VALUE',
+        'rules': [*_map('I', *sorted(_CADENOM_ISLAMIC)), *_map('D', _OTHER)],
+    },
+    'CAPROD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_CAPROD_MAPPINGS, _CAPROD_OTHER),
+    },
+    'DPCUSTCD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_DPCUSTCD_MAPPINGS, _DPCUSTCD_OTHER),
+    },
+    'SACUSTCD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_SACUSTCD_MAPPINGS, _SACUSTCD_OTHER),
+    },
+    'FDCUSTCD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_FDCUSTCD_MAPPINGS, _FDCUSTCD_OTHER),
+    },
+    'IFDCUSCD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_FDCUSTCD_MAPPINGS, _FDCUSTCD_OTHER),
+    },
+    'DDCUSTCD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_DDCUSTCD_MAPPINGS, _DDCUSTCD_OTHER),
+    },
+    'STATECD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_STATECD_MAPPINGS, _STATECD_OTHER),
+    },
+    'FDORGMT': {
+        'kind': 'VALUE',
+        'rules': _rules_from_buckets(_FDORGMT_BOUNDS, _FDORGMT_CODES, _FDORGMT_HIGH),
+    },
+    'FDRMMT': {
+        'kind': 'VALUE',
+        'rules': _rules_from_buckets(_FDRMMT_BOUNDS, _FDRMMT_CODES, _FDRMMT_HIGH),
+    },
+    'RMFDORGMT': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_RMFDORGMT_MAPPINGS),
+    },
+    'SDRANGE': {
+        'kind': 'INVALUE',
+        'rules': _rules_from_buckets(_SDRANGE_BOUNDS, _SDRANGE_BOUNDS, _SDRANGE_HIGH),
+    },
+    'S1RANGE': {
+        'kind': 'INVALUE',
+        'rules': _rules_from_buckets(_S1RANGE_BOUNDS, _S1RANGE_BOUNDS, _S1RANGE_HIGH),
+    },
+    'S2RANGE': {
+        'kind': 'INVALUE',
+        'rules': _rules_from_buckets(_S2RANGE_BOUNDS, _S2RANGE_BOUNDS, _S2RANGE_HIGH),
+    },
+    'DDRANGE': {
+        'kind': 'INVALUE',
+        'rules': _rules_from_buckets(_DDRANGE_BOUNDS, _DDRANGE_BOUNDS, _DDRANGE_HIGH),
+    },
+    '$RACE': {
+        'kind': 'VALUE',
+        'rules': [
+            *_map('0', '0'),
+            *_map('1', '1'),
+            *_map('2', '2'),
+            *_map('3', '3'),
+            *_map('0', _OTHER),
+        ],
+    },
+    'BRANCHCD': {
+        'kind': 'VALUE',
+        'rules': _rules_from_mapping(_BRANCHCD_MAPPINGS, _BRANCHCD_OTHER),
+    },
+}
 
 MACROS = {
-    'MOREPLAN': MOREPLAN,
-    'MOREISLM': MOREISLM,
-    'HP': HP,
-    'HPD': HPD,
-    'AITAB': AITAB,
-    'HOMEIS': HOMEIS,
-    'HOMECV': HOMECV,
-    'SWIFTIS': SWIFTIS,
-    'SWIFTCV': SWIFTCV,
+    'ACE': ACE,
     'FCY': FCY,
-    'COUNTRYCD': COUNTRYCD,
-    'POSTCD': POSTCD,
-}
-
-# Formats: group only adjacent rules with the same result.
-# _span(a, b) includes both endpoints; exclusions are stated explicitly.
-# _map(result, selectors...) preserves source order and exceptions.
-FORMATS = {
-    'ODDENOM': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('I',
-                32, 33, 60, 61, 62, 63, 64, 92, 93, 96, 81, 70, 71, 73, 74, _span(160, 169), _span(182, 188),
-                7, 8, 46, 47, 48, 49, 45, 13, 14, _span(15, 19), _span(23, 25), 20, 21,
-            ),
-            *_map('D', _OTHER),
-        ],
-    },
-
-    'ODPROD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('34180',
-                3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-                30, 31, 32, 33,
-            ),
-            *_map('34240', 34),
-            *_map('34180',
-                35, 36, 37, 38, 39, 41, 42, 43, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
-                60, 61, 62, 63, 64, 65, 68, 69, 70, 71, 73, 74, 75, 76,
-            ),
-            *_map('34240', 77, 78),
-            *_map('34180', 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97),
-            *_map('N', 98),
-            *_map('34180', 100, 101, 102, 103),
-            *_map('33110', 104, 105),
-            *_map('34180', 106),
-            *_map('N', 107),
-            *_map('34180',
-                108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125,
-            ),
-            *_map('N', 126, 127, 128, 129, 130),
-            *_map('34180', 131, 132),
-            *_map('34240', 133, 134),
-            *_map('34180', 135),
-            *_map('N', 136),
-            *_map('34180', 137, 138),
-            *_map('N', 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149),
-            *_map('34180',
-                150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
-                168, 169, 170,
-            ),
-            *_map('N', 171, 172, 173),
-            *_map('34180', 174, 175, 176),
-            *_map('34240', 177, 178),
-            *_map('34180',
-                180, 181, 182, 183, 184, 185, 186, 187, 188, 190, 191, 192, 193, 194, 195, 196, 197, 198,
-            ),
-            *_map('N', 473, 474, 475, 476, 477, 478, 479, 549, 550),
-            *_map('34180', _OTHER),
-        ],
-    },
-
-    'LNDENOM': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('I',
-                100, _span(110, 118), 119, 120, 122, 126, 127, 128, 129, 130, 131, 132, 185, 169, 134, 135,
-                136, 138, 139, 140, 141, 142, 143, 170, 180, 181, 182, 183, 101, 147, 148, 173, 174, 159,
-                160, 161, 162, _span(851, 899), _span(152, 158), 164, 165, 179, 146, 184, 191,
-                _span(192, 196), 197, 199, 124, 145, 144, 163, 186, 187, 102, 103, 104, 105, 106, 107, 108,
-                188, 189, 190, 137, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413,
-                414, 415, 416, 417, 419, _span(420, 422), _span(461, 470), 418, 427, 428, 429,
-                _span(430, 439), _span(440, 444), 445, 446, 448, _span(650, 699), 973, _span(471, 498),
-            ),
-            *_map('D', _OTHER),
-        ],
-    },
-
-    'LNPROD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('34230',
-                _span(4, 7), 15, 20, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 60, 61, 62, 63, 70, 71, 72, 73,
-                74, 75, 76, 77, 78, 79, 100, 101, 102, 103, 104, 105, 106, 107, 108,
-            ),
-            *_map('34120', _span(110, 111), 112, 113, 114, 115, 116, 117, 118, 119),
-            *_map('34149', 120, 122),
-            *_map('54120', 124),
-            *_map('34149', 126, 127),
-            *_map('34111', 128),
-            *_map('34149', 129),
-            *_map('34111', 130, 131, 132),
-            *_map('34149', 133, 134),
-            *_map('34117', 135, 136),
-            *_map('34149', 137),
-            *_map('34117', 138),
-            *_map('34120', 139, 140, 141, 142),
-            *_map('34149', 143, 144),
-            *_map('54120', 145),
-            *_map('34190', 146),
-            *_map('34120', 147),
-            *_map('34149', 148, 149),
-            *_map('34120', 150, 151, 152),
-            *_map('34149', 153, 154, 155),
-            *_map('34120', 156),
-            *_map('34149', 157, 158, 159, 160, 161, 162, 163, 164, 165, 169, 170, 172),
-            *_map('34120', 173),
-            *_map('34149', 174),
-            *_map('34120', 175),
-            *_map('34149', 176, 177, 178, 179),
-            *_map('34115', 180),
-            *_map('34149', 181, 182, 183),
-            *_map('34190', 184),
-            *_map('34115', 185, 186),
-            *_map('34149', 187, 188, 189),
-            *_map('34190', 190),
-            *_map('34114', 191),
-            *_map('34190', 192),
-            *_map('34149', 193, 194),
-            *_map('34190', 195, 196),
-            *_map('34115', 197),
-            *_map('34149', 199),
-            *_map('34120',
-                200, 201, 204, 205, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 225, 226,
-                _span(227, 228), _span(230, 233), 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245,
-                246, 247, 248, 249, 250, 253, 254, 255, 256, 257, 258, 259, 260,
-            ),
-            *_map('34149', 300, 301),
-            *_map('34190', 302),
-            *_map('34117', 303),
-            *_map('34149', 304, 305),
-            *_map('34117', 306, 307, 308),
-            *_map('34114', 309, 310),
-            *_map('34117', 311, 313),
-            *_map('34149', 315, 316, 320, 322),
-            *_map('34117', 325, 330),
-            *_map('34149', 335),
-            *_map('34117', 340),
-            *_map('34149', 345, 348, 349),
-            *_map('34190', 350, 351),
-            *_map('34117', 354, 355),
-            *_map('34149', 356, 357, 358, 359),
-            *_map('34113', 360),
-            *_map('34149', 361, 362, 363),
-            *_map('34190', 364, 365),
-            *_map('34117', 367),
-            *_map('34149', 368),
-            *_map('34117', 369),
-            *_map('34111', 380, 381),
-            *_map('34112', 390),
-            *_map('34117', 391),
-            *_map('34170', 392),
-            *_map('34120', 400),
-            *_map('34149', 401, 402, 403, 404, 405, 406, 407, 408),
-            *_map('34120', 409, 410),
-            *_map('34149', 411),
-            *_map('34120', 412, 413, 414, 415),
-            *_map('34149', 416),
-            *_map('34114', 417),
-            *_map('34149', 418),
-            *_map('34117', 419, 420),
-            *_map('34149', 421),
-            *_map('34117', 422),
-            *_map('34120', 423),
-            *_map('34117', 424),
-            *_map('34149', 425),
-            *_map('34117', 426),
-            *_map('34149', 427, 428, 429, 430),
-            *_map('34120', 431, 432, 433),
-            *_map('34149', 434, 435, 436, 437, 438, 439),
-            *_map('34120', 440),
-            *_map('34117', 441),
-            *_map('34149', 442),
-            *_map('34117', 443),
-            *_map('34120', 445, 446),
-            *_map('34149', 447, 448, 461, 462, 463),
-            *_map('34117', 464, 465),
-            *_map('34120', 466),
-            *_map('34149', 467),
-            *_map('34117', 468, 469, 470),
-            *_map('34149', 471),
-            *_map('34120', 472, 473, 474),
-            *_map('34117', 475),
-            *_map('34149', 476),
-            *_map('34117', 477),
-            *_map('34149', 478),
-            *_map('34120', 479),
-            *_map('34149', 480, 481),
-            *_map('34117', 482, 483),
-            *_map('34120', 484),
-            *_map('34149', 485),
-            *_map('34120', 486),
-            *_map('34149', 487, 488),
-            *_map('34120', 489),
-            *_map('34117', 490, 491, 492, 493),
-            *_map('34120', 494),
-            *_map('34190', 495),
-            *_map('34117', 496, 497, 498),
-            *_map('N', 500),
-            *_map('34149', 504, 505),
-            *_map('34190', 506),
-            *_map('34149', 509, 510, 512, 515, 516, 517, 518, 519),
-            *_map('N', 520),
-            *_map('34149',
-                _span(521, 523), 524, 525, 526, 527, 528, 529, 530, 531, 532, 533, 555, 556, 559, 560, 561,
-                564, 565, 566, 567, 568, 569, 570, 573, 574, 575, 576, 577, 578,
-            ),
-            *_map('34120', 600),
-            *_map('34149', 601, 602, 603),
-            *_map('34190', 604, 605),
-            *_map('34149', 606, 607),
-            *_map('34114', 608),
-            *_map('34149', 609),
-            *_map('34117', 610, 611),
-            *_map('34170', 612),
-            *_map('34149', 631, 632, 633),
-            *_map('34190', 634),
-            *_map('34115', 635),
-            *_map('34149', 636),
-            *_map('34114', 637),
-            *_map('34120', 638),
-            *_map('34149', 639, 640),
-            *_map('34190', 641),
-            *_map('34120', 650, 651),
-            *_map('34117', 652, 653),
-            *_map('34149', 654, 655, 656, 657, 658, 659),
-            *_map('34190', 660),
-            *_map('34149', 661, 662, 663),
-            *_map('34120', 664),
-            *_map('34149', 665, 666, 667),
-            *_map('34117', 668, 669),
-            *_map('34114', 670),
-            *_map('34149', 671),
-            *_map('34117', 672, 673, 674, 675),
-            *_map('34149', 676),
-            *_map('34120', 677),
-            *_map('N', 678, 679),
-            *_map('34149', 680, 681, 682, 683),
-            *_map('34115', 684),
-            *_map('34190', 685),
-            *_map('34115', 686),
-            *_map('34149', 687, 688),
-            *_map('34190', 689),
-            *_map('34114', 690),
-            *_map('34149', 691),
-            *_map('34120', 692),
-            *_map('34117', 693),
-            *_map('34149', 694),
-            *_map('34190', 695),
-            *_map('34149', 696),
-            *_map('N', 698, 699),
-            *_map('34111', 700, 705, 750),
-            *_map('54124', 709, 710),
-            *_map('34111', 720, 725, 752, 760),
-            *_map('34113', 770, 775),
-            *_map('34112', 799),
-            *_map('34600', 800, 801),
-            *_map('34690', 802, 803),
-            *_map('34600', 804, 805),
-            *_map('34690', 806),
-            *_map('34600', 807),
-            *_map('34690', 808),
-            *_map('34600', 809),
-            *_map('34690', 810),
-            *_map('34600', 811),
-            *_map('34690', 812),
-            *_map('34600', 813),
-            *_map('34690', 814),
-            *_map('34600', 815, 816),
-            *_map('34690', 817, 818),
-            *_map('34600', 851, 852, 853, 854, 855),
-            *_map('34690', 856, 857, 858, 859, 860),
-            *_map('34149', 900, 901),
-            *_map('34190', 902, 903),
-            *_map('34114', 904, 905),
-            *_map('34149', 906, 907),
-            *_map('34113', 908),
-            *_map('34149', 909),
-            *_map('34190', 910),
-            *_map('34120', 911),
-            *_map('34149', 912, 913),
-            *_map('34115', 914, 915),
-            *_map('34149', 916),
-            *_map('34190', 917),
-            *_map('34149', 918),
-            *_map('34114', 919, 920),
-            *_map('34190', 925),
-            *_map('34115', 950),
-            *_map('34190', 951),
-            # 972 = 'N'  DUMMY CONVENTIONAL TERM LOAN  (excluded per 2016-1407 / 2019-816)
-            # 973 = 'N'  DUMMY ISLAMIC TERM FINANCING  (excluded per 2016-1409 / 2019-816)
-            *_map('N', 981, 982, 983),
-            *_map('M', 984, 985),
-            *_map('N', 991, 992, 993),
-            *_map('M', 994, 995, 996),
-            *_map('34149', _OTHER),
-        ],
-    },
-
-    'LIQPFMT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('HL',
-                117, 113, 118, 115, 116, 110, 111, 139, 140, 141, 142, 227, 228, 230, 231, 234, 201, 204,
-                205, 226, 225, 235, 236, 237, 238, 239, 240, 241, 242, 248, 100, 101, 112, 114, 170, 200,
-                209, 210, 211, 212, 214, 215, 213, 216, 217, 218, 219, 220, 229, 232, 233, 244, 245, 246,
-                247, 243, 150, 151, 175, 152, 156, 445, 446, 400, 409, 410, 412, 413, 414, 415, 423, 440,
-                466, 253, 254, 431, 432, 433, 255, 256, 257, 258, 259, 260, 638, 650, 651, 664, 600, 249,
-                911, 250,
-            ),
-            *_map('RC',
-                302, 365, 506, 902, 903, 951, 350, 910, 925, 364, 146, 184, 192, 195, 802, 803, 856, 857,
-                858, 859, 351, 860, 660, 685, 604, 605, 634, 806, 808, 810, 812, 814, 190, 689, 641, 917,
-                817,
-            ),
-            *_map('FS', 392, 612),
-            *_map('FL', _OTHER),
-        ],
-    },
-
-    'SLTYPE': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('HL', _span(4, 7), 70, _span(100, 102), 106),
-            *_map('HP', 15, 20, 71, 72, 103, 104, 107),
-            *_map('FL', _span(25, 34), _span(60, 62), _span(73, 79), 105, 108),
-            *_map(' ', _OTHER),
-        ],
-    },
-
-    'LN03FMT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('SL',
-                4, 5, 6, 7, 15, 20, _span(25, 34), _span(60, 63), _span(70, 78), 100, 101, 102, 103, 104,
-                105, 106, 107, 108,
-            ),
-            *_map('OT', 225),
-            *_map('P1',
-                110, 112, 114, 200, 201, 141, 150, 210, 212, 227, 230, 232, 409, 237, 239, 244, 243, 246,
-                410, 255, 433, 445, 258, 259,
-            ),
-            *_map('P2',
-                170, 524, 525, 526, 527, 531, 555, 556, 559, 560, 561, 564, 565, 566, 567, 568, 569, 570,
-                573, 909, 162, 575, 576, 144, 172, 418, 427, 428, 473, 489, 434, 421, 435, 437, 438, 439,
-                448, 577, 578, 436,
-            ),
-            *_map('P3',
-                111, 113, 115, 116, 117, 118, 209, 139, 140, 204, 205, 214, 142, 211, 215, 219, 220, 228,
-                231, 233, 151, 152, 156, 175, 256, 257, 234, 235, 236, 238, 240, 241, 213, 216, 242, 245,
-                247, 248, 217, 218, 260, 400, 412, 413, 414, 415, 423, 466, 249, 250, 440, 253, 254, 431,
-                432, 446, 472, 474, 479, 484, 486, 494,
-            ),
-            *_map('P5', 392, 612),
-            *_map('P4', _OTHER),
-        ],
-    },
-
-    'ODRATE': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('30595',
-                50, 51, 52, 53, 54, 55, 56, 57, 65, _span(100, 103), 106, _span(108, 125), _span(137, 138),
-                _span(150, 158), 159, 170, 174, 175, 176, 177, 178, 179, 180, _span(191, 198), 135,
-            ),
-            *_map('30593', 60, 61, 62, 63, _span(160, 164), 166, 96, 93, 97),
-            *_map('30595', _OTHER),
-        ],
-    },
-
-    'LNRATE': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('30591',
-                _span(110, 119), 124, 139, 140, 141, 142, 145, 200, 201, 204, 205, 209, 210, 211, 212, 214,
-                215, 219, 220, 225, 226, 227, 228, 230, _span(230, 248),
-            ),
-            *_map('30592', 128, 130, 380, 381, 700, 705),
-            *_map('30595', 131, 132, 348, 720, 725, 392, 612),
-            *_map('30593',
-                _span(4, 7), 15, 20, _span(25, 34), _span(60, 63), 96, 97, _span(70, 79), 100, 533,
-            ),
-            *_map('30596',
-                120, 122, 126, 127, 129, 135, 136, 138, 143, 146, _span(180, 184), _span(193, 196),
-                _span(300, 302), 304, 305, _span(309, 310), 315, 320, 325, 330, 335, 340, 345, 350,
-                _span(355, 365), 390, 391, _span(900, 909), 910, 914, 915, 919, 920, 925, 950, 951,
-            ),
-            *_map('30597',
-                144, 170, _span(504, 506), 509, 510, 512, _span(515, 532), 555, 556, 559, 560, 561,
-                _span(564, 570), 573, 574, 575, 576,
-            ),
-            *_map('30595', _OTHER),
-        ],
-    },
-
-    'ODCUSTCD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('01', 1),
-            *_map('02', 2),
-            *_map('03', 3),
-            *_map('04', 4),
-            *_map('05', 5),
-            *_map('06', 6),
-            *_map('11', 10, 11),
-            *_map('12', 12),
-            *_map('13', 13),
-            *_map('79', 15),
-            *_map('17', 17),
-            *_map('30', 20, 30),
-            *_map('32', 32),
-            *_map('33', 33),
-            *_map('34', 34),
-            *_map('35', 35),
-            *_map('04', 36),
-            *_map('37', 37),
-            *_map('38', 38),
-            *_map('39', 39),
-            *_map('40', 40),
-            *_map('41', 41),
-            *_map('42', 42),
-            *_map('43', 43),
-            *_map('44', 44),
-            *_map('46', 46),
-            *_map('47', 47),
-            *_map('48', 48),
-            *_map('49', 49),
-            *_map('51', 51),
-            *_map('52', 52),
-            *_map('53', 53),
-            *_map('54', 54),
-            *_map('79', 50),
-            *_map('57', 57),
-            *_map('59', 59),
-            *_map('62', 60),
-            *_map('61', 61),
-            *_map('62', 62),
-            *_map('63', 63),
-            *_map('64', 64),
-            *_map('44', 65),
-            *_map('41', 66),
-            *_map('44', 67),
-            *_map('48', 68),
-            *_map('52', 69),
-            *_map('71', 70, 71),
-            *_map('72', 72),
-            *_map('73', 73),
-            *_map('74', 74),
-            *_map('75', 75),
-            *_map('78', 76),
-            *_map('77', 77),
-            *_map('78', 78),
-            *_map('79', 79),
-            *_map('86', 80, 81, 85, 86),
-            *_map('87', 87),
-            *_map('88', 88),
-            *_map('89', 89),
-            *_map('90', 90),
-            *_map('91', 91),
-            *_map('92', 92),
-            *_map('95', 95),
-            *_map('96', 96),
-            *_map('98', 98),
-            *_map('99', 99),
-            *_map('79', _OTHER),
-        ],
-    },
-
-    'LOCUSTCD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('11', 1),
-            *_map('02', 2),
-            *_map('03', 3),
-            *_map('04', 4),
-            *_map('05', 5),
-            *_map('06', 6),
-            *_map('11', 10, 11),
-            *_map('12', 12),
-            *_map('13', 13),
-            *_map('79', 15),
-            *_map('17', 17),
-            *_map('30', 20, 30),
-            *_map('31', 31),
-            *_map('32', 32),
-            *_map('33', 33),
-            *_map('34', 34),
-            *_map('35', 35),
-            *_map('06', 36),
-            *_map('37', 37),
-            *_map('38', 38),
-            *_map('39', 39),
-            *_map('40', 40),
-            *_map('41', 41),
-            *_map('42', 42),
-            *_map('43', 43),
-            *_map('44', 44),
-            *_map('46', 46),
-            *_map('47', 47),
-            *_map('48', 48),
-            *_map('49', 49),
-            *_map('51', 51),
-            *_map('52', 52),
-            *_map('53', 53),
-            *_map('54', 54),
-            *_map('79', 50),
-            *_map('57', 57),
-            *_map('59', 59),
-            *_map('62', 60),
-            *_map('61', 61),
-            *_map('62', 62),
-            *_map('63', 63),
-            *_map('64', 64),
-            *_map('44', 65),
-            *_map('41', 66),
-            *_map('44', 67),
-            *_map('48', 68),
-            *_map('52', 69),
-            *_map('71', 70, 71),
-            *_map('72', 72),
-            *_map('73', 73),
-            *_map('74', 74),
-            *_map('75', 75),
-            *_map('78', 76),
-            *_map('77', 77),
-            *_map('78', 78),
-            *_map('79', 79),
-            *_map('86', 80),
-            *_map('81', 81),
-            *_map('82', 82),
-            *_map('83', 83),
-            *_map('84', 84),
-            *_map('86', 85, 86),
-            *_map('87', 87),
-            *_map('88', 88),
-            *_map('89', 89),
-            *_map('90', 90),
-            *_map('91', 91),
-            *_map('92', 92),
-            *_map('95', 95),
-            *_map('96', 96),
-            *_map('98', 98),
-            *_map('99', 99),
-            *_map('79', _OTHER),
-        ],
-    },
-
-    'LNCUSTCD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('01', 1),
-            *_map('02', 2),
-            *_map('03', 3),
-            *_map('04', 4),
-            *_map('05', 5),
-            *_map('06', 6),
-            *_map('10', 10),
-            *_map('11', 11),
-            *_map('12', 12),
-            *_map('13', 13),
-            *_map('15', 15),
-            *_map('17', 17),
-            *_map('20', 20),
-            *_map('30', 30),
-            *_map('32', 32),
-            *_map('33', 33),
-            *_map('34', 34),
-            *_map('35', 35),
-            *_map('36', 36),
-            *_map('37', 37),
-            *_map('38', 38),
-            *_map('39', 39),
-            *_map('40', 40),
-            *_map('41', 41),
-            *_map('42', 42),
-            *_map('43', 43),
-            *_map('44', 44),
-            *_map('46', 46),
-            *_map('47', 47),
-            *_map('48', 48),
-            *_map('49', 49),
-            *_map('51', 51),
-            *_map('52', 52),
-            *_map('53', 53),
-            *_map('54', 54),
-            *_map('50', 50),
-            *_map('57', 57),
-            *_map('59', 59),
-            *_map('60', 60),
-            *_map('61', 61),
-            *_map('62', 62),
-            *_map('63', 63),
-            *_map('64', 64),
-            *_map('65', 65),
-            *_map('41', 66),
-            *_map('44', 67),
-            *_map('48', 68),
-            *_map('52', 69),
-            *_map('70', 70),
-            *_map('71', 71),
-            *_map('72', 72),
-            *_map('73', 73),
-            *_map('74', 74),
-            *_map('75', 75),
-            *_map('76', 76),
-            *_map('77', 77),
-            *_map('78', 78),
-            *_map('79', 79),
-            *_map('80', 80),
-            *_map('81', 81),
-            *_map('85', 85),
-            *_map('86', 86),
-            *_map('87', 87),
-            *_map('88', 88),
-            *_map('89', 89),
-            *_map('90', 90),
-            *_map('91', 91),
-            *_map('92', 92),
-            *_map('95', 95),
-            *_map('96', 96),
-            *_map('98', 98),
-            *_map('99', 99),
-            *_map('79', _OTHER),
-        ],
-    },
-
-    '$BUSIND': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('BUS',
-                _span('01', '06'), _span('11', '13'), '17', _span('30', '35'), _span('37', '40'), '45', '57',
-                '59', _span('61', '64'), _span('66', '69'), _span('71', '75'),
-            ),
-            *_map('IND', _span('77', '79'), _span('95', '96'), _OTHER),
-        ],
-    },
-
-    '$RISKCD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('34902', '2', '02', '002', '0002'),
-            *_map('34903', '3', '03', '003', '0003'),
-            *_map('34904', '4', '04', '004', '0004'),
-            *_map(' ', _OTHER),
-        ],
-    },
-
-    'MTHPASS': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('0', _span(0, 30)),
-            *_map('1', _span(31, 59)),
-            *_map('2', _span(60, 89)),
-            *_map('3', _span(90, 121)),
-            *_map('4', _span(122, 151)),
-            *_map('5', _span(152, 182)),
-            *_map('6', _span(183, 213)),
-            *_map('7', _span(214, 243)),
-            *_map('8', _span(244, 273)),
-            *_map('9', _span(274, 303)),
-            *_map('10', _span(304, 333)),
-            *_map('11', _span(334, 364)),
-            *_map('12', _span(365, 394)),
-            *_map('13', _span(395, 424)),
-            *_map('14', _span(425, 456)),
-            *_map('15', _span(457, 486)),
-            *_map('16', _span(487, 516)),
-            *_map('17', _span(517, 547)),
-            *_map('18', _span(548, 577)),
-            *_map('19', _span(578, 608)),
-            *_map('20', _span(609, 638)),
-            *_map('21', _span(639, 668)),
-            *_map('22', _span(669, 698)),
-            *_map('23', _span(699, 729)),
-            *_map('24', _OTHER),
-        ],
-    },
-
-    'NDAYS': {
-        "kind": 'INVALUE',
-        "rules": [
-            *_map(0, _span(_LOW, 30)),
-            *_map(1, _span(31, 59)),
-            *_map(2, _span(60, 89)),
-            *_map(3, _span(90, 121)),
-            *_map(4, _span(122, 151)),
-            *_map(5, _span(152, 182)),
-            *_map(6, _span(183, 213)),
-            *_map(7, _span(214, 243)),
-            *_map(8, _span(244, 273)),
-            *_map(9, _span(274, 303)),
-            *_map(10, _span(304, 333)),
-            *_map(11, _span(334, 364)),
-            *_map(12, _span(365, 394)),
-            *_map(13, _span(395, 424)),
-            *_map(14, _span(425, 456)),
-            *_map(15, _span(457, 486)),
-            *_map(16, _span(487, 516)),
-            *_map(17, _span(517, 547)),
-            *_map(18, _span(548, 577)),
-            *_map(19, _span(578, 608)),
-            *_map(20, _span(609, 638)),
-            *_map(21, _span(639, 668)),
-            *_map(22, _span(669, 698)),
-            *_map(23, _span(699, 729)),
-            *_map(24, _span(730, _HIGH)),
-        ],
-    },
-
-    'LNORMT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('12', _span(_LOW, 1)),
-            *_map('13', _span(1, 2)),
-            *_map('14', _span(2, 3)),
-            *_map('15', _span(3, 6)),
-            *_map('16', _span(6, 9)),
-            *_map('17', _span(9, 12)),
-            *_map('21', _span(12, 15)),
-            *_map('22', _span(15, 18)),
-            *_map('23', _span(18, 24)),
-            *_map('24', _span(24, 36)),
-            *_map('25', _span(36, 48)),
-            *_map('26', _span(48, 60)),
-            *_map('31', _span(60, 120)),
-            *_map('32', _span(120, 180)),
-            *_map('33', _span(180, _HIGH)),
-        ],
-    },
-
-    'LNRMMT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('51', _span(_LOW, 0)),
-            *_map('52', _span(0, 1)),
-            *_map('53', _span(1, 2)),
-            *_map('54', _span(2, 3)),
-            *_map('55', _span(3, 6)),
-            *_map('56', _span(6, 9)),
-            *_map('57', _span(9, 12)),
-            *_map('61', _span(12, 24)),
-            *_map('62', _span(24, 36)),
-            *_map('63', _span(36, 48)),
-            *_map('64', _span(48, 60)),
-            *_map('71', _span(60, 120)),
-            *_map('72', _span(120, 180)),
-            *_map('73', _span(180, _HIGH)),
-        ],
-    },
-
-    '$STATECD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('J', '1', '01', '001', '0001', '00001', '000001'),
-            *_map('K', '2', '02', '002', '0002', '00002', '000002'),
-            *_map('D', '3', '03', '003', '0003', '00003', '000003'),
-            *_map('M', '4', '04', '004', '0004', '00004', '000004'),
-            *_map('N', '5', '05', '005', '0005', '00005', '000005'),
-            *_map('C', '6', '06', '006', '0006', '00006', '000006'),
-            *_map('P', '7', '07', '007', '0007', '00007', '000007'),
-            *_map('A', '8', '08', '008', '0008', '00008', '000008'),
-            *_map('R', '9', '09', '009', '0009', '00009', '000009'),
-            *_map('S', '10', '010', '0010', '00010', '000010'),
-            *_map('Q', '11', '011', '0011', '00011', '000011'),
-            *_map('B', '12', '012', '0012', '00012', '000012'),
-            *_map('T', '13', '013', '0013', '00013', '000013'),
-            *_map('W', '14', '014', '0014', '00014', '000014', '16', '016', '0016', '00016', '000016'),
-            *_map('L', '15', '015', '0015', '00015', '000015'),
-            *_map(' ', _OTHER),
-        ],
-    },
-
-    'APPRLIMT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('30511', _span(_LOW, 100000, exclude_end=True)),
-            *_map('30512', _span(100000, 500000, exclude_end=True)),
-            *_map('30513', _span(500000, 1000000, exclude_end=True)),
-            *_map('30514', _span(1000000, 5000000, exclude_end=True)),
-            *_map('30515', _span(5000000, 20000000, exclude_end=True)),
-            *_map('30516', _span(20000000, 50000000, exclude_end=True)),
-            *_map('30519', _span(50000000, _HIGH)),
-        ],
-    },
-
-    'LOANSIZE': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('80511', _span(_LOW, 100000, exclude_end=True)),
-            *_map('80512', _span(100000, 500000, exclude_end=True)),
-            *_map('80513', _span(500000, 1000000, exclude_end=True)),
-            *_map('80514', _span(1000000, 5000000, exclude_end=True)),
-            *_map('80515', _span(5000000, 20000000, exclude_end=True)),
-            *_map('80516', _span(20000000, 50000000, exclude_end=True)),
-            *_map('80519', _span(50000000, _HIGH)),
-        ],
-    },
-
-    '$FISSTYPE': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('1100',
-                '1100', '1111', '1112', '1113', '1114', '1115', '1116', '1117', '1119', '1120', '1130',
-                '1140', '1150',
-            ),
-            *_map('2200', '2200', '2210', '2220'),
-            *_map('2300', '2300', '2301', '2302', '2303'),
-            *_map('3100', '3100', '3110', '3115', '3111', '3112', '3113', '3114'),
-            *_map('3210', '3210', '3211', '3212', '3219'),
-            *_map('3220', '3220', '3221', '3222'),
-            *_map('3230', '3230', '3231', '3232'),
-            *_map('3240', '3240', '3241', '3242'),
-            *_map('3260', '3260', '3270', '3271', '3272', '3273', '3280', '3290'),
-            *_map('3310', '3310', '3311', '3312', '3313'),
-            *_map('3430', '3430', '3431', '3432', '3433'),
-            *_map('3550', '3550', '3551', '3552'),
-            *_map('3610', '3610', '3611', '3619'),
-            *_map('3700', '3700', '3710', '3720', '3721', '3730', '3731', '3732'),
-            *_map('3800', '3800', '3811', '3812', '3813', '3814', '3819'),
-            *_map('3831', '3831', '3832', '3833', '3834', '3835'),
-            *_map('3841', '3841', '3842', '3843', '3844'),
-            *_map('3850', '3850', '3851', '3852', '3853'),
-            *_map('3860', '3860', '3861', '3862', '3863', '3864', '3865', '3866'),
-            *_map('3870', '3870', '3871', '3872', '3873'),
-            *_map('3890', '3890', '3891', '3892', '3893', '3894'),
-            *_map('3910', '3910', '3911', '3919'),
-            *_map('3950', '3905', '3951', '3952', '3953', '3954', '3955', '3956', '3957'),
-            *_map('7110', '7110', '7111', '7112', '7113', '7114', '7115', '7116', '7117'),
-            *_map('7120', '7120', '7121', '7122', '7123', '7124'),
-            *_map('7130', '7130', '7131', '7132', '7133', '7134'),
-            *_map('7190', '7190', '7191', '7192', '7193', '7199'),
-            *_map('7200', '7200', '7210', '7220'),
-            *_map('8100', '8100', '8110', '8120', '8130'),
-            *_map('8300', '8300', '8310', '8330', '8320', '8321', '8331', '8332', '8333', '8340'),
-            *_map('8400', '8400', '8410', '8411', '8412', '8413', '8414', '8415', '8416', '8420'),
-            *_map('8900',
-                '8900', '8910', '8911', '8912', '8913', '8914', '8920', '8921', '8922', '8930', '8931',
-                '8932', '8990', '8991', '8999',
-            ),
-            *_map('9100', '9100', '9101', '9102', '9103'),
-            *_map('9200', '9200', '9201', '9202', '9203'),
-            *_map('9300', '9300', '9311', '9312', '9313', '9314'),
-            *_map('9400',
-                '9400', '9410', '9420', '9430', '9431', '9432', '9433', '9434', '9435', '9440', '9450',
-                '9499',
-            ),
-        ],
-    },
-
-    '$FISSGROUP': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('1000',
-                '1100', '1111', '1112', '1113', '1114', '1115', '1116', '1117', '1119', '1120', '1130',
-                '1140', '1150', '1200', '1300', '1400',
-            ),
-            *_map('2000', '2100', '2200', '2210', '2220', '2300', '2301', '2302', '2303', '2400', '2900'),
-            *_map('3000',
-                '3100', '3110', '3115', '3111', '3112', '3113', '3114', '3120', '3210', '3211', '3212',
-                '3219', '3220', '3221', '3222', '3230', '3231', '3232', '3240', '3241', '3242', '3250',
-                '3260', '3270', '3271', '3272', '3273', '3280', '3290', '3310', '3311', '3312', '3313',
-                '3430', '3431', '3432', '3433', '3550', '3551', '3552', '3610', '3611', '3619', '3700',
-                '3710', '3720', '3721', '3730', '3731', '3732', '3800', '3811', '3812', '3813', '3814',
-                '3819', '3825', '3831', '3832', '3833', '3834', '3835', '3841', '3842', '3843', '3844',
-                '3850', '3851', '3852', '3853', '3860', '3861', '3862', '3863', '3864', '3865', '3866',
-                '3870', '3871', '3872', '3873', '3890', '3891', '3892', '3893', '3894', '3910', '3911',
-                '3919', '3905', '3951', '3952', '3953', '3954', '3955', '3956', '3957', '3960',
-            ),
-            *_map('4000', '4010', '4020', '4030'),
-            *_map('5000',
-                '5010', '5001', '5002', '5003', '5004', '5005', '5006', '5008', '5020', '5030', '5040',
-                '5050', '5999',
-            ),
-            *_map('6000', '6100', '6110', '6120', '6130', '6300', '6310', '6320'),
-            *_map('7000',
-                '7110', '7111', '7112', '7113', '7114', '7115', '7116', '7117', '7120', '7121', '7122',
-                '7123', '7124', '7130', '7131', '7132', '7133', '7134', '7190', '7191', '7192', '7193',
-                '7199', '7200', '7210', '7220',
-            ),
-            *_map('8000',
-                '8100', '8110', '8120', '8130', '8300', '8310', '8330', '8320', '8321', '8331', '8332',
-                '8333', '8340', '8400', '8410', '8411', '8412', '8413', '8414', '8415', '8416', '8420',
-                '8900', '8910', '8911', '8912', '8913', '8914', '8920', '8921', '8922', '8930', '8931',
-                '8932', '8990', '8991', '8999',
-            ),
-            *_map('9000',
-                '9100', '9101', '9102', '9103', '9200', '9201', '9202', '9203', '9300', '9311', '9312',
-                '9313', '9314', '9400', '9410', '9420', '9430', '9431', '9432', '9433', '9434', '9435',
-                '9440', '9450', '9499', '9500', '9600',
-            ),
-        ],
-    },
-
-    '$SECTCD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('1119', '1112', '1114', '1116'),
-            *_map('1120', '1130', '1140', '1150'),
-            *_map('3114', '3111', '3112'),
-            *_map('8416', '8410'),
-            *_map('8914', '8910'),
-            *_map('8922', '8920'),
-            *_map('9430', '9440', '9450'),
-        ],
-    },
-
-    '$INDSECT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('1111', '01291', '01292'),
-            *_map('1112', '01120'),
-            *_map('1113', '01261', '01262'),
-            *_map('1114', '01263'),
-            *_map('1115', '01273'),
-            *_map('1116', '01140'),
-            *_map('1117',
-                '01131', '01132', '01133', '01134', '01135', '01136', '01191', '01192', '01210', '01221',
-                '01222', '01223', '01224', '01225', '01226', '01227', '01228', '01229', '01231', '01232',
-                '01233', '01239', '01241', '01249', '01251', '01252', '01253', '01259', '01269', '01271',
-                '01272', '01279', '01281', '01282', '01283', '01284', '01285', '01293', '01294', '01295',
-                '01296', '01301', '01302', '01303', '01304',
-            ),
-            *_map('1119',
-                '01111', '01112', '01113', '01119', '01137', '01138', '01150', '01160', '01193', '01199',
-                '01289', '01299',
-            ),
-            *_map('1120',
-                '01411', '01412', '01413', '01420', '01430', '01441', '01442', '01443', '01450', '01461',
-                '01462', '01463', '01464', '01465', '01466', '01467', '01468', '01469', '01491', '01492',
-                '01493', '01494', '01495', '01496', '01497', '01499', '03225',
-            ),
-            *_map('1130', '01610', '01620', '01631', '01632', '01633', '01634', '01640'),
-            *_map('1150', '01701', '01702'),
-            *_map('1200',
-                '02101', '02102', '02103', '02104', '02105', '02201', '02202', '02203', '02204', '02301',
-                '02302', '02303', '02309', '02401', '02402',
-            ),
-            *_map('1300',
-                '03111', '03112', '03113', '03114', '03115', '03119', '03121', '03122', '03123', '03124',
-                '03129', '03211', '03212', '03213', '03214', '03215', '03216', '03217', '03218', '03219',
-                '03221', '03222', '03223', '03224', '03229',
-            ),
-            *_map('1400', '01500'),
-            *_map('2100', '05100', '05200', '08921', '08922', '08923'),
-            *_map('2210', '06101', '06102', '06103', '06104', '06201', '06202', '06203', '06204', '06205'),
-            *_map('2220', '09101', '09102'),
-            *_map('2301', '07101', '07102'),
-            *_map('2302', '07292', '07293', '07294', '07295', '07296', '07297', '07298', '07299'),
-            *_map('2303', '07291'),
-            *_map('2400', '07210'),
-            *_map('2900',
-                '08101', '08102', '08103', '08104', '08105', '08106', '08107', '08108', '08109', '08911',
-                '08912', '08913', '08914', '08915', '08916', '08917', '08918', '08931', '08932', '08933',
-                '08991', '08992', '08993', '08994', '08995', '08996', '08999', '09900',
-            ),
-            *_map('3110',
-                '10101', '10102', '10103', '10104', '10109', '10201', '10202', '10203', '10204', '10301',
-                '10302', '10303', '10304', '10306', '10404', '10405', '10406', '10407',
-            ),
-            *_map('3111', '10501', '10502', '10509'),
-            *_map('3112', '10611', '10612', '10613', '10619', '10621', '10622', '10623', '10800'),
-            *_map('3113', '11010', '11020', '11030', '11041', '11042'),
-            *_map('3114',
-                '10305', '10711', '10712', '10713', '10714', '10721', '10722', '10731', '10732', '10733',
-                '10741', '10742', '10750', '10791', '10792', '10793', '10794', '10795', '10799', '35303',
-                '10205',
-            ),
-            *_map('3115', '10401', '10402', '10403'),
-            *_map('3120', '12000'),
-            *_map('3211', '13110', '13120', '13131', '13132', '13139', '13910'),
-            *_map('3212', '14300'),
-            *_map('3219', '13921', '13922', '13930', '13940', '13990'),
-            *_map('3221', '14101', '14102', '14103', '14109'),
-            *_map('3222', '14200'),
-            *_map('3231', '15110', '15120'),
-            *_map('3232', '15201', '15202', '15203', '15209'),
-            *_map('3241', '16100'),
-            *_map('3242', '16211', '16212', '16221', '16222', '16230', '16291', '16292'),
-            *_map('3250', '17010', '17020', '17091', '17092', '17093', '17094', '17099'),
-            *_map('3271', '58110'),
-            *_map('3272', '58130'),
-            *_map('3273', '58120', '58190'),
-            *_map('3280', '18110', '18120'),
-            *_map('3290', '18200'),
-            *_map('3311', '20111', '20112', '20113', '20119', '20121', '20129', '20131', '20132', '20133'),
-            *_map('3312', '20300'),
-            *_map('3313',
-                '20210', '20221', '20222', '20231', '20232', '20291', '20292', '20299', '21001', '21002',
-                '21003', '21004', '21005', '21006', '21007', '21009',
-            ),
-            *_map('3431', '19100'),
-            *_map('3432', '19201', '19202'),
-            *_map('3551', '22111', '22112', '22191', '22192', '22193', '22199'),
-            *_map('3552', '22201', '22202', '22203', '22204', '22205', '22209'),
-            *_map('3611', '23101', '23109'),
-            *_map('3619',
-                '23911', '23912', '23921', '23929', '23930', '23941', '23942', '23951', '23952', '23953',
-                '23959', '23960', '23990',
-            ),
-            *_map('3710', '24101', '24102', '24103', '24104', '24109'),
-            *_map('3720', '24202', '24209'),
-            *_map('3721', '24201'),
-            *_map('3731', '24311', '24312'),
-            *_map('3732', '24320'),
-            *_map('3811', '25111', '25112', '25113', '25119', '25120', '25130', '33110'),
-            *_map('3813', '25910'),
-            *_map('3814', '25920'),
-            *_map('3819', '25930', '25991', '25992', '25993', '25994', '25999'),
-            *_map('3825', '26201', '26202', '28170'),
-            *_map('3832', '25200', '28210', '28230', '28240', '28250', '28260', '28290', '30400'),
-            *_map('3833', '28220'),
-            *_map('3834',
-                '28110', '28120', '28130', '28140', '28150', '28160', '28180', '28191', '28192', '28199',
-                '33120', '33200',
-            ),
-            *_map('3835', '27500'),
-            *_map('3842', '26101', '26102', '26103', '26104', '26105', '26109'),
-            *_map('3843', '26300'),
-            *_map('3844', '26400'),
-            *_map('3851', '23102', '26511', '26512', '26600', '32500', '33131', '33132'),
-            *_map('3852', '26701', '26702', '26800', '27310', '33133'),
-            *_map('3853', '26520'),
-            *_map('3861', '27101'),
-            *_map('3862', '27102'),
-            *_map('3863', '27320', '27330'),
-            *_map('3864', '27200'),
-            *_map('3865', '27400'),
-            *_map('3866', '27900', '33140'),
-            *_map('3871', '29101', '29102'),
-            *_map('3872', '29200'),
-            *_map('3873', '29300'),
-            *_map('3891', '30110', '30120'),
-            *_map('3892', '30200'),
-            *_map('3893', '30300'),
-            *_map('3894', '30910', '30920', '30990', '33150'),
-            *_map('3911', '31001', '31002', '31003', '31009'),
-            *_map('3919', '32110', '32120', '32200', '32300', '32400', '32901', '32909', '33190'),
-            *_map('3952', '38301'),
-            *_map('3953', '38302'),
-            *_map('3956', '38303', '38304'),
-            *_map('3957', '38309'),
-            *_map('3960', '38114'),
-            *_map('4010', '35101', '35102', '36001', '36002'),
-            *_map('4020', '35201', '35202', '35203'),
-            *_map('4030', '35301', '35302'),
-            *_map('5001', '41009'),
-            *_map('5002', '41003'),
-            *_map('5003', '41002'),
-            *_map('5004', '42101', '42102', '42103', '42104', '42105', '42106', '42109'),
-            *_map('5006', '41001'),
-            *_map('5008',
-                '42201', '42202', '42203', '42204', '42205', '42206', '42207', '42209', '42901', '42902',
-                '42903', '42904', '42905', '42906', '42909', '43901', '43902', '43903', '43904', '43905',
-            ),
-            *_map('5020', '43110', '43121', '43122', '43123', '43124', '43125', '43126', '43129'),
-            *_map('5030',
-                '43211', '43212', '43213', '43214', '43215', '43216', '43219', '43221', '43222', '43223',
-                '43224', '43225', '43226', '43227', '43228', '43229', '43291', '43293', '43294', '43295',
-                '43299',
-            ),
-            *_map('5040',
-                '43292', '43301', '43302', '43303', '43304', '43305', '43306', '43307', '43309', '43906',
-            ),
-            *_map('5050', '43907'),
-            *_map('5999', '43909'),
-            *_map('6110',
-                '45101', '45102', '45103', '45104', '45105', '45106', '45109', '45201', '45202', '45203',
-                '45204', '45205', '45300', '45401', '45402', '45403',
-            ),
-            *_map('6120',
-                '46100', '46201', '46202', '46203', '46204', '46205', '46209', '46311', '46312', '46313',
-                '46314', '46319', '46321', '46322', '46323', '46324', '46325', '46326', '46327', '46329',
-                '46411', '46412', '46413', '46414', '46415', '46416', '46417', '46419', '46421', '46422',
-                '46431', '46432', '46433', '46434', '46441', '46442', '46443', '46444', '46491', '46492',
-                '46493', '46494', '46495', '46496', '46497', '46499', '46510', '46521', '46522', '46531',
-                '46532', '46591', '46592', '46593', '46594', '46595', '46596', '46599', '46611', '46612',
-                '46619', '46621', '46622', '46631', '46632', '46633', '46634', '46635', '46636', '46637',
-                '46639', '46691', '46692', '46693', '46694', '46695', '46696', '46697', '46698', '46699',
-                '46901', '46902', '46909',
-            ),
-            *_map('6130',
-                '47111', '47112', '47113', '47114', '47191', '47192', '47193', '47194', '47199', '47211',
-                '47212', '47213', '47214', '47215', '47216', '47217', '47219', '47221', '47222', '47230',
-                '47300', '47411', '47412', '47413', '47420', '47510', '47520', '47531', '47532', '47533',
-                '47591', '47592', '47593', '47594', '47595', '47596', '47597', '47598', '47611', '47612',
-                '47620', '47631', '47632', '47633', '47634', '47635', '47640', '47711', '47712', '47713',
-                '47721', '47722', '47731', '47732', '47733', '47734', '47735', '47736', '47737', '47738',
-                '47739', '47741', '47742', '47743', '47744', '47749', '47810', '47820', '47891', '47892',
-                '47893', '47894', '47895', '47911', '47912', '47913', '47914', '47991', '47992', '47999',
-                '95111', '95121', '95122', '95123', '95124', '95125', '95126', '95127', '95211', '95212',
-                '95213', '95214', '95221', '95222', '95230', '95240', '95291', '95292', '95293', '95294',
-                '95295', '95296', '95299',
-            ),
-            *_map('6310',
-                '56101', '56102', '56103', '56104', '56105', '56106', '56107', '56210', '56290', '56301',
-                '56302', '56303', '56304', '56309',
-            ),
-            *_map('6320',
-                '55101', '55102', '55103', '55104', '55105', '55106', '55107', '55108', '55109', '55200',
-                '55900',
-            ),
-            *_map('7111', '49110', '49120'),
-            *_map('7112', '49223', '49229'),
-            *_map('7113', '49211', '49212', '49221'),
-            *_map('7114', '49222'),
-            *_map('7115', '49224', '49225'),
-            *_map('7116', '49230'),
-            *_map('7117', '49300'),
-            *_map('7121', '50111', '50112', '50113'),
-            *_map('7122', '50121', '50122'),
-            *_map('7123', '50211', '50212'),
-            *_map('7124', '50220'),
-            *_map('7131', '51101'),
-            *_map('7132', '51201'),
-            *_map('7133', '51102', '51103', '51203'),
-            *_map('7134', '51202'),
-            *_map('7191', '52291'),
-            *_map('7192', '52100'),
-            *_map('7193', '52241', '52249'),
-            *_map('7199',
-                '52211', '52212', '52213', '52214', '52219', '52221', '52222', '52229', '52231', '52232',
-                '52233', '52234', '52239', '52292', '52299', '79110', '79120', '79900',
-            ),
-            *_map('7210', '53100', '53200', '82195'),
-            *_map('7220',
-                '61101', '61102', '61201', '61202', '61300', '61901', '61902', '61903', '61904', '61905',
-                '61909',
-            ),
-            *_map('8110',
-                '64110', '64191', '64192', '64193', '64194', '64195', '64199', '64200', '64301', '64302',
-                '64303', '64304', '64309', '64910', '64921', '64922', '64923', '64924', '64925', '64929',
-                '64991', '64992', '64993', '64999',
-            ),
-            *_map('8120',
-                '66111', '66112', '66113', '66114', '66119', '66121', '66122', '66123', '66124', '66125',
-                '66129', '66191', '66192', '66199', '66301', '66302', '66303',
-            ),
-            *_map('8130',
-                '65111', '65112', '65121', '65122', '65123', '65124', '65125', '65201', '65202', '65203',
-                '65204', '65205', '65206', '65207', '65301', '65302', '66211', '66212', '66221', '66222',
-                '66223', '66224', '66290',
-            ),
-            *_map('8310', '68101', '68102', '68103', '68104', '68109', '68201', '68202', '68203', '68209'),
-            *_map('8320',
-                '77211', '77212', '77213', '77219', '77220', '77291', '77293', '77294', '77295', '77296',
-                '77297', '77299',
-            ),
-            *_map('8321', '77292'),
-            *_map('8331', '77101', '77102', '77302', '77303', '77304'),
-            *_map('8332', '77301', '77305', '77306', '77309'),
-            *_map('8333', '77307'),
-            *_map('8340',
-                '58201', '58202', '58203', '62010', '62021', '62022', '62091', '62099', '63111', '63112',
-                '63120', '95112', '95113',
-            ),
-            *_map('8411', '72101'),
-            *_map('8412', '72104'),
-            *_map('8413', '72102', '72106'),
-            *_map('8414', '72105'),
-            *_map('8415', '72103'),
-            *_map('8416', '72109'),
-            *_map('8420', '72201', '72202', '72209'),
-            *_map('8910', '69100', '69200'),
-            *_map('8911', '73200'),
-            *_map('8912', '70100', '70201'),
-            *_map('8913', '70203'),
-            *_map('8914', '70202', '70209'),
-            *_map('8921', '71200'),
-            *_map('8922', '71101', '71102', '71103', '71109'),
-            *_map('8932', '73100'),
-            *_map('8991', '82920'),
-            *_map('8999',
-                '74101', '74102', '74103', '74109', '74200', '74901', '74902', '74903', '74904', '74905',
-                '74909', '78100', '78200', '78300', '80100', '80200', '80300', '81100', '81210', '81291',
-                '81292', '81293', '81294', '81295', '81296', '81297', '81299', '81300', '82110', '82191',
-                '82192', '82193', '82194', '82196', '82199', '82200', '82301', '82302', '82910', '82990',
-                '77400',
-            ),
-            *_map('9101',
-                '84111', '84112', '84121', '84122', '84123', '84124', '84125', '84126', '84129', '84131',
-                '84132', '84133', '84134', '84135', '84136', '84137', '84138', '84139',
-            ),
-            *_map('9102', '84210', '84220', '84231', '84232', '84233', '84234', '84235', '84236', '84239'),
-            *_map('9103', '84300'),
-            *_map('9201',
-                '86101', '86102', '86201', '86202', '86203', '86901', '86902', '86903', '86904', '86905',
-                '86906', '86909', '87101', '87102', '87103',
-            ),
-            *_map('9202', '75000'),
-            *_map('9203',
-                '87201', '87209', '87300', '87901', '87902', '87909', '88101', '88109', '88901', '88902',
-                '88909',
-            ),
-            *_map('9311', '85101', '85102', '85103', '85104'),
-            *_map('9312', '85211', '85212', '85221', '85222'),
-            *_map('9313', '85301', '85302'),
-            *_map('9314',
-                '85411', '85412', '85419', '85421', '85429', '85491', '85492', '85493', '85494', '85499',
-                '85500',
-            ),
-            *_map('9410',
-                '37000', '38111', '38112', '38113', '38115', '38121', '38122', '38210', '38220', '39000',
-            ),
-            *_map('9420', '94110', '94120', '94200', '94910', '94920', '94990'),
-            *_map('9431',
-                '59110', '59120', '59130', '59140', '59200', '60100', '60200', '90001', '90002', '90003',
-                '90004', '90005', '90006', '90007', '90009', '93295',
-            ),
-            *_map('9432', '63910'),
-            *_map('9435', '63990'),
-            *_map('9440', '91011', '91012', '91021', '91022', '91031', '91032'),
-            *_map('9450',
-                '92000', '93111', '93112', '93113', '93114', '93115', '93116', '93117', '93118', '93119',
-                '93120', '93191', '93192', '93193', '93199', '93210', '93291', '93292', '93293', '93294',
-                '93296', '93297', '93299',
-            ),
-            *_map('9499',
-                '96011', '96012', '96013', '96014', '96020', '96031', '96032', '96033', '96034', '96035',
-                '96091', '96092', '96093', '96094', '96095', '96096', '96097', '96099',
-            ),
-            *_map('9500', '97000', '98100', '98200'),
-            *_map('9600', '99000'),
-            *_map('9999', _OTHER),
-        ],
-    },
-
-    '$COLLCD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('30570', '1', '01', '2', '02', '3', '03', '5', '05', '6', '06', '7', '07'),
-            *_map('30520', '8', '08'),
-            *_map('30570', '9', '09', '10', '11', '12'),
-            *_map('30530', '13'),
-            *_map('30570', '14'),
-            *_map('30540', '15'),
-            *_map('30580', '20'),
-            *_map('30570', '21'),
-            *_map('30580', '22', '23'),
-            *_map('30570',
-                '41', '42', '43', '50', '51', '52', '53', '54', '55', '56', '57', '60', '61', _OTHER,
-            ),
-        ],
-    },
-
-    '$SECTA': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('0100', _span('0110', '0139')),
-            *_map('0200', _span('0210', '0230')),
-            *_map('0311', '0311'),
-            *_map('0312', '0312'),
-            *_map('0313', '0313'),
-            *_map('0314', '0314'),
-            *_map('0315', '0315'),
-            *_map('0316', '0316'),
-            *_map('0321', '0321'),
-            *_map('0322', '0322'),
-            *_map('0323', '0323'),
-            *_map('0324', '0324'),
-            *_map('0329', '0329'),
-            *_map('0410', '0410'),
-            *_map('0420', '0420'),
-            *_map('0430', '0430'),
-            *_map('1000', _span('1100', '1400')),
-            *_map('2000', _span('2100', '2909')),
-            *_map('3000', _span('3100', '3909')),
-            *_map('4000', _span('4100', '4200')),
-            *_map('5001', '5001'),
-            *_map('5002', '5002'),
-            *_map('5003', '5003'),
-            *_map('5004', '5004'),
-            *_map('5005', '5005'),
-            *_map('5006', '5006'),
-            *_map('5009', '5009'),
-            *_map('7000', _span('7100', '7220')),
-            *_map('9000', _span('9100', '9600')),
-            *_map('9999', '9999'),
-            *_map(' ', _OTHER),
-        ],
-    },
-
-    '$SECTB': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('0210', _span('0210', '0212')),
-            *_map('6100', _span('6110', '6150')),
-            *_map('6200', _span('6210', '6250')),
-            *_map('6300', _span('6310', '6320')),
-            *_map('8100', '8100'),
-            *_map('8200', '8200'),
-            *_map('8310', '8310'),
-            *_map('8320', _span('8321', '8329')),
-            *_map('8330', '8330'),
-            *_map(' ', _OTHER),
-        ],
-    },
-
-    '$DELQDES': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('NO LEGAL ACTION TAKEN', '  '),
-            *_map('LNOD/RECALL ISSUED', '09'),
-            *_map('SUMMON/WRIT FILED', '10'),
-            *_map('JUDGEMENT ORDER', '11'),
-            *_map('BANKRUPTCY', '12'),
-            *_map('CHARGING ORDER', '13'),
-            *_map('GARNISHEE ORDER', '14'),
-            *_map('WRIT OF SEIZURE AND SALE', '15'),
-            *_map('PROHIBITORY ORDER', '16'),
-            *_map('WINDING-UP', '17'),
-            *_map('AUCTION', '18'),
-            *_map('JUDGEMENT DEBTOR SUMMONS', '19'),
-            *_map('RECEIVER/SECTION 176', '20'),
-            *_map('SETTLED/DISCHARGED', '21'),
-            *_map('', _OTHER),
-        ],
-    },
-
-    '$SECDES': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('SECURITIES                 ', '0100'),
-            *_map('TRANSPORT VEHICLES         ', '0200'),
-            *_map('RESIDENTIAL PROPERTY       ', '0310'),
-            *_map('RESIDE PROP COST <=25K     ', '0311'),
-            *_map('RESIDE PROP COST >25K-60K  ', '0312'),
-            *_map('RESIDE PROP COST >60K-100K ', '0313'),
-            *_map('RESIDE PROP COST >100K-150K', '0314'),
-            *_map('RESIDE PROP COST >150K-250K', '0315'),
-            *_map('RESIDE PROP COST >250K     ', '0316'),
-            *_map('NON RESI. PROPERTY         ', '0320'),
-            *_map('PURCH IND BUILD & FACTORIES', '0321'),
-            *_map('PURCH OF LAND ONLY         ', '0322'),
-            *_map('PURCH OF COMMERCIAL COMPLEX', '0323'),
-            *_map('PURCH OF SHOPHOUSES        ', '0324'),
-            *_map('PURCH OTH NRESIDE PROP     ', '0329'),
-            *_map('PERSONAL USES              ', '0410'),
-            *_map('CREDIT CARD                ', '0420'),
-            *_map('CONSUMER DURABLES          ', '0430'),
-            # *_map('AGRICULTURE, HUNTING,\n               FORESTRY & FISHING         ', '1000'),
-            *_map('AGRICULTURE, HUNTING,' + ' ' * 15 + 'FORESTRY & FISHING         ', '1000'),
-            *_map('MINING & QUARRYING         ', '2000'),
-            *_map('MANUFACTURING              ', '3000'),
-            *_map('ELEC, GAS & WATER SUPPLY   ', '4000'),
-            *_map('CONSTRUCTION', '5000'),
-            *_map('GEN INCL CIVIL ENGINE CONT ', '5001'),
-            *_map('SPECIAL TRADE CONTRACTORS  ', '5002'),
-            *_map('INDUST BUILD & FACTORIES   ', '5003'),
-            *_map('CONSTRUCT INFRASTRUCTURE   ', '5004'),
-            *_map('CONSTRUCT COMMERCIAL COMPL ', '5005'),
-            *_map('CONSTRUCT RESIDENTIAL      ', '5006'),
-            *_map('CONSTRUCTION NEC           ', '5009'),
-            *_map('WHOLESALE', '6100'),
-            *_map('RETAIL TRADE', '6200'),
-            *_map('RESTAURANTS & HOTELS', '6300'),
-            *_map('TRANSPORT, STORAGE & COMM  ', '7000'),
-            *_map('FINANCIAL SERVICES', '8100'),
-            *_map('INSURANCE', '8200'),
-            *_map('REAL ESTATE', '8310'),
-            *_map('BUSINESS SERVICES', '8320'),
-            *_map('EQUIPMENT RENTAL', '8330'),
-            # *_map('COMMUNITY, SOCIAL &\n               PERSONAL SERVICES          ', '9000'),
-            *_map('COMMUNITY, SOCIAL &' + ' ' * 15 + 'PERSONAL SERVICES          ', '9000'),
-            *_map('SECTORS NEC                ', '9999'),
-            *_map(' ', _OTHER),
-        ],
-    },
-
-    'ARRCLASS': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('0 - < 1 MTH   ', 1),
-            *_map('1 - < 2 MTH   ', 2),
-            *_map('2 - < 3 MTH   ', 3),
-            *_map('3 - < 4 MTH   ', 4),
-            *_map('4 - < 5 MTH   ', 5),
-            *_map('5 - < 6 MTH   ', 6),
-            *_map('6 - < 7 MTH   ', 7),
-            *_map('7 - < 8 MTH   ', 8),
-            *_map('8 - < 9 MTH   ', 9),
-            *_map('9 - < 12 MTH  ', 10),
-            *_map('12 - < 18 MTH ', 11),
-            *_map('18 - < 24 MTH ', 12),
-            *_map('24 - < 36 MTH ', 13),
-            *_map('36 MTH & ABOVE', 14),
-            *_map('DEFICIT       ', 15),
-        ],
-    },
-
-    '$BTPROD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('34152', 'BAP', 'BAI', 'BAS', 'BAE', 'BPI', 'BII', 'BSI', 'BEI'),
-            *_map('34159',
-                'FAS', 'FAU', 'FDS', 'FDU', 'FCL', 'FTB', 'DAS', 'DAU', 'DDS', 'DDU', 'DDT', 'ITB', 'VAL',
-                'DIL', 'FIL', 'POS', 'PCR', 'PBA', 'PRO', 'PRE', 'PBU', 'PBR', 'PUM', 'PAU', 'PDU', 'PDT',
-                'PTB', 'PFU', 'PFD',
-            ),
-            *_map('34160',
-                'TFL', 'TML', 'TFC', 'TMC', 'TFO', 'TMO', 'TLL', 'TNL', 'TLC', 'TNC', 'TLO', 'TNO', 'TLQ',
-                'TLZ', 'TFI', 'TBI', 'TLI', 'TXI', 'PFT',
-            ),
-            *_map('34600', 'FTL', 'FTI', 'FFS', 'FFU', 'FCS', 'FCU', 'FFL'),
-            *_map('34159', _OTHER),
-        ],
-    },
-
-    '$BTPRODI': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('51100', 'BGF'),
-            *_map('51999', 'APG'),
-            *_map('52100', 'BGP', 'BGT'),
-            *_map('53100',
-                'ALC', 'BFC', 'BLC', 'DLC', 'IFS', 'IFD', 'IFU', 'IFO', 'ILB', 'ILS', 'ILL', 'ILU', 'PLC',
-                'RFC', 'RLC', 'SFC', 'SLC', 'TFR', 'TLR', 'CEX', 'UMB', 'FSI', 'FUI', 'LSI', 'LUI', 'FSO',
-                'FUO', 'LSO', 'LUO',
-            ),
-            *_map('53200', 'SGC', 'SGL', 'SLI', 'SCI'),
-            *_map('53999', 'BRA', 'BUF', 'BUL', 'GTI', 'GPI', 'GFI', 'UFI', 'UDI'),
-        ],
-    },
-
-    '$BTPRODA': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('51100', 'BGF'),
-            *_map('51999', 'APG'),
-            *_map('52100', 'BGP', 'BGT'),
-            *_map('53100',
-                'ALC', 'BFC', 'BLC', 'DLC', 'IFS', 'IFD', 'IFU', 'IFO', 'ILB', 'ILS', 'ILL', 'ILU', 'PLC',
-                'RFC', 'RLC', 'SFC', 'SLC', 'TFR', 'TLR', 'CEX', 'UMB',
-            ),
-            *_map('53200', 'SGC', 'SGL'),
-            *_map('53999', 'BRA', 'BUF', 'BUL'),
-        ],
-    },
-
-    '$BTRATE': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('30596',
-                'IEF', 'MDL', 'MLL', 'MOL', 'MOF', 'MCL', 'MCF', 'PEF', 'PCE', 'PCP', 'MFL', 'BPI', 'BII',
-                'BSI', 'BEI',
-            ),
-            *_map('30593', 'BAP', 'BAI', 'BAS', 'BAE'),
-            *_map('30597', _OTHER),
-        ],
-    },
-
-    '$CRISCD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('0440', '0440', '0441'),
-            *_map('0460', '0460'),
-            *_map('0110', '1110', '1111'),
-            *_map('0120', '1120', '1121'),
-            *_map('0131', '1131'),
-            *_map('0132', '1139'),
-            *_map('0139', '1140'),
-            *_map('0110', '1210', '1211'),
-            *_map('0120', '1220', '1221'),
-            *_map('0132', '1230'),
-            *_map('0139', '1290'),
-            *_map('0311', '2111'),
-            *_map('0312', '2112'),
-            *_map('0313', '2113'),
-            *_map('0314', '2114'),
-            *_map('0315', '2115'),
-            *_map('0316', '2116'),
-            *_map('0321', '2121'),
-            *_map('0322', '2122'),
-            *_map('0323', '2123'),
-            *_map('0324', '2124', '2125'),
-            *_map('0329', '2126', '2129'),
-            *_map('0311', '2208'),
-            *_map('0312', '2209'),
-            *_map('0313', '2210'),
-            *_map('0314', '2211'),
-            *_map('0315', '2212'),
-            *_map('0316', '2213'),
-            *_map('0321', '2221'),
-            *_map('0322', '2222'),
-            *_map('0323', '2223'),
-            *_map('0324', '2224', '2225'),
-            *_map('0329', '2226', '2229'),
-            *_map('0311', '2308'),
-            *_map('0312', '2309'),
-            *_map('0313', '2310'),
-            *_map('0314', '2311'),
-            *_map('0315', '2312'),
-            *_map('0316', '2313'),
-            *_map('0321', '2321'),
-            *_map('0322', '2322'),
-            *_map('0323', '2323'),
-            *_map('0324', '2324', '2325'),
-            *_map('0329', '2326', '2329'),
-            *_map('3100', '3100', '3101', '3110', '3120'),
-            *_map('0200', '3200', '3201', '3300', '3900', '3901'),
-            *_map('0430', '4100'),
-            *_map('0410', '4300'),
-            *_map('0420', '4200'),
-            *_map('0139', '4411', '4412', '4421', '4422', '4431', '4432', '4441', '4442'),
-            *_map('0390', '5100', '5200'),
-            *_map('0470', '5300'),
-            *_map('0990', '5400'),
-            *_map('0311', '5401'),
-            *_map('0312', '5402'),
-            *_map('0313', '5403'),
-            *_map('0314', '5404'),
-            *_map('0315', '5405'),
-            *_map('0316', '5406'),
-            *_map('0321', '5407'),
-            *_map('0322', '5408'),
-            *_map('0323', '5409'),
-            *_map('0324', '5410'),
-            *_map('0329', '5411'),
-            *_map('0311', '5412'),
-            *_map('0312', '5413'),
-            *_map('0313', '5414'),
-            *_map('0314', '5415'),
-            *_map('0315', '5416'),
-            *_map('0316', '5417'),
-            *_map('0321', '5418'),
-            *_map('0322', '5419'),
-            *_map('0323', '5420'),
-            *_map('0324', '5421'),
-            *_map('0329', '5422'),
-            *_map('0324', '5423'),
-            *_map('0329', '5424'),
-            *_map('0324', '5425'),
-            *_map('0329', '5426'),
-            *_map('0311', '5431'),
-            *_map('0312', '5432'),
-            *_map('0313', '5433'),
-            *_map('0314', '5434'),
-            *_map('0315', '5435'),
-            *_map('0316', '5436'),
-            *_map('0321', '5437'),
-            *_map('0322', '5438'),
-            *_map('0323', '5439'),
-            *_map('0324', '5440'),
-            *_map('0329', '5441'),
-            *_map('0324', '5442'),
-            *_map('0329', '5443'),
-            *_map('0410', '5500'),
-            *_map('0470', '5501'),
-            *_map('0440', '5600'),
-            *_map('0990', '5700', '5800'),
-            *_map('0390', '6300'),
-            *_map('0990', '9000', '9001', _OTHER),
-        ],
-    },
-
-    '$RVRSECT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('1111', '1111'),
-            *_map('1112', '1112'),
-            *_map('1113', '1113'),
-            *_map('1114', '1114'),
-            *_map('1115', '1115'),
-            *_map('1116', '1116'),
-            *_map('1119', '1117', '1119'),
-            *_map('1118', '1120'),
-            *_map('1120', '1130'),
-            *_map('1400', '1140'),
-            *_map('1130', '1150'),
-            *_map('1210', '1200'),
-            *_map('1309', '1300'),
-            *_map('1400', '1400'),
-            *_map('2100', '2100'),
-            *_map('2200', '2210', '2220'),
-            *_map('2301', '2301'),
-            *_map('2302', '2302'),
-            *_map('2303', '2303'),
-            *_map('2909', '2400', '2900'),
-            *_map('3111', '3110'),
-            *_map('3112', '3111'),
-            *_map('3116', '3112'),
-            *_map('3134', '3113'),
-            *_map('3121', '3114'),
-            *_map('3152', '3115'),
-            *_map('3140', '3120'),
-            *_map('3211', '3211'),
-            *_map('3219', '3212', '3219'),
-            *_map('3220', '3221'),
-            *_map('3232', '3222'),
-            *_map('3231', '3231'),
-            *_map('3240', '3232'),
-            *_map('3311', '3241'),
-            *_map('3319', '3242'),
-            *_map('3411', '3250'),
-            *_map('3420', '3271', '3272', '3273', '3280', '3290'),
-            *_map('3511', '3311'),
-            *_map('3513', '3312'),
-            *_map('3521', '3313'),
-            *_map('3909', '3431'),
-            *_map('3531', '3432'),
-            *_map('3540', '3433'),
-            *_map('3551', '3551'),
-            *_map('3560', '3552'),
-            *_map('3620', '3611'),
-            *_map('3610', '3619'),
-            *_map('3710', '3710'),
-            *_map('3720', '3720'),
-            *_map('3909', '3721'),
-            *_map('3710', '3731'),
-            *_map('3720', '3732'),
-            *_map('3813', '3811'),
-            *_map('3819', '3813', '3814', '3819'),
-            *_map('3825', '3825'),
-            *_map('3822', '3832'),
-            *_map('3829', '3833', '3834', '3835'),
-            *_map('3839', '3842'),
-            *_map('3832', '3843', '3844'),
-            *_map('3851', '3851'),
-            *_map('3852', '3852'),
-            *_map('3853', '3853'),
-            *_map('3839', '3861', '3862', '3863', '3864', '3865', '3866'),
-            *_map('3843', '3871'),
-            *_map('3849', '3872', '3873'),
-            *_map('3841', '3891'),
-            *_map('3842', '3892'),
-            *_map('3845', '3893'),
-            *_map('3849', '3894'),
-            *_map('3320', '3911'),
-            *_map('3909', '3919', '3952', '3953', '3955', '3956', '3957', '3960'),
-            *_map('4101', '4010'),
-            *_map('4102', '4020'),
-            *_map('4103', '4030'),
-            *_map('5001', '5001'),
-            *_map('5002', '5002'),
-            *_map('5003', '5003'),
-            *_map('5004', '5004'),
-            *_map('5005', '5005'),
-            *_map('5006', '5006'),
-            *_map('5001', '5008'),
-            *_map('5009', '5020', '5030', '5040', '5050', '5999'),
-            *_map('6131', '6110'),
-            *_map('6150', '6120'),
-            *_map('6250', '6130'),
-            *_map('6310', '6310'),
-            *_map('6320', '6320'),
-            *_map('7111', '7111'),
-            *_map('7116', '7112'),
-            *_map('7113', '7113'),
-            *_map('7116', '7114', '7115', '7116'),
-            *_map('7115', '7117'),
-            *_map('7121', '7121'),
-            *_map('7123', '7122'),
-            *_map('7122', '7123', '7124'),
-            *_map('7131', '7131'),
-            *_map('7132', '7132', '7133', '7134'),
-            *_map('7191', '7191'),
-            *_map('7192', '7192'),
-            *_map('7199', '7193', '7199'),
-            *_map('7210', '7210'),
-            *_map('7220', '7220'),
-            *_map('8100', '8110', '8120'),
-            *_map('8200', '8130'),
-            *_map('8310', '8310'),
-            *_map('8329', '8320', '8321', '8331'),
-            *_map('8330', '8332', '8333'),
-            *_map('8323', '8340'),
-            *_map('9320', '8411', '8412', '8413', '8414', '8415', '8416', '8420'),
-            *_map('8329', '8910', '8911', '8912', '8913', '8914'),
-            *_map('8324', '8920'),
-            *_map('8329', '8921'),
-            *_map('8324', '8922'),
-            *_map('8325', '8931', '8932'),
-            *_map('8329', '8991', '8999'),
-            *_map('9100', '9101', '9102', '9103'),
-            *_map('9331', '9201'),
-            *_map('9332', '9202'),
-            *_map('9340', '9203'),
-            *_map('9310', '9311', '9312', '9313', '9314'),
-            *_map('9200', '9410'),
-            *_map('9350', '9420'),
-            *_map('9411', '9431'),
-            *_map('9999', '9432', '9433', '9434', '9435'),
-            *_map('9420', '9440'),
-            *_map('9490', '9450'),
-            *_map('9520', '9499'),
-            *_map('9530', '9500'),
-            *_map('9600', '9600'),
-            *_map('9999', '9999'),
-            *_map('    ', _OTHER),
-        ],
-    },
-
-    '$RVRCRIS': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('1000', '0440'),
-            *_map('0410', '0441'),
-            *_map('1000', '0460'),
-            *_map('0110', '1110'),
-            *_map('0120', '1120'),
-            *_map('0131', '1131'),
-            *_map('0132', '1139'),
-            *_map('0139', '1140'),
-            *_map('0110', '1210'),
-            *_map('0120', '1220'),
-            *_map('0132', '1230'),
-            *_map('0139', '1290'),
-            *_map('0311', '2111'),
-            *_map('0312', '2112'),
-            *_map('0313', '2113'),
-            *_map('0314', '2114'),
-            *_map('0315', '2115'),
-            *_map('0316', '2116'),
-            *_map('0321', '2121'),
-            *_map('0322', '2122'),
-            *_map('0323', '2123'),
-            *_map('0324', '2124'),
-            *_map('0329', '2129'),
-            *_map('0311', '2208'),
-            *_map('0312', '2209'),
-            *_map('0313', '2210'),
-            *_map('0314', '2211'),
-            *_map('0315', '2212'),
-            *_map('0316', '2213'),
-            *_map('0321', '2221'),
-            *_map('0322', '2222'),
-            *_map('0323', '2223'),
-            *_map('0324', '2224'),
-            *_map('0329', '2229'),
-            *_map('0311', '2308'),
-            *_map('0312', '2309'),
-            *_map('0313', '2310'),
-            *_map('0314', '2311'),
-            *_map('0315', '2312'),
-            *_map('0316', '2313'),
-            *_map('1000',
-                '2321', '2322', '2323', '2324', '2329', '3100', '3101', '3200', '3201', '3900', '3901',
-            ),
-            *_map('0430', '4100'),
-            *_map('0410', '4300'),
-            *_map('1000', '5100', '5200', '5300'),
-            *_map('0311', '5401'),
-            *_map('0312', '5402'),
-            *_map('0313', '5403'),
-            *_map('0314', '5404'),
-            *_map('0315', '5405'),
-            *_map('0316', '5406'),
-            *_map('0321', '5407'),
-            *_map('0322', '5408'),
-            *_map('0323', '5409'),
-            *_map('0324', '5410'),
-            *_map('0329', '5411'),
-            *_map('0311', '5412'),
-            *_map('0312', '5413'),
-            *_map('0313', '5414'),
-            *_map('0314', '5415'),
-            *_map('0315', '5416'),
-            *_map('0316', '5417'),
-            *_map('1000', '5418', '5419', '5420', '5421', '5422', '5423'),
-            *_map('0410', '5424', '5500'),
-            *_map('1000', '5501', '5600', '5700', '5800'),
-            *_map('0410', '9000'),
-            *_map('1000', '9001'),
-        ],
-    },
-
-    'BTCUSTCD': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('11', 1),
-            *_map('02', 2),
-            *_map('03', 3),
-            *_map('04', 4),
-            *_map('05', 5),
-            *_map('06', 6),
-            *_map('11', 10, 11),
-            *_map('12', 12),
-            *_map('13', 13),
-            *_map('79', 15),
-            *_map('17', 17),
-            *_map('30', 20, 30),
-            *_map('31', 31),
-            *_map('32', 32),
-            *_map('33', 33),
-            *_map('34', 34),
-            *_map('35', 35),
-            *_map('06', 36),
-            *_map('37', 37),
-            *_map('38', 38),
-            *_map('39', 39),
-            *_map('40', 40),
-            *_map('41', 41),
-            *_map('42', 42),
-            *_map('43', 43),
-            *_map('44', 44),
-            *_map('46', 46),
-            *_map('47', 47),
-            *_map('48', 48),
-            *_map('49', 49),
-            *_map('51', 51),
-            *_map('52', 52),
-            *_map('53', 53),
-            *_map('54', 54),
-            *_map('79', 50),
-            *_map('57', 57),
-            *_map('59', 59),
-            *_map('62', 60),
-            *_map('61', 61),
-            *_map('62', 62),
-            *_map('63', 63),
-            *_map('64', 64),
-            *_map('44', 65),
-            *_map('66', 66),
-            *_map('67', 67),
-            *_map('68', 68),
-            *_map('69', 69),
-            *_map('71', 70, 71),
-            *_map('72', 72),
-            *_map('73', 73),
-            *_map('74', 74),
-            *_map('75', 75),
-            *_map('78', 76),
-            *_map('77', 77),
-            *_map('78', 78),
-            *_map('79', 79),
-            *_map('86', 80),
-            *_map('81', 81),
-            *_map('82', 82),
-            *_map('83', 83),
-            *_map('84', 84),
-            *_map('86', 85, 86),
-            *_map('87', 87),
-            *_map('88', 88),
-            *_map('89', 89),
-            *_map('90', 90),
-            *_map('91', 91),
-            *_map('92', 92),
-            *_map('95', 95),
-            *_map('96', 96),
-            *_map('98', 98),
-            *_map('99', 99),
-            *_map('79', _OTHER),
-        ],
-    },
-
-    '$RVRSE': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('1111', '1111'),
-            *_map('1119', '1112'),
-            *_map('1113', '1113'),
-            *_map('1119', '1114'),
-            *_map('1115', '1115'),
-            *_map('1119', '1116', '1117'),
-            *_map('1120', '1118'),
-            *_map('1119', '1119'),
-            *_map('1130', '1120'),
-            *_map('1120', '1130', '1140', '1150'),
-            *_map('1200', '1210', '1220'),
-            *_map('1300', '1301', '1302', '1309'),
-            *_map('1400', '1400'),
-            *_map('2100', '2100'),
-            *_map('2210', '2200'),
-            *_map('2301', '2301'),
-            *_map('2302', '2302'),
-            *_map('2303', '2303'),
-            *_map('2900', '2901', '2902', '2903', '2909'),
-            *_map('3114', '3111', '3112'),
-            *_map('3110', '3113', '3114', '3115'),
-            *_map('3112', '3116'),
-            *_map('3114', '3117', '3118', '3119', '3121'),
-            *_map('3112', '3122'),
-            *_map('3110', '3123'),
-            *_map('3112', '3124', '3125'),
-            *_map('3114', '3129'),
-            *_map('3113', '3131', '3132', '3133', '3134'),
-            *_map('3120', '3140'),
-            *_map('3919', '3151', '3152', '3153', '3159'),
-            *_map('3211', '3211'),
-            *_map('3212', '3212', '3213'),
-            *_map('3219', '3214', '3215', '3219'),
-            *_map('3221', '3220'),
-            *_map('3231', '3231'),
-            *_map('3222', '3232'),
-            *_map('3231', '3233'),
-            *_map('3232', '3240'),
-            *_map('3241', '3311'),
-            *_map('3242', '3312', '3319'),
-            *_map('3911', '3320'),
-            *_map('3250', '3411', '3412', '3419'),
-            *_map('3280', '3420'),
-            *_map('3311', '3511', '3512'),
-            *_map('3312', '3513'),
-            *_map('3313', '3521', '3522', '3523', '3529'),
-            *_map('3432', '3531', '3540'),
-            *_map('3551', '3551', '3559'),
-            *_map('3552', '3560'),
-            *_map('3619', '3610'),
-            *_map('3611', '3620'),
-            *_map('3619', '3691', '3692', '3693', '3699'),
-            *_map('3710', '3710'),
-            *_map('3720', '3720'),
-            *_map('3819', '3811'),
-            *_map('3911', '3812'),
-            *_map('3811', '3813'),
-            *_map('3819', '3819'),
-            *_map('3834', '3821'),
-            *_map('3832', '3822', '3823', '3824'),
-            *_map('3825', '3825'),
-            *_map('3832', '3829'),
-            *_map('3866', '3831'),
-            *_map('3844', '3832'),
-            *_map('3866', '3833', '3839'),
-            *_map('3891', '3841'),
-            *_map('3892', '3842'),
-            *_map('3871', '3843'),
-            *_map('3894', '3844'),
-            *_map('3893', '3845'),
-            *_map('3894', '3849'),
-            *_map('3851', '3851'),
-            *_map('3852', '3852'),
-            *_map('3853', '3853'),
-            *_map('3919', '3901', '3902', '3903', '3909'),
-            *_map('4010', '4101'),
-            *_map('4020', '4102'),
-            *_map('4030', '4103', '4200'),
-            *_map('5001', '5001'),
-            *_map('5002', '5002'),
-            *_map('5003', '5003'),
-            *_map('5004', '5004'),
-            *_map('5005', '5005'),
-            *_map('5006', '5006'),
-            *_map('5999', '5009'),
-            *_map('6120', '6111', '6112', '6113', '6114', '6115', '6116', '6117', '6118', '6119', '6121'),
-            *_map('6110', '6131', '6132', '6133', '6134', '6139'),
-            *_map('6120', '6141', '6142', '6143', '6144', '6145', '6146', '6147', '6148', '6149', '6150'),
-            *_map('6130',
-                '6211', '6212', '6213', '6214', '6215', '6216', '6217', '6218', '6219', '6221', '6222',
-                '6231', '6241', '6242', '6243', '6249', '6250',
-            ),
-            *_map('6310', '6310'),
-            *_map('6320', '6320'),
-            *_map('7111', '7111'),
-            *_map('7113', '7112', '7113'),
-            *_map('7116', '7114'),
-            *_map('7117', '7115'),
-            *_map('7112', '7116'),
-            *_map('7121', '7121'),
-            *_map('7123', '7122'),
-            *_map('7121', '7123'),
-            *_map('7131', '7131'),
-            *_map('7132', '7132'),
-            *_map('7191', '7191'),
-            *_map('7192', '7192'),
-            *_map('7199', '7199'),
-            *_map('7210', '7210'),
-            *_map('7220', '7220'),
-            *_map('8110', '8100'),
-            *_map('8130', '8200'),
-            *_map('8310', '8310'),
-            *_map('8914', '8321', '8322'),
-            *_map('8340', '8323'),
-            *_map('8922', '8324'),
-            *_map('8931', '8325'),
-            *_map('8999', '8329'),
-            *_map('8332', '8330'),
-            *_map('8416', '8410'),
-            *_map('8914', '8910'),
-            *_map('8922', '8920'),
-            *_map('9101', '9100'),
-            *_map('9410', '9200'),
-            *_map('9314', '9310'),
-            *_map('8416', '9320'),
-            *_map('9201', '9331'),
-            *_map('9202', '9332'),
-            *_map('9203', '9340'),
-            *_map('9420', '9350', '9391'),
-            *_map('9203', '9399'),
-            *_map('9431', '9411', '9412', '9413', '9414', '9415'),
-            *_map('9440', '9420'),
-            *_map('9430', '9440', '9450'),
-            *_map('9431', '9490'),
-            *_map('6130', '9511', '9512'),
-            *_map('6110', '9513'),
-            *_map('6130', '9514', '9515'),
-            *_map('9499', '9520'),
-            *_map('9500', '9530'),
-            *_map('9499', '9591', '9592', '9599'),
-            *_map('9600', '9600'),
-            *_map('9700', '9700'),
-            *_map('9999', '9999'),
-            *_map('    ', _OTHER),
-        ],
-    },
-
-    '$FISSPUR': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('0110', '0111', '0112', '0119'),
-            *_map('0120', '0121', '0122', '0129'),
-            *_map('0131', '0131'),
-            *_map('0132', '0132'),
-            *_map('0139', '0139'),
-            *_map('0211', '0211'),
-            *_map('0212', '0212'),
-            *_map('0200', '0220', '0230'),
-            *_map('0311', '0311'),
-            *_map('0312', '0312'),
-            *_map('0313', '0313'),
-            *_map('0314', '0314'),
-            *_map('0315', '0315'),
-            *_map('0316', '0316'),
-            *_map('0321', '0321'),
-            *_map('0322', '0322'),
-            *_map('0323', '0323'),
-            *_map('0324', '0324'),
-            *_map('0329', '0329'),
-            *_map('0410', '0410'),
-            *_map('0420', '0420'),
-            *_map('0430', '0430'),
-        ],
-    },
-
-    '$NEWSECT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('1111', '1111'),
-            *_map('1113', '1113'),
-            *_map('1115', '1115'),
-            *_map('1117', '1117'),
-            *_map('1119', '1119'),
-            *_map('1200', '1200'),
-            *_map('1300', '1300'),
-            *_map('1400', '1400'),
-            *_map('2100', '2100'),
-            *_map('2200', '2210', '2220'),
-            *_map('2301', '2301'),
-            *_map('2303', '2303'),
-            *_map('2400', '2400'),
-            *_map('2900', '2900'),
-            *_map('3115', '3115'),
-            *_map('3113', '3113'),
-            *_map('3114', '3114'),
-            *_map('3120', '3120'),
-            *_map('3210', '3211', '3212', '3219'),
-            *_map('3220', '3221', '3222'),
-            *_map('3230', '3231', '3232'),
-            *_map('3240', '3241', '3242'),
-            *_map('3250', '3250'),
-            *_map('3271', '3271'),
-            *_map('3272', '3272'),
-            *_map('3273', '3273'),
-            *_map('3280', '3280'),
-            *_map('3290', '3290'),
-            *_map('3310', '3311', '3312', '3313'),
-            *_map('3430', '3431', '3432', '3433'),
-            *_map('3550', '3551', '3552'),
-            *_map('3610', '3611', '3619'),
-            *_map('3710', '3710'),
-            *_map('3721', '3721'),
-            *_map('3731', '3731'),
-            *_map('3732', '3732'),
-            *_map('3811', '3811'),
-            *_map('3813', '3813'),
-            *_map('3814', '3814'),
-            *_map('3819', '3819'),
-            *_map('3825', '3825'),
-            *_map('3833', '3833'),
-            *_map('3834', '3834'),
-            *_map('3835', '3835'),
-            *_map('3841', '3842', '3843', '3844'),
-            *_map('3850', '3851', '3852', '3853'),
-            *_map('3860', '3861', '3862', '3863', '3864', '3865', '3866'),
-            *_map('3870', '3871', '3872', '3873'),
-            *_map('3890', '3891', '3892', '3893', '3894'),
-            *_map('3911', '3911'),
-            *_map('3919', '3919'),
-            *_map('3952', '3952'),
-            *_map('3953', '3953'),
-            *_map('3955', '3955'),
-            *_map('3956', '3956'),
-            *_map('3957', '3957'),
-            *_map('3960', '3960'),
-            *_map('4000', '4010', '4020', '4030'),
-            *_map('5001', '5001'),
-            *_map('5002', '5002'),
-            *_map('5003', '5003'),
-            *_map('5004', '5004'),
-            *_map('5005', '5005'),
-            *_map('5006', '5006'),
-            *_map('5008', '5008'),
-            *_map('5020', '5020'),
-            *_map('5030', '5030'),
-            *_map('5040', '5040'),
-            *_map('5050', '5050'),
-            *_map('5999', '5999'),
-            *_map('6110', '6110'),
-            *_map('6120', '6120'),
-            *_map('6130', '6130'),
-            *_map('6300', '6310', '6320'),
-            *_map('7111', '7111'),
-            *_map('7114', '7114'),
-            *_map('7116', '7116'),
-            *_map('7117', '7117'),
-            *_map('7122', '7122'),
-            *_map('7124', '7124'),
-            *_map('7131', '7131'),
-            *_map('7132', '7132'),
-            *_map('7133', '7133'),
-            *_map('7134', '7134'),
-            *_map('7191', '7191'),
-            *_map('7192', '7192'),
-            *_map('7193', '7193'),
-            *_map('7199', '7199'),
-            *_map('7210', '7210'),
-            *_map('7220', '7220'),
-            *_map('8100', '8110', '8120', '8130'),
-            *_map('8310', '8310'),
-            *_map('8321', '8321'),
-            *_map('8331', '8331'),
-            *_map('8333', '8333'),
-            *_map('8340', '8340'),
-            *_map('8411', '8411'),
-            *_map('8412', '8412'),
-            *_map('8413', '8413'),
-            *_map('8414', '8414'),
-            *_map('8415', '8415'),
-            *_map('8416', '8416'),
-            *_map('8420', '8420'),
-            *_map('8911', '8911'),
-            *_map('8912', '8912'),
-            *_map('8913', '8913'),
-            *_map('8921', '8921'),
-            *_map('8931', '8931'),
-            *_map('8932', '8932'),
-            *_map('8991', '8991'),
-            *_map('8999', '8999'),
-            *_map('9100', '9101', '9102', '9103'),
-            *_map('9200', '9201', '9202', '9203'),
-            *_map('9300', '9311', '9312', '9313', '9314'),
-            *_map('9431', '9431'),
-            *_map('9433', '9433'),
-            *_map('9434', '9434'),
-            *_map('9500', '9500'),
-            *_map('9600', '9600'),
-            *_map('9999', '9999'),
-        ],
-    },
-
-    '$VALIDSE': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('VALID',
-                '1111', '1112', '1113', '1114', '1115', '1116', '1117', '1119', '1120', '1130', '1150',
-                '1200', '1300', '1400', '2100', '1140', '2210', '2220', '2301', '2302', '2303', '2400',
-                '2900', '3110', '3111', '3112', '3113', '3114', '3115', '3120', '3211', '3212', '3219',
-                '3221', '3222', '3231', '3232', '3241', '3242', '3250', '3271', '3272', '3273', '3280',
-                '3290', '3311', '3312', '3313', '3431', '3432', '3433', '3551', '3552', '3611', '3619',
-                '3710', '3720', '3721', '3731', '3732', '3811', '3813', '3814', '3819', '3825', '3832',
-                '3833', '3834', '3835', '3842', '3843', '3844', '3851', '3852', '3853', '3861', '3862',
-                '3863', '3864', '3865', '3866', '3871', '3872', '3873', '3891', '3892', '3893', '3894',
-                '3911', '3919', '3956', '3960', '3953', '3957', '3952', '3955', '4010', '4020', '4030',
-                '5001', '5002', '5003', '5004', '5005', '5006', '5008', '5020', '5030', '5040', '5050',
-                '5999', '6110', '6120', '6130', '6310', '6320', '7111', '7112', '7113', '7114', '7115',
-                '7116', '7117', '7121', '7122', '7123', '7124', '7131', '7132', '7133', '7134', '7191',
-                '7192', '7193', '7199', '7210', '7220', '8110', '8120', '8130', '8310', '8320', '8321',
-                '8331', '8332', '8333', '8340', '8411', '8412', '8413', '8414', '8415', '8416', '8420',
-                '8910', '8911', '8912', '8913', '8914', '8920', '8921', '8922', '8931', '8932', '8991',
-                '8999', '9101', '9102', '9103', '9201', '9202', '9203', '9311', '9312', '9313', '9314',
-                '9410', '9420', '9430', '9431', '9432', '9433', '9434', '9435', '9440', '9450', '9499',
-                '9500', '9600', '9700', '9999',
-            ),
-            *_map('INVALID', _OTHER),
-        ],
-    },
-
-    'LNFMT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('LSTAFF', _span(4, 7), 15, 20, _span(25, 34), _span(60, 63), _span(70, 78), 100),
-            *_map('LHOUSE',
-                _span(110, 119), 124, _span(139, 142), 145, 147, 173, 200, 201, 204, 205, _span(209, 220),
-                _span(225, 228), _span(230, 248),
-            ),
-            *_map('LBAEPL', 135, 136, 138),
-            *_map('LSWFSX', 126, 127, 129, 359, 361, 363, 906, 907),
-            *_map('LHPPRD', 128, 130, 380, 381, 700, 705, 720, 725, 983, 993),
-            *_map('LOT_OT',
-                _span(180, 184), 193, _span(900, 905), _span(908, 910), 914, 915, 919, 920, 925, 950, 951,
-                137, 143, 146, _span(159, 162), 170, _span(194, 196), 199, 120, _span(300, 302),
-                _span(304, 305), _span(309, 310), 315, 320, 325, 330, 335, 340, 345, 348, 350,
-                _span(355, 358), 360, 362, 364, 365, 390, 391, 500, _span(504, 506), 509, 510,
-                _span(515, 533), _span(555, 556), _span(559, 574), _OTHER,
-            ),
-        ],
-    },
-
-    'LNLOB': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('CORP',
-                _span(180, 184), 193, _span(900, 905), _span(908, 910), 914, 915, 919, 920, 925, 950, 951,
-                906, 907,
-            ),
-            *_map('HPOP', 128, 130, 380, 381, 700, 705, 720, 725, 983, 993),
-            *_map('RETL',
-                _span(4, 7), 15, 20, _span(25, 34), _span(60, 63), _span(70, 78), 100, _span(110, 119), 124,
-                _span(139, 142), 145, 147, 173, 200, 201, 204, 205, _span(209, 220), _span(225, 228),
-                _span(230, 248), 135, 136, 138, 126, 127, 129, 359, 361, 363, 120, 137, 143, 146,
-                _span(159, 162), 170, _span(194, 196), 199, _span(300, 302), _span(304, 305),
-                _span(309, 310), 315, 320, 325, 330, 335, 340, 345, 348, 350, _span(355, 358), 360, 362, 364,
-                365, 390, 391, 500, _span(504, 506), 509, 510, _span(515, 533), _span(555, 556),
-                _span(559, 574), _OTHER,
-            ),
-        ],
-    },
-
-    'ODFMT': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('OFOREX', 171, 172, 173),
-            *_map('OOTHER', 147, _span(126, 129), _span(144, 145)),
-            *_map('LSHMRG', 113, _span(177, 178)),
-            *_map('LOT_OT',
-                _span(50, 65), _span(66, 69), _span(87, 91), _span(93, 95), _span(100, 103), 106,
-                _span(108, 112), _span(114, 125), 135, _span(137, 138), 148, _span(150, 167),
-                _span(169, 170), _span(174, 176), _span(179, 182), 189, _span(191, 198), _OTHER,
-            ),
-        ],
-    },
-
-    'ODLOB': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('TREA', 171, 172, 173),
-            *_map('HDOF', 147),
-            *_map('CORP', _span(50, 65)),
-            *_map('RETL',
-                _span(126, 129), _span(144, 145), 113, _span(177, 178), _span(66, 69), _span(87, 91),
-                _span(93, 95), _span(100, 103), 106, _span(108, 112), _span(114, 125), 135, _span(137, 138),
-                148, _span(150, 167), _span(169, 170), _span(174, 176), _span(179, 182), 189,
-                _span(191, 198), _OTHER,
-            ),
-        ],
-    },
-
-    'HPCC': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('H024', 800),
-            *_map('H204', 801),
-            *_map('H053', 802),
-            *_map('H228', 803),
-            *_map('H007', 804),
-            *_map('H110', 805),
-            *_map('H238', 806),
-            *_map('H231', 807),
-            *_map('H266', 808),
-            *_map('H005', 809),
-            *_map('H168', 811),
-            *_map('H002', 812),
-            *_map('H185', 813),
-            *_map('H268', 814),
-            *_map('H125', 815),
-            *_map('H124', 816),
-            *_map('H006', 817),
-            *_map('H040', 818),
-            *_map('H264', 819),
-            *_map('H135', 820),
-            *_map('H094', 821),
-            *_map('H151', 822),
-            *_map('H123', 823),
-            *_map('H057', 824),
-            *_map('H270', 825),
-            *_map('H042', 826),
-            *_map('H277', 827),
-            *_map('H225', 828),
-            *_map('H034', 844),
-            *_map('H055', 845),
-            *_map('H044', 846),
-            *_map('H283', 847),
-            *_map('H090', 848),
-            *_map('H050', 849),
-            *_map('H273', 850),
-            *_map('H043', 851),
-            *_map('H091', 852),
-            *_map('H021', 853),
-            *_map('H224', 854),
-            *_map('H061', 855),
-            *_map('H202', 856),
-            *_map('H209', 857),
-            *_map('H113', 858),
-            *_map('H249', 859),
-            *_map('H095', 860),
-            *_map('H047', 861),
-            *_map('H030', 862),
-            *_map('H233', 863),
-        ],
-    },
-
-    '$STATEPOST': {
-        "kind": 'VALUE',
-        "rules": [
-            *_map('J',
-                '79000', '79050', '79100', '79150', '79200', '79250', '79502', '79503', '79504', '79505',
-                '79511', '79513', '79514', '79517', '79518', '79520', '79521', '79523', '79532', '79538',
-                '79540', '79546', '79548', '79550', '79552', '79555', '79570', '79575', '79576', '79592',
-                '79601', '79603', '79605', '79606', '79612', '79626', '79630', '79632', '79646', '79658',
-                '79660', '79680', '79681', '79683', '80000', '80050', '80100', '80150', '80200', '80250',
-                '80300', '80350', '80400', '80500', '80506', '80508', '80516', '80519', '80534', '80536',
-                '80542', '80546', '80558', '80560', '80564', '80568', '80578', '80584', '80586', '80590',
-                '80592', '80594', '80596', '80600', '80604', '80608', '80620', '80622', '80628', '80644',
-                '80648', '80662', '80664', '80668', '80670', '80672', '80673', '80676', '80700', '80710',
-                '80720', '80730', '80900', '80902', '80904', '80906', '80908', '80988', '80990', '81000',
-                '81100', '81200', '81300', '81310', '81400', '81440', '81450', '81500', '81550', '81600',
-                '81700', '81750', '81800', '81850', '81900', '81920', '81930', '82000', '82100', '82200',
-                '82300', '83000', '83100', '83200', '83300', '83400', '83500', '83600', '83700', '84000',
-                '84150', '84200', '84300', '84400', '84500', '84600', '84700', '84800', '84900', '85000',
-                '85100', '85200', '85300', '85400', '86000', '86100', '86200', '86300', '86400', '86500',
-                '86600', '86700', '86800', '86810', '86888', '86900',
-            ),
-            *_map('K',
-                '05000', '05050', '05100', '05150', '05200', '05250', '05300', '05350', '05400', '05460',
-                '05500', '05502', '05503', '05504', '05505', '05506', '05508', '05512', '05514', '05516',
-                '05517', '05518', '05520', '05532', '05534', '05536', '05538', '05550', '05551', '05552',
-                '05556', '05558', '05560', '05564', '05576', '05578', '05580', '05582', '05586', '05590',
-                '05592', '05594', '05600', '05604', '05610', '05612', '05614', '05620', '05621', '05622',
-                '05626', '05628', '05630', '05632', '05644', '05660', '05661', '05664', '05670', '05672',
-                '05673', '05674', '05675', '05676', '05680', '05690', '05696', '05700', '05710', '05720',
-                '05990', '06000', '06007', '06009', '06010', '06050', '06100', '06150', '06200', '06207',
-                '06209', '06250', '06300', '06350', '06400', '06500', '06507', '06509', '06550', '06570',
-                '06600', '06650', '06660', '06700', '06707', '06709', '06710', '06720', '06750', '06760',
-                '06800', '06900', '06910', '07000', '07007', '07009', '08000', '08007', '08009', '08010',
-                '08100', '08110', '08200', '08210', '08300', '08320', '08330', '08340', '08400', '08407',
-                '08409', '08500', '08507', '08509', '08600', '08700', '08800', '09000', '09007', '09009',
-                '09010', '09020', '09100', '09110', '09120', '09130', '09200', '09300', '09310', '09400',
-                '09410', '09600', '09700', '09800', '09810', '14290', '14390', '34950',
-            ),
-            *_map('D',
-                '15000', '15050', '15100', '15150', '15159', '15200', '15300', '15350', '15400', '15500',
-                '15502', '15503', '15504', '15505', '15506', '15508', '15512', '15514', '15516', '15517',
-                '15518', '15519', '15520', '15524', '15529', '15532', '15534', '15536', '15538', '15540',
-                '15546', '15548', '15550', '15551', '15556', '15558', '15560', '15564', '15570', '15572',
-                '15576', '15578', '15582', '15586', '15590', '15592', '15594', '15596', '15600', '15604',
-                '15608', '15609', '15612', '15614', '15616', '15622', '15623', '15626', '15628', '15630',
-                '15632', '15634', '15644', '15646', '15648', '15658', '15660', '15661', '15664', '15670',
-                '15672', '15673', '15674', '15676', '15680', '15690', '15710', '15720', '15730', '15740',
-                '15988', '15990', '16010', '16020', '16030', '16040', '16050', '16060', '16070', '16080',
-                '16090', '16100', '16109', '16150', '16200', '16210', '16250', '16300', '16310', '16320',
-                '16400', '16450', '16500', '16600', '16700', '16800', '16810', '17000', '17007', '17009',
-                '17010', '17020', '17030', '17040', '17050', '17060', '17070', '17200', '17500', '17507',
-                '17509', '17510', '17600', '17610', '17700', '18000', '18050', '18200', '18300', '18400',
-                '18500',
-            ),
-            *_map('M',
-                '75000', '75050', '75100', '75150', '75200', '75250', '75260', '75300', '75350', '75400',
-                '75450', '75460', '75500', '75502', '75503', '75504', '75505', '75506', '75508', '75510',
-                '75512', '75514', '75516', '75517', '75518', '75519', '75532', '75536', '75538', '75540',
-                '75542', '75546', '75550', '75551', '75552', '75560', '75564', '75566', '75570', '75572',
-                '75576', '75578', '75582', '75584', '75586', '75590', '75592', '75594', '75596', '75600',
-                '75604', '75606', '75608', '75609', '75610', '75612', '75618', '75620', '75622', '75626',
-                '75628', '75630', '75632', '75646', '75648', '75662', '75670', '75672', '75673', '75674',
-                '75676', '75690', '75700', '75710', '75720', '75730', '75740', '75750', '75760', '75900',
-                '75902', '75904', '75906', '75908', '75910', '75912', '75914', '75916', '75918', '75990',
-                '76100', '76109', '76200', '76300', '76400', '76409', '76450', '77000', '77007', '77008',
-                '77009', '77100', '77109', '77200', '77300', '77309', '77400', '77409', '77500', '78000',
-                '78009', '78100', '78200', '78300', '78307', '78309',
-            ),
-            *_map('N',
-                '70000', '70100', '70200', '70300', '70400', '70450', '70500', '70502', '70503', '70504',
-                '70505', '70506', '70508', '70512', '70516', '70517', '70518', '70532', '70534', '70536',
-                '70540', '70546', '70548', '70550', '70551', '70558', '70560', '70564', '70570', '70572',
-                '70576', '70578', '70582', '70586', '70590', '70592', '70594', '70596', '70600', '70604',
-                '70606', '70608', '70609', '70610', '70620', '70626', '70628', '70632', '70634', '70644',
-                '70646', '70648', '70658', '70664', '70670', '70672', '70673', '70674', '70676', '70690',
-                '70700', '70710', '70720', '70730', '70740', '70750', '70990', '71000', '71007', '71009',
-                '71010', '71050', '71059', '71100', '71109', '71150', '71159', '71200', '71209', '71250',
-                '71259', '71300', '71309', '71350', '71359', '71400', '71409', '71450', '71459', '71500',
-                '71509', '71550', '71559', '71600', '71609', '71650', '71659', '71700', '71707', '71709',
-                '71750', '71759', '71760', '71770', '71800', '71807', '71809', '71900', '71907', '71909',
-                '71950', '71960', '72000', '72007', '72009', '72100', '72107', '72109', '72120', '72127',
-                '72129', '72200', '72207', '72209', '72300', '72307', '72309', '72400', '72409', '72500',
-                '72507', '72509', '73000', '73007', '73009', '73100', '73109', '73200', '73207', '73209',
-                '73300', '73309', '73400', '73409', '73420', '73430', '73440', '73450', '73460', '73470',
-                '73480', '73500', '73507', '73509',
-            ),
-            *_map('C',
-                '25000', '25050', '25100', '25150', '25200', '25250', '25300', '25350', '25500', '25502',
-                '25503', '25504', '25505', '25506', '25508', '25509', '25512', '25514', '25516', '25517',
-                '25518', '25520', '25524', '25529', '25532', '25534', '25536', '25538', '25540', '25546',
-                '25548', '25550', '25551', '25552', '25556', '25558', '25560', '25564', '25570', '25576',
-                '25578', '25582', '25584', '25586', '25590', '25592', '25594', '25596', '25598', '25600',
-                '25604', '25606', '25608', '25609', '25610', '25612', '25614', '25620', '25622', '25626',
-                '25628', '25630', '25632', '25644', '25646', '25648', '25656', '25660', '25661', '25662',
-                '25670', '25672', '25673', '25674', '25676', '25690', '25700', '25710', '25720', '25730',
-                '25740', '25750', '25990', '26010', '26040', '26050', '26060', '26070', '26080', '26090',
-                '26100', '26140', '26150', '26180', '26190', '26200', '26250', '26300', '26310', '26320',
-                '26330', '26340', '26350', '26360', '26370', '26400', '26410', '26420', '26430', '26440',
-                '26450', '26460', '26485', '26490', '26500', '26600', '26607', '26609', '26610', '26620',
-                '26630', '26640', '26650', '26660', '26680', '26690', '26700', '26800', '26810', '26820',
-                '26900', '27000', '27010', '27020', '27030', '27040', '27050', '27060', '27070', '27090',
-                '27100', '27150', '27200', '27207', '27209', '27210', '27300', '27310', '27400', '27600',
-                '27607', '27609', '27610', '27620', '27630', '27650', '27660', '27670', '28000', '28007',
-                '28009', '28010', '28020', '28030', '28040', '28050', '28100', '28200', '28300', '28310',
-                '28320', '28330', '28340', '28380', '28400', '28407', '28409', '28500', '28600', '28610',
-                '28620', '28700', '28707', '28709', '28730', '28740', '28750', '28800', '39000', '39007',
-                '39009', '39010', '39100', '39200', '49000', '69000',
-            ),
-            *_map('A',
-                '30000', '30010', '30020', '30100', '30200', '30250', '30300', '30350', '30450', '30500',
-                '30502', '30503', '30504', '30505', '30506', '30508', '30510', '30512', '30516', '30517',
-                '30518', '30519', '30520', '30524', '30532', '30534', '30536', '30540', '30542', '30546',
-                '30548', '30550', '30551', '30552', '30554', '30556', '30560', '30564', '30570', '30576',
-                '30580', '30582', '30586', '30590', '30592', '30594', '30596', '30600', '30604', '30606',
-                '30609', '30610', '30612', '30614', '30620', '30621', '30622', '30626', '30628', '30630',
-                '30632', '30634', '30644', '30646', '30648', '30656', '30658', '30660', '30661', '30662',
-                '30664', '30668', '30670', '30673', '30674', '30676', '30682', '30690', '30700', '30710',
-                '30720', '30730', '30740', '30750', '30760', '30770', '30780', '30790', '30800', '30810',
-                '30820', '30830', '30840', '30900', '30902', '30904', '30906', '30908', '30910', '30912',
-                '30988', '30990', '31000', '31007', '31009', '31050', '31100', '31150', '31200', '31250',
-                '31300', '31350', '31400', '31407', '31409', '31450', '31500', '31550', '31560', '31600',
-                '31610', '31650', '31700', '31750', '31800', '31850', '31900', '31907', '31909', '31910',
-                '31920', '31950', '32000', '32040', '32100', '32200', '32300', '32400', '32500', '32600',
-                '32610', '32700', '32800', '32900', '33000', '33007', '33009', '33010', '33020', '33030',
-                '33040', '33100', '33200', '33300', '33310', '33320', '33400', '33410', '33420', '33500',
-                '33600', '33700', '33800', '34000', '34007', '34008', '34009', '34010', '34020', '34030',
-                '34100', '34120', '34130', '34140', '34200', '34250', '34300', '34310', '34350', '34400',
-                '34500', '34510', '34520', '34600', '34650', '34700', '34750', '34800', '34850', '34900',
-                '35000', '35007', '35009', '35300', '35350', '35400', '35500', '35600', '35700', '35800',
-                '35820', '35900', '35907', '35909', '35910', '35950', '36000', '36007', '36008', '36009',
-                '36010', '36020', '36030', '36100', '36110', '36200', '36207', '36209', '36300', '36307',
-                '36309', '36400', '36500', '36600', '36700', '36750', '36800', '36810',
-            ),
-            *_map('R',
-                '01000', '01007', '01009', '01500', '01502', '01503', '01504', '01505', '01506', '01508',
-                '01512', '01514', '01516', '01517', '01518', '01524', '01529', '01532', '01538', '01540',
-                '01546', '01550', '01551', '01556', '01560', '01564', '01570', '01572', '01576', '01578',
-                '01582', '01586', '01590', '01592', '01594', '01596', '01598', '01600', '01604', '01606',
-                '01608', '01609', '01610', '01612', '01614', '01620', '01622', '01626', '01628', '01630',
-                '01632', '01634', '01644', '01646', '01648', '01660', '01664', '01670', '01672', '01673',
-                '01674', '01676', '01680', '01694', '02000', '02100', '02200', '02400', '02450', '02500',
-                '02600', '02607', '02609', '02700', '02707', '02709', '02800',
-            ),
-            *_map('P',
-                '10000', '10050', '10100', '10150', '10200', '10250', '10300', '10350', '10400', '10450',
-                '10460', '10470', '10500', '10502', '10503', '10504', '10505', '10506', '10508', '10512',
-                '10514', '10516', '10518', '10524', '10534', '10538', '10540', '10542', '10546', '10550',
-                '10551', '10552', '10558', '10560', '10564', '10566', '10570', '10576', '10578', '10582',
-                '10590', '10592', '10593', '10594', '10596', '10600', '10604', '10609', '10610', '10612',
-                '10620', '10622', '10626', '10628', '10634', '10646', '10648', '10660', '10661', '10662',
-                '10670', '10672', '10673', '10674', '10676', '10690', '10710', '10720', '10730', '10740',
-                '10750', '10760', '10770', '10780', '10790', '10800', '10810', '10820', '10830', '10840',
-                '10850', '10910', '10920', '10990', '11000', '11010', '11020', '11050', '11060', '11100',
-                '11200', '11300', '11400', '11409', '11500', '11600', '11609', '11700', '11800', '11900',
-                '11910', '11920', '11950', '11960', '12000', '12100', '12200', '12300', '12700', '12710',
-                '12720', '12990', '13000', '13009', '13020', '13050', '13100', '13110', '13200', '13210',
-                '13220', '13300', '13310', '13400', '13409', '13500', '13600', '13700', '13800', '14000',
-                '14007', '14009', '14020', '14100', '14101', '14110', '14120', '14200', '14300', '14310',
-                '14320', '14400',
-            ),
-            *_map('S',
-                '88000', '88100', '88200', '88300', '88400', '88450', '88460', '88500', '88502', '88504',
-                '88505', '88506', '88508', '88510', '88512', '88514', '88516', '88518', '88520', '88526',
-                '88527', '88532', '88534', '88538', '88540', '88546', '88550', '88551', '88552', '88554',
-                '88556', '88558', '88560', '88562', '88564', '88566', '88568', '88570', '88572', '88576',
-                '88580', '88582', '88586', '88590', '88592', '88594', '88596', '88598', '88600', '88602',
-                '88604', '88606', '88608', '88609', '88610', '88612', '88614', '88617', '88618', '88620',
-                '88621', '88622', '88624', '88626', '88628', '88630', '88632', '88634', '88644', '88646',
-                '88648', '88656', '88658', '88660', '88661', '88662', '88670', '88672', '88673', '88675',
-                '88676', '88680', '88690', '88700', '88721', '88722', '88723', '88724', '88725', '88757',
-                '88758', '88759', '88760', '88761', '88762', '88763', '88764', '88765', '88766', '88767',
-                '88768', '88769', '88770', '88771', '88772', '88773', '88774', '88775', '88776', '88777',
-                '88778', '88779', '88780', '88781', '88782', '88783', '88784', '88785', '88786', '88787',
-                '88788', '88789', '88790', '88800', '88801', '88802', '88803', '88804', '88805', '88806',
-                '88807', '88808', '88809', '88810', '88811', '88812', '88813', '88814', '88815', '88816',
-                '88817', '88818', '88819', '88820', '88821', '88822', '88823', '88824', '88825', '88826',
-                '88827', '88828', '88829', '88830', '88831', '88832', '88833', '88834', '88835', '88836',
-                '88837', '88838', '88839', '88840', '88841', '88842', '88843', '88844', '88845', '88846',
-                '88847', '88848', '88849', '88850', '88851', '88852', '88853', '88854', '88855', '88856',
-                '88857', '88858', '88860', '88861', '88862', '88863', '88865', '88866', '88867', '88868',
-                '88869', '88870', '88871', '88872', '88873', '88874', '88875', '88900', '88901', '88902',
-                '88903', '88904', '88905', '88906', '88988', '88990', '88991', '88992', '88993', '88994',
-                '88995', '88996', '88997', '88998', '88999', '89000', '89007', '89008', '89009', '89050',
-                '89057', '89058', '89059', '89100', '89107', '89108', '89109', '89130', '89137', '89138',
-                '89139', '89150', '89157', '89158', '89159', '89200', '89207', '89208', '89209', '89250',
-                '89257', '89258', '89259', '89260', '89300', '89307', '89308', '89309', '89320', '89327',
-                '89328', '89329', '89330', '89337', '89338', '89339', '89500', '89507', '89508', '89509',
-                '89600', '89607', '89608', '89609', '89650', '89657', '89658', '89659', '89700', '89707',
-                '89708', '89709', '89720', '89727', '89728', '89729', '89740', '89747', '89748', '89749',
-                '89760', '89767', '89768', '89769', '89800', '89807', '89808', '89809', '89850', '89857',
-                '89858', '89859', '89900', '89907', '89908', '89909', '89950', '89957', '89958', '89959',
-                '90000', '90009', '90100', '90107', '90109', '90200', '90300', '90307', '90400', '90700',
-                '90701', '90702', '90703', '90704', '90705', '90706', '90707', '90708', '90709', '90711',
-                '90712', '90713', '90714', '90715', '90716', '90717', '90718', '90719', '90720', '90721',
-                '90722', '90723', '90724', '90725', '90726', '90727', '90728', '90729', '90730', '90731',
-                '90732', '90733', '90734', '90735', '90736', '90737', '90738', '90739', '90740', '90741',
-                '91000', '91007', '91008', '91009', '91010', '91011', '91012', '91013', '91014', '91015',
-                '91016', '91017', '91018', '91019', '91020', '91021', '91022', '91023', '91024', '91025',
-                '91026', '91027', '91028', '91029', '91030', '91031', '91032', '91033', '91034', '91035',
-                '91100', '91109', '91110', '91111', '91112', '91113', '91114', '91115', '91116', '91117',
-                '91118', '91119', '91120', '91121', '91122', '91123', '91124', '91125', '91126', '91127',
-                '91128', '91150', '91200', '91207', '91209', '91300', '91307', '91308', '91309',
-            ),
-            *_map('Q',
-                '93000', '93010', '93050', '93100', '93150', '93200', '93250', '93300', '93350', '93400',
-                '93450', '93500', '93502', '93503', '93504', '93505', '93506', '93507', '93508', '93514',
-                '93516', '93517', '93518', '93519', '93520', '93527', '93529', '93532', '93540', '93550',
-                '93551', '93552', '93554', '93556', '93558', '93560', '93564', '93566', '93570', '93572',
-                '93576', '93578', '93582', '93586', '93590', '93592', '93594', '93596', '93600', '93604',
-                '93606', '93608', '93609', '93610', '93612', '93614', '93618', '93619', '93620', '93626',
-                '93628', '93632', '93634', '93648', '93658', '93660', '93661', '93662', '93670', '93672',
-                '93677', '93690', '93694', '93700', '93702', '93704', '93706', '93708', '93710', '93712',
-                '93714', '93716', '93718', '93720', '93722', '93724', '93726', '93728', '93730', '93732',
-                '93734', '93736', '93738', '93740', '93742', '93744', '93746', '93748', '93750', '93752',
-                '93754', '93756', '93758', '93760', '93762', '93764', '93900', '93902', '93904', '93906',
-                '93908', '93910', '93912', '93914', '93916', '93990', '94000', '94007', '94009', '94200',
-                '94300', '94500', '94507', '94509', '94600', '94650', '94700', '94707', '94709', '94750',
-                '94760', '94800', '94807', '94809', '94850', '94900', '94950', '95000', '95007', '95008',
-                '95009', '95300', '95400', '95407', '95409', '95500', '95600', '95700', '95707', '95709',
-                '95800', '95900', '96000', '96007', '96008', '96009', '96100', '96107', '96108', '96109',
-                '96150', '96200', '96250', '96300', '96307', '96309', '96350', '96400', '96410', '96500',
-                '96507', '96508', '96509', '96600', '96700', '96707', '96709', '96800', '96807', '96809',
-                '96850', '96900', '96950', '97000', '97007', '97008', '97009', '97010', '97011', '97012',
-                '97013', '97014', '97015', '97100', '97200', '97300', '98000', '98007', '98008', '98009',
-                '98050', '98057', '98058', '98059', '98100', '98107', '98109', '98150', '98157', '98159',
-                '98200', '98300', '98700', '98707', '98708', '98709', '98750', '98800', '98850', '98857',
-                '98859',
-            ),
-            *_map('B',
-                '40000', '40100', '40150', '40160', '40170', '40200', '40300', '40400', '40450', '40460',
-                '40470', '40500', '40502', '40503', '40505', '40512', '40517', '40520', '40529', '40542',
-                '40548', '40550', '40551', '40560', '40564', '40570', '40572', '40576', '40578', '40582',
-                '40590', '40592', '40594', '40596', '40598', '40604', '40607', '40608', '40610', '40612',
-                '40620', '40622', '40626', '40632', '40646', '40648', '40660', '40664', '40670', '40672',
-                '40673', '40674', '40675', '40676', '40680', '40690', '40700', '40702', '40704', '40706',
-                '40708', '40710', '40712', '40714', '40716', '40718', '40720', '40722', '40724', '40726',
-                '40728', '40730', '40732', '40800', '40802', '40804', '40806', '40808', '40810', '40990',
-                '41000', '41050', '41100', '41150', '41200', '41250', '41300', '41400', '41506', '41560',
-                '41586', '41672', '41700', '41710', '41720', '41900', '41902', '41904', '41906', '41908',
-                '41910', '41912', '41914', '41916', '41918', '41990', '42000', '42009', '42100', '42200',
-                '42300', '42425', '42500', '42507', '42509', '42600', '42610', '42700', '42800', '42920',
-                '42940', '42960', '43000', '43007', '43009', '43100', '43200', '43207', '43300', '43400',
-                '43500', '43558', '43600', '43650', '43700', '43800', '43807', '43900', '43950', '44000',
-                '44010', '44020', '44100', '44110', '44200', '44300', '45000', '45100', '45200', '45207',
-                '45209', '45300', '45400', '45500', '45600', '45607', '45609', '45620', '45700', '45800',
-                '46000', '46050', '46100', '46150', '46200', '46300', '46350', '46400', '46506', '46547',
-                '46549', '46551', '46564', '46582', '46598', '46662', '46667', '46668', '46672', '46675',
-                '46700', '46710', '46720', '46730', '46740', '46750', '46760', '46770', '46780', '46781',
-                '46782', '46783', '46784', '46785', '46786', '46787', '46788', '46789', '46790', '46791',
-                '46792', '46793', '46794', '46795', '46796', '46797', '46798', '46799', '46800', '46801',
-                '46802', '46803', '46804', '46805', '46806', '46860', '46870', '46960', '46962', '46964',
-                '46966', '46968', '46970', '46972', '46974', '46976', '46978', '47000', '47100', '47110',
-                '47120', '47130', '47140', '47150', '47160', '47170', '47180', '47190', '47200', '47300',
-                '47301', '47307', '47308', '47400', '47410', '47500', '47507', '47600', '47610', '47620',
-                '47630', '47640', '47650', '47800', '47810', '47820', '47830', '48000', '48010', '48020',
-                '48050', '48100', '48200', '48300', '63000', '63100', '63200', '63300', '64000', '68000',
-                '68100',
-            ),
-            *_map('T',
-                '20000', '20050', '20100', '20200', '20300', '20400', '20500', '20502', '20503', '20504',
-                '20505', '20506', '20508', '20512', '20514', '20516', '20517', '20518', '20519', '20520',
-                '20532', '20534', '20536', '20538', '20540', '20542', '20546', '20548', '20550', '20551',
-                '20552', '20554', '20556', '20560', '20564', '20566', '20568', '20570', '20572', '20576',
-                '20578', '20582', '20586', '20590', '20592', '20596', '20600', '20604', '20606', '20608',
-                '20609', '20610', '20612', '20614', '20618', '20620', '20622', '20626', '20628', '20630',
-                '20632', '20646', '20648', '20656', '20658', '20660', '20661', '20662', '20664', '20668',
-                '20670', '20672', '20673', '20674', '20676', '20680', '20690', '20698', '20700', '20710',
-                '20720', '20900', '20902', '20904', '20906', '20908', '20910', '20912', '20914', '20916',
-                '20918', '20920', '20922', '20924', '20926', '20928', '20930', '20990', '21000', '21009',
-                '21010', '21020', '21030', '21040', '21060', '21070', '21080', '21090', '21100', '21109',
-                '21200', '21209', '21210', '21220', '21300', '21309', '21400', '21450', '21500', '21600',
-                '21610', '21700', '21800', '21810', '21820', '22000', '22010', '22020', '22100', '22107',
-                '22109', '22110', '22120', '22200', '22300', '22307', '22309', '23000', '23007', '23009',
-                '23050', '23100', '23200', '23300', '23400', '24000', '24007', '24009', '24050', '24060',
-                '24100', '24107', '24109', '24200', '24207', '24209', '24300',
-            ),
-            *_map('W',
-                '50000', '50050', '50088', '50100', '50150', '50200', '50250', '50300', '50350', '50400',
-                '50450', '50460', '50470', '50480', '50490', '50500', '50502', '50504', '50505', '50506',
-                '50507', '50508', '50512', '50514', '50515', '50519', '50528', '50529', '50530', '50532',
-                '50534', '50536', '50540', '50544', '50546', '50548', '50550', '50551', '50552', '50554',
-                '50556', '50560', '50562', '50564', '50566', '50568', '50572', '50576', '50578', '50580',
-                '50582', '50586', '50588', '50590', '50592', '50594', '50596', '50598', '50599', '50600',
-                '50603', '50604', '50605', '50608', '50609', '50610', '50612', '50614', '50620', '50621',
-                '50622', '50623', '50626', '50632', '50634', '50636', '50638', '50640', '50642', '50644',
-                '50646', '50648', '50650', '50652', '50653', '50656', '50658', '50660', '50661', '50662',
-                '50664', '50666', '50668', '50670', '50672', '50673', '50676', '50677', '50678', '50680',
-                '50682', '50684', '50688', '50694', '50700', '50702', '50704', '50706', '50708', '50710',
-                '50712', '50714', '50716', '50718', '50720', '50722', '50724', '50726', '50728', '50730',
-                '50732', '50734', '50736', '50738', '50740', '50742', '50744', '50746', '50748', '50750',
-                '50752', '50754', '50758', '50760', '50762', '50764', '50766', '50768', '50770', '50772',
-                '50774', '50776', '50778', '50780', '50782', '50784', '50786', '50788', '50790', '50792',
-                '50794', '50796', '50798', '50800', '50802', '50804', '50806', '50808', '50810', '50812',
-                '50814', '50816', '50818', '50901', '50902', '50903', '50904', '50906', '50907', '50908',
-                '50909', '50910', '50911', '50912', '50913', '50914', '50915', '50916', '50917', '50918',
-                '50919', '50920', '50921', '50922', '50923', '50924', '50925', '50926', '50927', '50928',
-                '50929', '50930', '50931', '50932', '50933', '50934', '50935', '50936', '50937', '50938',
-                '50939', '50940', '50941', '50942', '50943', '50944', '50945', '50946', '50947', '50948',
-                '50949', '50950', '50988', '50989', '50990', '51000', '51100', '51200', '51700', '51990',
-                '52000', '52100', '52200', '53000', '53100', '53200', '53300', '53700', '53800', '53990',
-                '54000', '54100', '54200', '55000', '55100', '55200', '55300', '55700', '55710', '55720',
-                '55900', '55902', '55904', '55906', '55908', '55910', '55912', '55914', '55916', '55918',
-                '55920', '55922', '55924', '55926', '55928', '55930', '55932', '55934', '55990', '56000',
-                '56100', '57000', '57100', '57700', '57990', '58000', '58100', '58200', '58700', '58990',
-                '59000', '59100', '59200', '59700', '59800', '59990', '60000', '62000', '62007', '62050',
-                '62100', '62150', '62200', '62250', '62300', '62502', '62504', '62505', '62506', '62510',
-                '62512', '62514', '62516', '62517', '62518', '62519', '62520', '62522', '62524', '62526',
-                '62527', '62530', '62532', '62536', '62540', '62542', '62546', '62550', '62551', '62570',
-                '62574', '62576', '62582', '62584', '62590', '62592', '62596', '62602', '62604', '62605',
-                '62606', '62616', '62618', '62620', '62623', '62624', '62628', '62630', '62632', '62648',
-                '62652', '62654', '62662', '62668', '62670', '62674', '62675', '62676', '62677', '62686',
-                '62692', '62988',
-            ),
-            *_map('L',
-                '87000', '87010', '87011', '87012', '87013', '87014', '87015', '87016', '87017', '87018',
-                '87019', '87020', '87021', '87022', '87023', '87024', '87025', '87026', '87027', '87028',
-                '87029', '87030', '87031', '87032', '87033',
-            ),
-        ],
-    },
-
+    'CURX': CURX,
 }
 
 
-# def format_value(name, value):
-#     """Apply an original SAS format name; accepts trailing dots and $ names."""
-#     return lookup(FORMATS, name.strip(), value, MACROS)
+# ============================================================================
+# FORMAT REGISTRY (name -> fast function)
+# ============================================================================
+
+_FORMAT_FUNCS = {
+    'SADENOM': sadenom_format,
+    'SAPROD': saprod_format,
+    'FDDENOM': fddenom_format,
+    'FDPROD': fdprod_format,
+    'FDPRODD': fdprodd_format,
+    'FDPRD': fdprd_format,
+    'FCYTERM': fcyterm_format,
+    'CADENOM': cadenom_format,
+    'CAPROD': caprod_format,
+    'DPCUSTCD': dpcustcd_format,
+    'SACUSTCD': sacustcd_format,
+    'FDCUSTCD': fdcustcd_format,
+    'IFDCUSCD': ifdcuscd_format,
+    'DDCUSTCD': ddcustcd_format,
+    'STATECD': statecd_format,
+    'FDORGMT': fdorgmt_format,
+    'FDRMMT': fdrmmt_format,
+    'RMFDORGMT': rmfdorgmt_format,
+    'SDRANGE': sdrange_format,
+    'S1RANGE': s1range_format,
+    'S2RANGE': s2range_format,
+    'DDRANGE': ddrange_format,
+    '$RACE': race_format,
+    'BRANCHCD': branchcd_format,
+}
 
 
-@lru_cache(maxsize=None)
-def _cached_lookup(name, value):
-    return lookup(FORMATS, name, value, MACROS)
+def _resolve_format_func(format_name):
+    """Return the function for a format name; raise KeyError if unknown."""
+    key = format_name.strip().upper().rstrip('.')
+    func = _FORMAT_FUNCS.get(key) or _FORMAT_FUNCS.get('$' + key)
+    if func is None:
+        raise KeyError(f'Unknown format: {format_name!r}')
+    return func
 
+
+def _is_format_name(candidate) -> bool:
+    if not isinstance(candidate, str):
+        return False
+    try:
+        _resolve_format_func(candidate)
+    except KeyError:
+        return False
+    return True
+
+
+# ============================================================================
+# PUBLIC API
+# ============================================================================
 
 def format_value(name, value):
     """Apply an original SAS format name; accepts trailing dots and $ names."""
-    return _cached_lookup(name.strip(), value)
+    return _resolve_format_func(name)(value)
 
 
 def put(value, format_name):
-    """SAS-style argument order: put(value, 'BRCHCD.')."""
+    """SAS-style argument order: put(value, 'SAPROD.')."""
     return format_value(format_name, value)
 
 
 def informat(value, informat_name):
-    """Apply an INVALUE definition; reject VALUE/PICTURE names."""
-    name = informat_name.strip().upper().rstrip('.')
-    if FORMATS[name]['kind'] != 'INVALUE':
-        raise ValueError(f'{name} is not an INVALUE definition')
-    return format_value(name, value)
+    """Apply an INVALUE definition; reject VALUE definitions."""
+    key = _format_key(FORMATS, informat_name)
+    if FORMATS[key]['kind'] != 'INVALUE':
+        raise ValueError(f'{key} is not an INVALUE definition')
+    return format_value(key, value)
 
 
-def apply_format(values, format_name):
-    """Map an iterable to a list, or a pandas Series to a Series retaining its index.
-
-    A Series uses its native map method; scalar lookups need no pandas import.
+def apply_format(first, second):
     """
-    if isinstance(values, (str, bytes)):
-        raise TypeError('Pass a list or Series; use put() for a scalar value')
-    if hasattr(values, 'map') and hasattr(values, 'index'):
-        return values.map(lambda value: format_value(format_name, value))
-    return [format_value(format_name, value) for value in values]
+    Apply a named format to a scalar or to a collection. Both argument orders
+    are accepted so that earlier programs keep working:
+
+        apply_format('SAPROD', 200)          # name first  -> '42120'
+        apply_format(200, 'SAPROD')          # value first -> '42120'
+        apply_format(values, 'SAPROD')       # list / numpy -> list
+                                             # pandas Series -> Series (index kept)
+                                             # polars Series -> Series
+
+    Raises KeyError when neither argument is a known format name.
+    """
+    if _is_format_name(first):
+        name, data = first, second
+    elif _is_format_name(second):
+        name, data = second, first
+    else:
+        raise KeyError(f'Unknown format: {first!r} / {second!r}')
+    func = _resolve_format_func(name)
+    if isinstance(data, (str, bytes)) or not hasattr(data, '__iter__'):
+        return func(data)
+    if type(data).__module__.startswith('polars'):
+        return type(data)(data.name, [func(v) for v in data.to_list()])
+    if hasattr(data, 'map') and hasattr(data, 'index'):
+        return data.map(func)
+    return [func(v) for v in data]
 
 
 def available_formats():
@@ -3163,340 +2857,164 @@ def available_formats():
 
 def get_rules(format_name):
     """Return an independent copy of a format's kind and ordered mapping rules."""
-    from copy import deepcopy
-    return deepcopy(FORMATS[format_name.strip().upper().rstrip('.')])
-
-
-def ODDENOM(value):
-    """Apply the original SAS ODDENOM format."""
-    return format_value('ODDENOM', value)
-
-
-def ODPROD(value):
-    """Apply the original SAS ODPROD format."""
-    return format_value('ODPROD', value)
-
-
-def LNDENOM(value):
-    """Apply the original SAS LNDENOM format."""
-    return format_value('LNDENOM', value)
-
-
-def LNPROD(value):
-    """Apply the original SAS LNPROD format."""
-    return format_value('LNPROD', value)
-
-
-def LIQPFMT(value):
-    """Apply the original SAS LIQPFMT format."""
-    return format_value('LIQPFMT', value)
-
-
-def SLTYPE(value):
-    """Apply the original SAS SLTYPE format."""
-    return format_value('SLTYPE', value)
-
-
-def LN03FMT(value):
-    """Apply the original SAS LN03FMT format."""
-    return format_value('LN03FMT', value)
-
-
-def ODRATE(value):
-    """Apply the original SAS ODRATE format."""
-    return format_value('ODRATE', value)
-
-
-def LNRATE(value):
-    """Apply the original SAS LNRATE format."""
-    return format_value('LNRATE', value)
-
-
-def ODCUSTCD(value):
-    """Apply the original SAS ODCUSTCD format."""
-    return format_value('ODCUSTCD', value)
-
-
-def LOCUSTCD(value):
-    """Apply the original SAS LOCUSTCD format."""
-    return format_value('LOCUSTCD', value)
-
-
-def LNCUSTCD(value):
-    """Apply the original SAS LNCUSTCD format."""
-    return format_value('LNCUSTCD', value)
-
-
-def BUSIND(value):
-    """Apply the original SAS $BUSIND format."""
-    return format_value('$BUSIND', value)
-
-
-def RISKCD(value):
-    """Apply the original SAS $RISKCD format."""
-    return format_value('$RISKCD', value)
-
-
-def MTHPASS(value):
-    """Apply the original SAS MTHPASS format."""
-    return format_value('MTHPASS', value)
-
-
-def NDAYS(value):
-    """Apply the original SAS NDAYS format."""
-    return format_value('NDAYS', value)
-
-
-def LNORMT(value):
-    """Apply the original SAS LNORMT format."""
-    return format_value('LNORMT', value)
-
-
-def LNRMMT(value):
-    """Apply the original SAS LNRMMT format."""
-    return format_value('LNRMMT', value)
-
-
-def STATECD(value):
-    """Apply the original SAS $STATECD format."""
-    return format_value('$STATECD', value)
-
-
-def APPRLIMT(value):
-    """Apply the original SAS APPRLIMT format."""
-    return format_value('APPRLIMT', value)
-
-
-def LOANSIZE(value):
-    """Apply the original SAS LOANSIZE format."""
-    return format_value('LOANSIZE', value)
-
-
-def FISSTYPE(value):
-    """Apply the original SAS $FISSTYPE format."""
-    return format_value('$FISSTYPE', value)
-
-
-def FISSGROUP(value):
-    """Apply the original SAS $FISSGROUP format."""
-    return format_value('$FISSGROUP', value)
-
-
-def SECTCD(value):
-    """Apply the original SAS $SECTCD format."""
-    return format_value('$SECTCD', value)
-
-
-def INDSECT(value):
-    """Apply the original SAS $INDSECT format."""
-    return format_value('$INDSECT', value)
-
-
-def COLLCD(value):
-    """Apply the original SAS $COLLCD format."""
-    return format_value('$COLLCD', value)
-
-
-def SECTA(value):
-    """Apply the original SAS $SECTA format."""
-    return format_value('$SECTA', value)
-
-
-def SECTB(value):
-    """Apply the original SAS $SECTB format."""
-    return format_value('$SECTB', value)
-
-
-def DELQDES(value):
-    """Apply the original SAS $DELQDES format."""
-    return format_value('$DELQDES', value)
-
-
-def SECDES(value):
-    """Apply the original SAS $SECDES format."""
-    return format_value('$SECDES', value)
-
-
-def ARRCLASS(value):
-    """Apply the original SAS ARRCLASS format."""
-    return format_value('ARRCLASS', value)
-
-
-def BTPROD(value):
-    """Apply the original SAS $BTPROD format."""
-    return format_value('$BTPROD', value)
-
-
-def BTPRODI(value):
-    """Apply the original SAS $BTPRODI format."""
-    return format_value('$BTPRODI', value)
-
-
-def BTPRODA(value):
-    """Apply the original SAS $BTPRODA format."""
-    return format_value('$BTPRODA', value)
-
-
-def BTRATE(value):
-    """Apply the original SAS $BTRATE format."""
-    return format_value('$BTRATE', value)
-
-
-def CRISCD(value):
-    """Apply the original SAS $CRISCD format."""
-    return format_value('$CRISCD', value)
-
-
-def RVRSECT(value):
-    """Apply the original SAS $RVRSECT format."""
-    return format_value('$RVRSECT', value)
-
-
-def RVRCRIS(value):
-    """Apply the original SAS $RVRCRIS format."""
-    return format_value('$RVRCRIS', value)
-
-
-def BTCUSTCD(value):
-    """Apply the original SAS BTCUSTCD format."""
-    return format_value('BTCUSTCD', value)
-
-
-def RVRSE(value):
-    """Apply the original SAS $RVRSE format."""
-    return format_value('$RVRSE', value)
-
-
-def FISSPUR(value):
-    """Apply the original SAS $FISSPUR format."""
-    return format_value('$FISSPUR', value)
-
-
-def NEWSECT(value):
-    """Apply the original SAS $NEWSECT format."""
-    return format_value('$NEWSECT', value)
-
-
-def VALIDSE(value):
-    """Apply the original SAS $VALIDSE format."""
-    return format_value('$VALIDSE', value)
-
-
-def LNFMT(value):
-    """Apply the original SAS LNFMT format."""
-    return format_value('LNFMT', value)
-
-
-def LNLOB(value):
-    """Apply the original SAS LNLOB format."""
-    return format_value('LNLOB', value)
-
-
-def ODFMT(value):
-    """Apply the original SAS ODFMT format."""
-    return format_value('ODFMT', value)
-
-
-def ODLOB(value):
-    """Apply the original SAS ODLOB format."""
-    return format_value('ODLOB', value)
-
-
-def HPCC(value):
-    """Apply the original SAS HPCC format."""
-    return format_value('HPCC', value)
-
-
-def STATEPOST(value):
-    """Apply the original SAS $STATEPOST format."""
-    return format_value('$STATEPOST', value)
-
-
-# Aliases matching the naming used by the other PBBLNFMT conversion
-format_oddenom = ODDENOM
-format_odprod = ODPROD
-format_odrate = ODRATE
-format_odcustcd = ODCUSTCD
-format_locustcd = LOCUSTCD
-format_odfmt = ODFMT
-format_odlob = ODLOB
-format_lndenom = LNDENOM
-format_lnprod = LNPROD
-format_lnrate = LNRATE
-format_lncustcd = LNCUSTCD
-format_liqpfmt = LIQPFMT
-format_sltype = SLTYPE
-format_ln03fmt = LN03FMT
-format_lnfmt = LNFMT
-format_lnlob = LNLOB
-format_lnormt = LNORMT
-format_lnrmmt = LNRMMT
-format_btcustcd = BTCUSTCD
-format_statecd = STATECD
-format_statepost = STATEPOST
-format_apprlimt = APPRLIMT
-format_loansize = LOANSIZE
-format_mthpass = MTHPASS
-format_ndays = NDAYS
-format_collcd = COLLCD
-format_riskcd = RISKCD
-format_busind = BUSIND
-format_arrclass = ARRCLASS
-format_delqdes = DELQDES
-format_hpcc = HPCC
-format_btprod = BTPROD
-format_btprodi = BTPRODI
-format_btproda = BTPRODA
-format_btrate = BTRATE
-format_fisstype = FISSTYPE
-format_fissgroup = FISSGROUP
-format_sectcd = SECTCD
-format_secdes = SECDES
-format_secta = SECTA
-format_sectb = SECTB
-format_indsect = INDSECT
-format_criscd = CRISCD
-format_rvrsect = RVRSECT
-format_rvrcris = RVRCRIS
-format_rvrse = RVRSE
-format_fisspur = FISSPUR
-format_newsect = NEWSECT
-format_validse = VALIDSE
-
-# Macro-variable aliases matching the other conversion
-MOREPLAN_PRODUCTS = MOREPLAN
-MOREISLM_PRODUCTS = MOREISLM
-MORE_PLAN = MOREPLAN
-MORE_ISLAM = MOREISLM
-HP_ALL = HP
-HP_ACTIVE = HPD
-HOME_ISLAMIC = HOMEIS
-HOME_CONVENTIONAL = HOMECV
-SWIFT_ISLAMIC = SWIFTIS
-SWIFT_CONVENTIONAL = SWIFTCV
-FCY_PRODUCTS = FCY
-COUNTRY_CODES = COUNTRYCD
-
-
-def is_more_plan(product):
-    """Check if product is MORE PLAN"""
-    return product in MOREPLAN
-
-
-def is_hire_purchase(product):
-    """Check if product is Hire Purchase"""
-    return product in HP
-
-
-def is_islamic_product(product):
-    """Check if product is Islamic"""
-    return LNDENOM(product) == 'I'
-
-
-def is_fcy_product(product):
-    """Check if product is Foreign Currency"""
-    return product in FCY
-
-
-if __name__ == "__main__":
-    library_cli(FORMATS, MACROS)
+    return deepcopy(FORMATS[_format_key(FORMATS, format_name)])
+
+
+_LEGACY_FORMAT_CLASSES = {
+    'SADENOM': SADenomFormat,
+    'SAPROD': SAProductFormat,
+    'FDDENOM': FDDenomFormat,
+    'FDPROD': FDProductFormat,
+    'CADENOM': CADenomFormat,
+    'CAPROD': CAProductFormat,
+    'FCYTERM': FCYTermFormat,
+    'PRODUCTS': ProductLists,
+}
+
+
+def get_format(format_name: str):
+    """
+    Get a format class (legacy 8 names) or format function by name.
+    Returns None when the name is unknown.
+    """
+    legacy = _LEGACY_FORMAT_CLASSES.get(format_name.upper())
+    if legacy is not None:
+        return legacy
+    try:
+        return _resolve_format_func(format_name)
+    except KeyError:
+        return None
+
+
+# SAS-name aliases (upper-case names used by programs that call the format by
+# its SAS name; every one is the same function as its *_format counterpart).
+SADENOM = sadenom_format
+SAPROD = saprod_format
+FDDENOM = fddenom_format
+FDPROD = fdprod_format
+FDPRODD = fdprodd_format
+FDPRD = fdprd_format
+FCYTERM = fcyterm_format
+CADENOM = cadenom_format
+CAPROD = caprod_format
+DPCUSTCD = dpcustcd_format
+SACUSTCD = sacustcd_format
+FDCUSTCD = fdcustcd_format
+IFDCUSCD = ifdcuscd_format
+DDCUSTCD = ddcustcd_format
+STATECD = statecd_format
+FDORGMT = fdorgmt_format
+FDRMMT = fdrmmt_format
+RMFDORGMT = rmfdorgmt_format
+SDRANGE = sdrange_format
+S1RANGE = s1range_format
+S2RANGE = s2range_format
+DDRANGE = ddrange_format
+RACE = race_format
+BRANCHCD = branchcd_format
+
+
+# ============================================================================
+# SELF-CHECK AND COMMAND LINE
+# ============================================================================
+
+def selfcheck():
+    """
+    Compare every fast format function with the literal SAS-rule interpreter
+    (lookup) on every rule boundary, values just around it, missing values and
+    unmatched values. Returns a list of mismatches (empty when all agree).
+    """
+    problems = []
+    for key, spec in FORMATS.items():
+        func = _FORMAT_FUNCS[key]
+        if key.startswith('$'):
+            probes = {'', 'ZZ', '9', '1', '2', '3', '0', None}
+        else:
+            probes = {None, float('nan'), -1, 0, 99999999, 0.5}
+            for lo, hi, *_ in spec['rules']:
+                for bound in (lo, hi):
+                    if isinstance(bound, (int, float)):
+                        probes.update({bound, bound - 1, bound + 1, bound + 0.5})
+        for probe in probes:
+            expected = lookup(FORMATS, key, probe, MACROS)
+            actual = func(probe)
+            if expected != actual:
+                problems.append((key, probe, expected, actual))
+    return problems
+
+
+def _cli_value(format_name, text):
+    key = _format_key(FORMATS, format_name)
+    if key.startswith('$'):
+        return text
+    try:
+        number = float(text)
+    except ValueError:
+        return text
+    return int(number) if number.is_integer() else number
+
+
+def library_cli(formats, macros):
+    parser = argparse.ArgumentParser(description='PBBDPFMT format lookup')
+    parser.add_argument('--list', action='store_true')
+    parser.add_argument('--selfcheck', action='store_true')
+    parser.add_argument('format', nargs='?')
+    parser.add_argument('value', nargs='?')
+    args = parser.parse_args()
+    if args.list:
+        print('\n'.join(formats))
+    elif args.selfcheck:
+        problems = selfcheck()
+        for problem in problems:
+            print('MISMATCH', problem)
+        print(f'{len(problems)} mismatch(es) across {len(formats)} formats')
+    elif args.format is not None and args.value is not None:
+        print(format_value(args.format, _cli_value(args.format, args.value)))
+    else:
+        parser.error('Use --list, --selfcheck or FORMAT VALUE')
+
+
+def _print_examples():
+    print("Format Examples:")
+    print(f"SADENOM(200) = {sadenom_format(200)}")      # D
+    print(f"SADENOM(204) = {sadenom_format(204)}")      # I
+    print(f"SAPROD(200)  = {saprod_format(200)}")       # 42120
+    print(f"SAPROD(204)  = {saprod_format(204)}")       # 42320
+    print(f"FDDENOM(229) = {fddenom_format(229)}")      # I
+    print(f"FDDENOM(233) = {fddenom_format(233)}")      # D
+    print(f"FDPROD(229)  = {fdprod_format(229)}")       # 42133
+    print(f"FDPRD(300)   = {fdprd_format(300)}")        # N
+    print(f"FDPRD(340)   = {fdprd_format(340)}")        # M
+    print(f"FDPRD(320)   = {fdprd_format(320)}")        # L
+    print(f"CAPROD(104)  = {caprod_format(104)}")       # 43110
+    print(f"CAPROD(166)  = {caprod_format(166)}")       # 42110
+    print(f"CADENOM(60)  = {cadenom_format(60)}")       # I
+    print(f"CADENOM(50)  = {cadenom_format(50)}")       # D
+    print(f"FCYTERM(470) = {fcyterm_format(470)}")      # 1
+    print(f"FCYTERM(472) = {fcyterm_format(472)}")      # 3
+    print(f"FDORGMT(0.5) = {fdorgmt_format(0.5)}")      # 12
+    print(f"FDORGMT(1.5) = {fdorgmt_format(1.5)}")      # 13
+    print(f"FDORGMT(61.0)= {fdorgmt_format(61.0)}")     # 30
+    print(f"FDRMMT(0.0)  = {fdrmmt_format(0.0)}")       # 51
+    print(f"FDRMMT(0.5)  = {fdrmmt_format(0.5)}")       # 52
+    print(f"FDRMMT(13.0) = {fdrmmt_format(13.0)}")      # 61
+    print(f"DPCUSTCD(77) = {dpcustcd_format(77)}")      # 77
+    print(f"SACUSTCD(77) = {sacustcd_format(77)}")      # 77
+    print(f"FDCUSTCD(70) = {fdcustcd_format(70)}")      # 71
+    print(f"DDCUSTCD(65) = {ddcustcd_format(65)}")      # 44
+    print(f"STATECD(5)   = {statecd_format(5)}")        # A
+    print(f"BRANCHCD(5)  = {branchcd_format(5)}")       # IPOH MAIN OFFICE
+    print(f"SDRANGE(750) = {sdrange_format(750)}")      # 1000.0
+    print(f"DDRANGE(1500)= {ddrange_format(1500)}")     # 2000.0
+    print(f"RACE('1')    = {race_format('1')}")         # 1
+    print(f"RACE('9')    = {race_format('9')}")         # 0
+    print(f"RMFDORGMT(272)= {rmfdorgmt_format(272)}")   # 12
+    print(f"ACE Products: {sorted(ACE)}")
+    print(f"FCY Products: {sorted(FCY)}")
+
+
+if __name__ == '__main__':
+    if len(sys.argv) > 1:
+        library_cli(FORMATS, MACROS)
+    else:
+        _print_examples()
