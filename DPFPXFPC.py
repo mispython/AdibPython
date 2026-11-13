@@ -1,55 +1,40 @@
-======================================================================
-1. WHICH FILE IS ACTUALLY BEING IMPORTED
-======================================================================
-  module file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBMHPFS.py
-  file mtime:  Fri Nov 13 15:17:40 2026
-  file size:   46,561 bytes
+#!/usr/bin/env python3
+import sys
+sys.path.insert(0, "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS")
+import EIBMHPFS
+from datetime import date
 
-======================================================================
-2. WHICH FUNCTION IS DEFINED IN THE IMPORTED MODULE
-======================================================================
-  has parse_sas_date:    True
-  has parse_z11_to_date: False
+rv = EIBMHPFS.get_report_vars()
+print(f"SDATE = {rv['sdate']}")
 
-  --- Source of parse_sas_date ---
-  def parse_sas_date(val) -> Optional[date]:
-      """Parse a date from a SAS7BDAT column.
-  
-      Handles:
-        - SAS numeric dates (days since 1960-01-01): 14633 -> 2000-01-20
-        - Python date objects (passed through)
-        - DDMMYY8 strings with YEARCUTOFF=1950
-        - Null / NaN -> None
-        - Garbage numeric values outside 0..60000 -> None
-      """
-      if val is None:
-          return None
-      if isinstance(val, float) and val != val:      # NaN
-          return None
-      if isinstance(val, date):
-          return val
-      if isinstance(val, (int, float)):
-          try:
-              days = int(val)
-              if days < 0 or days > 60000:
+# Build HPSETTLE (this takes a while — 8M rows)
+hpsettle = EIBMHPFS.build_hpsettle(rv)
+print(f"HPSETTLE rows: {len(hpsettle)}")
 
-======================================================================
-3. DOES THE FUNCTION ACTUALLY WORK ON SAS DATES
-======================================================================
-  parse_sas_date(14633       ) = 2000-01-24
-  parse_sas_date(23197       ) = 2023-07-06
-  parse_sas_date(14435.0     ) = 1999-07-10
-  parse_sas_date(0           ) = 1960-01-01
-  parse_sas_date(None        ) = None
+# Sample 20 rows — check issdte / closedte
+sample = hpsettle.head(20)
+print("\nFirst 20 rows:")
+print(sample.select(['acctno', 'issdte', 'closedte']))
 
-  Expected: 14633 -> 2000-01-20, 23197 -> 2023-07-05, 14435.0 -> 1999-07-11
-            If any show 'None' for the numeric values, the fix is NOT loaded.
+# How many have issdte >= SDATE?
+sdate = rv['sdate']
+n_with_issdte = sum(
+    1 for r in hpsettle.iter_rows(named=True)
+    if r['issdte'] is not None and r['issdte'] >= sdate
+)
+n_with_closedte = sum(
+    1 for r in hpsettle.iter_rows(named=True)
+    if r['closedte'] is not None and r['closedte'] >= sdate
+)
+n_both = sum(
+    1 for r in hpsettle.iter_rows(named=True)
+    if r['issdte'] is not None and r['issdte'] >= sdate
+    and r['closedte'] is not None and r['closedte'] >= sdate
+)
 
-======================================================================
-4. OTHER COPIES OF EIBMHPFS.py ON THE FILESYSTEM
-======================================================================
+print(f"\nRow counts:")
+print(f"  issdte >= {sdate}:           {n_with_issdte:,}")
+print(f"  closedte >= {sdate}:          {n_with_closedte:,}")
+print(f"  both issdte AND closedte >=:  {n_both:,}")
 
-
-======================================================================
-DONE
-======================================================================
+# If n_both == 0, HPSNR=0 is data-correct, not a bug.
