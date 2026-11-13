@@ -1,502 +1,989 @@
-"""
-EIBDDEPE - Daily Deposit Position Extract
-DuckDB does everything; SAS gets small summaries via SASPy,
-plus DYDP via DATA step + INFILE (fast, no PROC IMPORT guessing).
-"""
+ font-weight: bold;
+}
+.body {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    margin-left: 8px;
+    margin-right: 8px;
+}
+.bodydate {
+    background-color: #fafbfe;
+    border-spacing: 0;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    text-align: right;
+    vertical-align: top;
+    width: 100%;
+}
+.bycontentfolder {
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: none;
+    margin-left: 6pt;
+}
+.byline {
+    background-color: #fafbfe;
+    border-spacing: 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.bylinecontainer > col, .bylinecontainer > colgroup > col, .bylinecontainer > colgroup, .bylinecontainer > tr, .bylinecontainer > * > tr, .bylinecontainer > thead, .bylinecontainer > tbody, .bylinecontainer > tfoot { border: none; }
+.bylinecontainer {
+    background-color: #fafbfe;
+    border: none;
+    border-spacing: 1px;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    width: 100%;
+}
+.caption {
+    background-color: #fafbfe;
+    border-spacing: 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.cell, .container {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.contentfolder, .contentitem {
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: none;
+    margin-left: 6pt;
+}
+.contentproclabel, .contentprocname {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.contents {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: decimal;
+    margin-left: 8px;
+    margin-right: 8px;
+}
+.contentsdate {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    width: 100%;
+}
+.contenttitle {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: bold;
+}
+.continued {
+    background-color: #fafbfe;
+    border-spacing: 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+    text-align: left;
+    width: 100%;
+}
+.data {
+    background-color: #ffffff;
+    border-color: #c1c1c1;
+    border-width: 0 1px 1px 0;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.dataemphasis {
+    background-color: #ffffff;
+    border-color: #c1c1c1;
+    border-width: 0 1px 1px 0;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.dataemphasisfixed {
+    background-color: #ffffff;
+    border-color: #c1c1c1;
+    border-width: 0 1px 1px 0;
+    color: #000000;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.dataempty {
+    background-color: #ffffff;
+    border-color: #c1c1c1;
+    border-width: 0 1px 1px 0;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.datafixed {
+    background-color: #ffffff;
+    border-color: #c1c1c1;
+    border-width: 0 1px 1px 0;
+    font-family: 'Courier New', Courier;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.datastrong {
+    background-color: #ffffff;
+    border-color: #c1c1c1;
+    border-width: 0 1px 1px 0;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.datastrongfixed {
+    background-color: #ffffff;
+    border-color: #c1c1c1;
+    border-width: 0 1px 1px 0;
+    color: #000000;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.date {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    width: 100%;
+}
+.document {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.errorbanner {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.errorcontent {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.errorcontentfixed {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: 'Courier New', Courier;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.extendedpage {
+    background-color: #fafbfe;
+    border-width: 1pt;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+    text-align: center;
+}
+.fatalbanner {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.fatalcontent {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.fatalcontentfixed {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: 'Courier New', Courier;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.folderaction {
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: none;
+    margin-left: 6pt;
+}
+.footer {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.footeremphasis {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.footeremphasisfixed {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.footerempty {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.footerfixed {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: 'Courier New', Courier;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.footerstrong {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.footerstrongfixed {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.frame {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.graph > colgroup {
+    border-left: 1px #c1c1c1;
+    border-right: 1px #c1c1c1;
+}
+.graph > tbody, .graph > thead, .graph > tfoot {
+    border-top: 1px #c1c1c1;
+    border-bottom: 1px #c1c1c1;
+}
+.graph { border: hidden; }
+.graph {
+    background-color: #fafbfe;
+    border-color: #c1c1c1;
+    border-width: 1px;
+    border-collapse: separate;
+    border-spacing: 1px;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    }
+.header {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.headeremphasis {
+    background-color: #d8dbd3;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.headeremphasisfixed {
+    background-color: #d8dbd3;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #000000;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.headerempty {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.headerfixed {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: 'Courier New', Courier;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.headersandfooters {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.headerstrong {
+    background-color: #d8dbd3;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.headerstrongfixed {
+    background-color: #d8dbd3;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #000000;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.index {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.indexaction, .indexitem {
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: none;
+    margin-left: 6pt;
+}
+.indexprocname {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.indextitle {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: bold;
+}
+.layoutcontainer > col, .layoutcontainer > colgroup > col, .layoutcontainer > colgroup, .layoutcontainer > tr, .layoutcontainer > * > tr, .layoutcontainer > thead, .layoutcontainer > tbody, .layoutcontainer > tfoot, .layoutregion > col,.layoutregion > colgroup > col, .layoutregion > colgroup, .layoutregion > tr, .layoutregion > * > tr, .layoutregion > thead, .layoutregion > tbody, .layoutregion > tfoot { border: none; }
+.layoutcontainer, .layoutregion {
+    border: none;
+    border-spacing: 30px;
+    }
+.linecontent {
+    background-color: #ffffff;
+    border-color: #c1c1c1;
+    border-width: 0 1px 1px 0;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.list {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: disc;
+    text-align: left;
+}
+.list10 {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: square;
+    text-align: left;
+}
+.list2 {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: circle;
+    text-align: left;
+}
+.list3, .list4, .list5, .list6, .list7, .list8, .list9 {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: square;
+    text-align: left;
+}
+.listitem {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: disc;
+    text-align: left;
+}
+.listitem10 {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: square;
+    text-align: left;
+}
+.listitem2 {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: circle;
+    text-align: left;
+}
+.listitem3, .listitem4, .listitem5, .listitem6, .listitem7, .listitem8, .listitem9 {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: square;
+    text-align: left;
+}
+.note {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.notebanner {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.notecontent {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.notecontentfixed {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: 'Courier New', Courier;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.output > colgroup {
+    border-left: 1px #c1c1c1;
+    border-right: 1px #c1c1c1;
+}
+.output > tbody, .output > thead, .output > tfoot {
+    border-top: 1px #c1c1c1;
+    border-bottom: 1px #c1c1c1;
+}
+.output { border: hidden; }
+.output {
+    background-color: #fafbfe;
+    border-color: #c1c1c1;
+    border-width: 1px;
+    border-collapse: separate;
+    border-spacing: 1px;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    }
+.pageno {
+    background-color: #fafbfe;
+    border-spacing: 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+    text-align: right;
+    vertical-align: top;
+}
+.pages {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: decimal;
+    margin-left: 8px;
+    margin-right: 8px;
+}
+.pagesdate {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    width: 100%;
+}
+.pagesitem {
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    list-style-type: none;
+    margin-left: 6pt;
+}
+.pagesproclabel, .pagesprocname {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.pagestitle {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: bold;
+}
+.paragraph {
+    background-color: #fafbfe;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    text-align: left;
+}
+.parskip > col, .parskip > colgroup > col, .parskip > colgroup, .parskip > tr, .parskip > * > tr, .parskip > thead, .parskip > tbody, .parskip > tfoot { border: none; }
+.parskip {
+    border: none;
+    border-spacing: 0;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+    }
+.prepage {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    text-align: left;
+}
+.proctitle {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.proctitlefixed {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.rowfooter {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.rowfooteremphasis {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.rowfooteremphasisfixed {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.rowfooterempty {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.rowfooterfixed {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: 'Courier New', Courier;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.rowfooterstrong {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.rowfooterstrongfixed {
+    background-color: #edf2f9;
+    color: #000000;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.rowheader {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.rowheaderemphasis {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.rowheaderemphasisfixed {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: italic;
+    font-weight: normal;
+}
+.rowheaderempty {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.rowheaderfixed {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: 'Courier New', Courier;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.rowheaderstrong {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.rowheaderstrongfixed {
+    background-color: #edf2f9;
+    border-color: #b0b7bb;
+    border-width: 0 1px 1px 0;
+    color: #112277;
+    font-family: 'Courier New', Courier, monospace;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.systemfooter, .systemfooter10, .systemfooter2, .systemfooter3, .systemfooter4, .systemfooter5, .systemfooter6, .systemfooter7, .systemfooter8, .systemfooter9 {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.systemtitle, .systemtitle10, .systemtitle2, .systemtitle3, .systemtitle4, .systemtitle5, .systemtitle6, .systemtitle7, .systemtitle8, .systemtitle9 {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size: small;
+    font-style: normal;
+    font-weight: bold;
+}
+.systitleandfootercontainer > col, .systitleandfootercontainer > colgroup > col, .systitleandfootercontainer > colgroup, .systitleandfootercontainer > tr, .systitleandfootercontainer > * > tr, .systitleandfootercontainer > thead, .systitleandfootercontainer > tbody, .systitleandfootercontainer > tfoot { border: none; }
+.systitleandfootercontainer {
+    background-color: #fafbfe;
+    border: none;
+    border-spacing: 1px;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    width: 100%;
+}
+.table > col, .table > colgroup > col {
+    border-left: 1px #c1c1c1;
+    border-right: 0 #c1c1c1;
+}
+.table > tr, .table > * > tr {
+    border-top: 1px #c1c1c1;
+    border-bottom: 0 #c1c1c1;
+}
+.table { border: hidden; }
+.table {
+    border-color: #c1c1c1;
+    border-width: 1px 0 0 1px;
+    border-collapse: separate;
+    border-spacing: 0;
+    }
+.titleandnotecontainer > col, .titleandnotecontainer > colgroup > col, .titleandnotecontainer > colgroup, .titleandnotecontainer > tr, .titleandnotecontainer > * > tr, .titleandnotecontainer > thead, .titleandnotecontainer > tbody, .titleandnotecontainer > tfoot { border: none; }
+.titleandnotecontainer {
+    background-color: #fafbfe;
+    border: none;
+    border-spacing: 1px;
+    color: #000000;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    width: 100%;
+}
+.titlesandfooters {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.usertext {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+    text-align: left;
+}
+.warnbanner {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: bold;
+}
+.warncontent {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: Arial, 'Albany AMT', Helvetica, Helv;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+.warncontentfixed {
+    background-color: #fafbfe;
+    color: #112277;
+    font-family: 'Courier New', Courier;
+    font-size:  normal;
+    font-style: normal;
+    font-weight: normal;
+}
+/*]]>*/
+</style>
+</head>
+<body class="l body">
+<div style="padding-bottom: 8px; padding-top: 1px">
+<div id="IDX" class="systitleandfootercontainer" style="border-spacing: 1px">
+<p><span class="c systemtitle">The SAS System</span> </p>
+</div>
+<div style="padding-bottom: 8px; padding-top: 1px">
+<table class="table" style="border-spacing: 0" aria-label="Query Results">
+<caption aria-label="Query Results"></caption>
+<colgroup><col/></colgroup>
+<thead>
+<tr>
+<th class="r b header" scope="col">N</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td class="r data">7389637</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</body>
+</html>
 
-import duckdb
-import polars as pl
-import saspy
-from datetime import datetime, timedelta
-import os
-import re
-import time
+  ✓ removed scratch CSV
+  ✓ MIS.DYPOSN11  (1 rows)
+  ✓ MIS.DYMVNT11 (created)
+  ✓ MIS.DYIBU11 (created)
+  ✓ MIS.DYDDCR11 (created)
+  ✓ MIS.DYBRDP11 (created)
+  ✓ MIS.DYDPS11 (created)
+  ✓ MIS.DYACE11 (created)
+  ✓ MISQ.DDMV (created, 29,554)
 
-import PBBDPFMT
-import PBBLNFMT
-
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
-INPUT_FILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDMELW/DPTRBLGS.parquet'
-
-BASE_OUT  = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDDEPE'
-MIS_PATH  = f'{BASE_OUT}/MIS'
-MISQ_PATH = f'{BASE_OUT}/MISQ'
-TEMP_PATH = f'{BASE_OUT}/TEMP'
-
-DYDP_CSV = f'{TEMP_PATH}/DYDP_import.csv'
-
-for p in (MIS_PATH, MISQ_PATH, TEMP_PATH):
-    os.makedirs(p, exist_ok=True)
-
-SAS_LIB_MIS  = 'MIS'
-SAS_LIB_MISQ = 'MISQ'
-SAS_LIB_TEMP = 'TEMP'
-
-ACE_PRODUCTS = sorted(PBBDPFMT.ACE)
-AGELIMIT, MAXAGE, AGEBELOW = 12, 18, 11
-
-# ============================================================================
-# SAS SESSION
-# ============================================================================
-
-print("Connecting to SAS...")
-sas = saspy.SASsession(cfgname='default')
-print(f"SAS session: {sas}")
-
-for lib, path in [(SAS_LIB_MIS, MIS_PATH),
-                  (SAS_LIB_MISQ, MISQ_PATH),
-                  (SAS_LIB_TEMP, TEMP_PATH)]:
-    sas.saslib(lib, engine=f'"{path}"')
-    print(f"  libname {lib} -> {path}")
-
-rc = sas.submit("""
-    proc sql;
-      select libname, path from dictionary.libnames
-      where libname in ('MIS','MISQ','TEMP');
-    quit;
-""")
-print(rc['LST'])
-
-# ============================================================================
-# HELPERS
-# ============================================================================
-
-def parse_date(val):
-    if not val: return None
-    s = re.sub(r'[^0-9]', '', str(int(val)) if isinstance(val, (int, float)) else str(val))
-    if len(s) >= 8:
-        try: return datetime.strptime(s[:8], '%Y%m%d').date()
-        except: pass
-    return None
-
-def days_in_month(year, month):
-    if month == 2: return 29 if year % 4 == 0 else 28
-    elif month in [4, 6, 9, 11]: return 30
-    else: return 31
-
-# ============================================================================
-# LOOKUP TABLES
-# ============================================================================
-
-def _rules_to_pairs(format_name, library):
-    rules = library.FORMATS[format_name]['rules']
-    return [(lo, label) for lo, hi, *_rest, label, _opts in rules
-            if isinstance(lo, int) and isinstance(hi, int) and lo == hi]
-
-SAPROD_DF  = pl.DataFrame(_rules_to_pairs('SAPROD',  PBBDPFMT),
-                          schema={'PRODUCT': pl.Int64, 'SAPROD':  pl.String}, orient='row')
-CAPROD_DF  = pl.DataFrame(_rules_to_pairs('CAPROD',  PBBDPFMT),
-                          schema={'PRODUCT': pl.Int64, 'CAPROD':  pl.String}, orient='row')
-FDPRODD_DF = pl.DataFrame(_rules_to_pairs('FDPRODD', PBBDPFMT),
-                          schema={'PRODUCT': pl.Int64, 'FDPRODD': pl.String}, orient='row')
-ODPROD_DF  = pl.DataFrame(_rules_to_pairs('ODPROD',  PBBLNFMT),
-                          schema={'PRODUCT': pl.Int64, 'ODPROD':  pl.String}, orient='row')
-
-# ============================================================================
-# PHASE 1: DuckDB
-# ============================================================================
-
-print("\n" + "=" * 70)
-print("PHASE 1: DuckDB reads and enriches")
-print("=" * 70)
-
-t0 = time.time()
-con = duckdb.connect()
-con.execute("PRAGMA threads=8;")
-con.execute("PRAGMA memory_limit='8GB';")
-con.execute(f"PRAGMA temp_directory='{TEMP_PATH}';")
-
-con.register('saprod_lkp',  SAPROD_DF.to_arrow())
-con.register('caprod_lkp',  CAPROD_DF.to_arrow())
-con.register('fdprodd_lkp', FDPRODD_DF.to_arrow())
-con.register('odprod_lkp',  ODPROD_DF.to_arrow())
-
-rd = con.execute(f"SELECT * FROM read_parquet('{INPUT_FILE}') LIMIT 1").pl()
-reptdate = None
-for col in ['TBDATE', 'REPTDATE', 'REPTDT']:
-    if col in rd.columns:
-        reptdate = parse_date(rd.select(col).row(0)[0])
-        if reptdate: break
-if not reptdate: reptdate = datetime.now().date()
-
-reptyear, reptmon, reptday = reptdate.year, reptdate.month, reptdate.day
-nowk = str((reptday - 1) // 8 + 1) if reptday <= 24 else '4'
-reptdat3 = reptdate - timedelta(days=31)
-mth = days_in_month(reptyear, reptmon)
-is_weekly_or_monthend = (reptday in [8, 15, 22]) or (reptday == mth)
-
-print(f"  Report date: {reptdate.strftime('%d/%m/%Y')} (Week {nowk})")
-print(f"  Weekly/Month-end: {is_weekly_or_monthend}")
-
-ACE_LIST = ','.join(str(p) for p in ACE_PRODUCTS)
-
-enrich_sql = f"""
-CREATE OR REPLACE TEMP VIEW enriched AS
-WITH base AS (
-    SELECT *,
-        (CREDIT - DEBIT) AS MOVEMENT,
-        CURBAL AS DYDPBAL,
-        DATE '{reptdate.isoformat()}' AS REPTDATE,
-        CASE WHEN BRANCH = 132 THEN 168 ELSE BRANCH END AS BRANCH2
-    FROM read_parquet('{INPUT_FILE}')
-    WHERE BANKNO = 33 AND REPTNO = 1001 AND FMTCODE = 1
-      AND OPENIND NOT IN ('B','C','P')
-      AND PRODUCT NOT IN (297, 298)
-),
-with_year AS (
-    SELECT *,
-        CASE
-            WHEN OPENDT IS NULL OR OPENDT = 0 THEN NULL
-            ELSE CAST(SUBSTR(REGEXP_REPLACE(CAST(OPENDT AS VARCHAR), '[^0-9]', '', 'g'), 1, 8) AS INTEGER) / 10000
-        END AS OPEN_YEAR
-    FROM base
-),
-with_acc AS (
-    SELECT *,
-        CASE WHEN OPEN_YEAR = {reptyear} AND CLOSEDT = 0 THEN 1 ELSE 0 END AS ACCYTD
-    FROM with_year
-),
-with_prod AS (
-    SELECT b.*, s.SAPROD, c.CAPROD, f.FDPRODD, o.ODPROD
-    FROM with_acc b
-    LEFT JOIN saprod_lkp  s ON b.PRODUCT = s.PRODUCT
-    LEFT JOIN caprod_lkp  c ON b.PRODUCT = c.PRODUCT
-    LEFT JOIN fdprodd_lkp f ON b.PRODUCT = f.PRODUCT
-    LEFT JOIN odprod_lkp  o ON b.PRODUCT = o.PRODUCT
-),
-with_prodcd AS (
-    SELECT *,
-        CASE
-            WHEN DEPTYPE = 'S' THEN COALESCE(SAPROD, '42120')
-            WHEN DEPTYPE IN ('D','N') AND CURBAL >= 0 THEN COALESCE(CAPROD, '42110')
-            WHEN DEPTYPE IN ('D','N') AND CURBAL <  0 THEN COALESCE(ODPROD, '34180')
-            WHEN DEPTYPE = 'C' THEN COALESCE(FDPRODD, '42130')
-            ELSE ''
-        END AS PRODCD,
-        CASE WHEN DEPTYPE = 'S' THEN 'S' ELSE 'D' END AS DPTYPE
-    FROM with_prod
-),
-with_mvrange AS (
-    SELECT *,
-        CASE
-            WHEN PRODUCT IN ({ACE_LIST}) THEN
-                CASE
-                    WHEN ABS(MOVEMENT) <= 5000 THEN 5000
-                    WHEN ABS(MOVEMENT) <= 10000 THEN 10000
-                    WHEN ABS(MOVEMENT) <= 30000 THEN 30000
-                    WHEN ABS(MOVEMENT) <= 50000 THEN 50000
-                    WHEN ABS(MOVEMENT) <= 75000 THEN 75000
-                    WHEN ABS(MOVEMENT) <= 100000 THEN 100000
-                    ELSE 200000
-                END
-            ELSE
-                CASE
-                    WHEN ABS(MOVEMENT) <= 5000 THEN 5000
-                    WHEN ABS(MOVEMENT) <= 10000 THEN 10000
-                    WHEN ABS(MOVEMENT) <= 30000 THEN 30000
-                    WHEN ABS(MOVEMENT) <= 50000 THEN 50000
-                    WHEN ABS(MOVEMENT) <= 75000 THEN 75000
-                    ELSE 80000
-                END
-        END AS MVRANGE
-    FROM with_prodcd
-)
-SELECT
-    REPTDATE, BRANCH2 AS BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
-    DPTYPE, PRODUCT, PRODCD, CAPROD, ODPROD,
-    CURBAL, DYDPBAL, APPRLIMT, ACCYTD, OPENDT,
-    MOVEMENT, MVRANGE, CUSTCODE, SECOND
-FROM with_mvrange
-"""
-con.execute(enrich_sql)
-print(f"  Enriched view created  ({time.time()-t0:.1f}s)")
-
-# ---- DYDP CSV ----
-print("\n" + "=" * 70)
-print("PHASE 1A: Export DYDP to CSV via DuckDB")
-print("=" * 70)
-t0 = time.time()
-con.execute(f"""
-COPY (
-    SELECT REPTDATE, BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
-           DPTYPE, PRODUCT, PRODCD, CURBAL, DYDPBAL, APPRLIMT,
-           ACCYTD, OPENDT, MOVEMENT, MVRANGE, CUSTCODE, SECOND
-    FROM enriched
-    WHERE (DEPTYPE = 'S' AND CURBAL >= 0 AND PRODCD IN ('42120','42320'))
-       OR (DEPTYPE IN ('D','N') AND CURBAL >= 0 AND PRODCD IN ('42110','42180','42310'))
-) TO '{DYDP_CSV}' (HEADER, DELIMITER ',')
-""")
-print(f"  ✓ CSV: {DYDP_CSV}  ({time.time()-t0:.1f}s, {os.path.getsize(DYDP_CSV)/1e6:.1f} MB)")
-
-# ---- Summaries ----
-print("\n" + "=" * 70)
-print("PHASE 1B: Summary aggregates in DuckDB")
-print("=" * 70)
-t0 = time.time()
-
-ddmv_pl = con.execute("""
-    SELECT REPTDATE, BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
-           CAPROD AS PRODCD, PRODUCT, CURBAL
-    FROM enriched
-    WHERE DEPTYPE IN ('D','N') AND CURBAL < 0 AND CAPROD IN ('42110','42310')
-""").pl()
-
-dyposn_pl = con.execute(f"""
-    SELECT DATE '{reptdate.isoformat()}' AS REPTDATE,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42120' AND CURBAL>=0 THEN CURBAL END), 0) AS TOTSAVG,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' AND CURBAL>=0 THEN CURBAL END), 0) AS TOTSAVGI,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODCD IN ('42110','42180') THEN CURBAL END), 0) AS TOTDMND,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODCD='42310' THEN CURBAL END), 0) AS TOTDMNDI,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODUCT=105 THEN CURBAL END), 0) AS TOTVOSF,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODUCT=104 THEN CURBAL END), 0) AS TOTVOSC,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND PRODUCT=105 THEN CURBAL END), 0) AS OVDVOSF,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND PRODUCT=104 THEN CURBAL END), 0) AS OVDVOSC,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND ODPROD IN ('34180','34240','34380') THEN ABS(CURBAL) END), 0) AS TOTOVFT,
-        COALESCE(SUM(CASE WHEN DEPTYPE='C' AND PRODCD='42130' THEN CURBAL END), 0) AS TOTFD,
-        COALESCE(SUM(CASE WHEN DEPTYPE='C' AND PRODCD='42132' THEN CURBAL END), 0) AS TOTFDI,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND CURBAL>=0 AND PRODUCT IN ({ACE_LIST}) THEN CURBAL END), 0) AS ACESA,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODUCT IN ({ACE_LIST}) THEN CURBAL END), 0) AS ACECA,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' AND PRODUCT=214 AND CURBAL>=0 THEN CURBAL END), 0) AS TOTMBSA
-    FROM enriched
-""").pl()
-
-dyibu_pl = con.execute("""
-    SELECT REPTDATE, BRANCH,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' THEN CURBAL END), 0) AS SAI,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42310' THEN CURBAL END), 0) AS CAI,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42310' AND PRODUCT IN (61,161) THEN CURBAL END), 0) AS CAIG,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42180' AND PRODUCT IN (63,163) THEN CURBAL END), 0) AS CAIH,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' AND PRODUCT=214 THEN CURBAL END), 0) AS MBS,
-        SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' THEN 1 ELSE 0 END) AS SNO,
-        SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42310' THEN 1 ELSE 0 END) AS CNO,
-        SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42310' AND PRODUCT IN (61,161) THEN 1 ELSE 0 END) AS CGNO,
-        SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42180' AND PRODUCT IN (63,163) THEN 1 ELSE 0 END) AS CHNO,
-        SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' AND PRODUCT=214 THEN 1 ELSE 0 END) AS MBSNO
-    FROM enriched
-    GROUP BY REPTDATE, BRANCH
-""").pl()
-
-dymvnt_pl = con.execute(f"""
-    SELECT REPTDATE, BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
-           PRODUCT, CURBAL, APPRLIMT, CUSTCODE, SECOND
-    FROM enriched
-    WHERE (DEPTYPE = 'S' AND ABS(MOVEMENT) >= 50000)
-       OR (DEPTYPE IN ('D','N') AND DPTYPE = 'D' AND (
-              (ABS(MOVEMENT) >= 100000 AND PRODUCT IN ({ACE_LIST}))
-           OR (ABS(MOVEMENT) >= 1000000)))
-""").pl()
-
-dybrdp_pl = con.execute("""
-    SELECT BRANCH, DPTYPE, REPTDATE, SUM(DYDPBAL) AS BALANCE
-    FROM enriched
-    WHERE PRODCD NOT IN ('42320','42310') AND PRODUCT NOT IN (104, 105)
-    GROUP BY BRANCH, DPTYPE, REPTDATE
-""").pl()
-
-dyddcr_pl = con.execute(f"""
-    WITH src AS (
-        SELECT REPTDATE,
-            CASE WHEN CURBAL - (CREDIT - DEBIT) < 0 THEN CURBAL
-                 ELSE CURBAL - (CURBAL - (CREDIT - DEBIT))
-            END AS MOVEMENT_ADJ
-        FROM enriched
-        WHERE DPTYPE = 'D'
-          AND PRODUCT NOT IN ({ACE_LIST})
-          AND PRODCD <> '42310' AND PRODUCT <> 72 AND CURBAL >= 0
-    )
-    SELECT REPTDATE,
-        CASE
-            WHEN ABS(MOVEMENT_ADJ) < 300000 THEN 300000
-            WHEN ABS(MOVEMENT_ADJ) < 500000 THEN 500000
-            WHEN ABS(MOVEMENT_ADJ) < 1000000 THEN 1000000
-            WHEN ABS(MOVEMENT_ADJ) < 1500000 THEN 1500000
-            WHEN ABS(MOVEMENT_ADJ) < 2000000 THEN 2000000
-            WHEN ABS(MOVEMENT_ADJ) < 3000000 THEN 3000000
-            WHEN ABS(MOVEMENT_ADJ) < 4000000 THEN 4000000
-            WHEN ABS(MOVEMENT_ADJ) < 5000000 THEN 5000000
-            WHEN ABS(MOVEMENT_ADJ) < 10000000 THEN 10000000
-            ELSE 10000001
-        END AS RANGE,
-        SUM(MOVEMENT_ADJ) AS MOVEMENT
-    FROM src GROUP BY REPTDATE, RANGE
-""").pl()
-
-dydps_pl = con.execute(f"""
-    SELECT REPTDATE, MVRANGE, SUM(MOVEMENT) AS MOVEMENT
-    FROM enriched
-    WHERE DPTYPE='S' AND PRODUCT NOT IN ({ACE_LIST}) AND PRODCD='42120'
-    GROUP BY REPTDATE, MVRANGE
-""").pl()
-
-dyace_pl = con.execute(f"""
-    SELECT REPTDATE, MVRANGE, SUM(MOVEMENT) AS MOVEMENT
-    FROM enriched
-    WHERE DPTYPE='D' AND PRODUCT IN ({ACE_LIST})
-    GROUP BY REPTDATE, MVRANGE
-""").pl()
-
-if is_weekly_or_monthend:
-    sdrnge_pl = con.execute(f"""
-        WITH savg AS (
-            SELECT BRANCH, PRODUCT, PRODCD,
-                CASE WHEN RACE IN ('0','1','2','3') THEN RACE ELSE '0' END AS RACE,
-                CASE
-                    WHEN BDATE IS NULL OR BDATE = 0 THEN 0
-                    ELSE LEAST({MAXAGE}, GREATEST({AGEBELOW},
-                        {reptyear} - CAST(SUBSTR(REGEXP_REPLACE(CAST(BDATE AS VARCHAR), '[^0-9]', '', 'g'), 1, 4) AS INTEGER)))
-                END AS AGE,
-                CASE
-                    WHEN CURBAL < 500 THEN 500 WHEN CURBAL < 1000 THEN 1000
-                    WHEN CURBAL < 5000 THEN 5000 WHEN CURBAL < 10000 THEN 10000
-                    WHEN CURBAL < 20000 THEN 20000 WHEN CURBAL < 50000 THEN 50000
-                    WHEN CURBAL < 100000 THEN 100000 WHEN CURBAL < 200000 THEN 200000
-                    ELSE 200001
-                END AS RANGE,
-                CASE
-                    WHEN CURBAL < 1000 THEN 1000 WHEN CURBAL < 5000 THEN 5000
-                    WHEN CURBAL < 10000 THEN 10000 WHEN CURBAL < 50000 THEN 50000
-                    WHEN CURBAL < 100000 THEN 100000 ELSE 100001
-                END AS R2NGE,
-                CURBAL, ACCYTD
-            FROM enriched WHERE DEPTYPE = 'S' AND CURBAL >= 0
-        )
-        SELECT BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE, R2NGE,
-               COUNT(*) AS NOACCT, SUM(CURBAL) AS CURBAL, SUM(ACCYTD) AS ACCYTD
-        FROM savg GROUP BY BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE, R2NGE
-    """).pl()
-else:
-    sdrnge_pl = pl.DataFrame([])
-
-con.close()
-print(f"  ✓ Summaries computed  ({time.time()-t0:.1f}s)")
-print(f"    DDMV={len(ddmv_pl):,}  DYIBU={len(dyibu_pl):,}  DYMVNT={len(dymvnt_pl):,}  "
-      f"DYBRDP={len(dybrdp_pl):,}  DYDDCR={len(dyddcr_pl):,}  "
-      f"DYDPS={len(dydps_pl):,}  DYACE={len(dyace_pl):,}")
-
-# ============================================================================
-# PHASE 2: Save
-# ============================================================================
-
-print("\n" + "=" * 70)
-print("PHASE 2: Writing SAS datasets")
-print("=" * 70)
-
-def save_sas(df_polars, libref, table):
-    if len(df_polars) == 0:
-        print(f"  ⚠ {libref}.{table}: No data"); return
-    sas.df2sd(df_polars.to_pandas(), table=table, libref=libref, replace=True)
-    print(f"  ✓ {libref}.{table}  ({len(df_polars):,} rows)")
-
-def upsert_sas(df_new, libref, table):
-    if len(df_new) == 0:
-        print(f"  ⚠ {libref}.{table}: No data"); return
-    pdf = df_new.to_pandas()
-    if reptday == 1:
-        sas.df2sd(pdf, table=table, libref=libref, replace=True)
-        print(f"  ✓ {libref}.{table} (new)"); return
-    if not sas.exist(table, libref=libref):
-        sas.df2sd(pdf, table=table, libref=libref)
-        print(f"  ✓ {libref}.{table} (created)"); return
-    dt_str = reptdate.strftime('%d%b%Y').upper()
-    sas.submit(f"""
-        data {libref}.{table}; set {libref}.{table};
-          if REPTDATE = '{dt_str}'d then delete; run;
-    """)
-    sas.df2sd(pdf, table=table, libref=libref, replace=False)
-    print(f"  ✓ {libref}.{table} (appended)")
-
-def append_ddmv(df_new):
-    if len(df_new) == 0:
-        print("  ⚠ MISQ.DDMV: No data"); return
-    pdf = df_new.to_pandas()
-    if not sas.exist('DDMV', libref=SAS_LIB_MISQ):
-        sas.df2sd(pdf, table='DDMV', libref=SAS_LIB_MISQ)
-        print(f"  ✓ MISQ.DDMV (created, {len(df_new):,})"); return
-    dt_str = reptdat3.strftime('%d%b%Y').upper()
-    sas.submit(f"""
-        data {SAS_LIB_MISQ}.DDMV; set {SAS_LIB_MISQ}.DDMV;
-          if REPTDATE = '{dt_str}'d then delete; run;
-    """)
-    sas.df2sd(pdf, table='DDMV', libref=SAS_LIB_MISQ, replace=False)
-    print(f"  ✓ MISQ.DDMV (appended, {len(df_new):,})")
-
-# ---------------------------------------------------------------------------
-# OPTION A: DYDP import via DATA step + INFILE (10-20x faster than PROC IMPORT)
-# ---------------------------------------------------------------------------
-def import_dydp_via_datastep(csv_path, libref, table):
-    """Fast alternative to PROC IMPORT: explicit types, single sequential read."""
-    print(f"  Reading {csv_path}")
-    print(f"  Size: {os.path.getsize(csv_path)/1e6:.1f} MB")
-
-    t0 = time.time()
-    rc = sas.submit(f"""
-        data {libref}.{table};
-          length REPTDATE 8 BRANCH 8 ACCTNO 8 NAME $15 DEBIT 8 CREDIT 8
-                 DEPTYPE $1 DPTYPE $1 PRODUCT 8 PRODCD $8 CURBAL 8
-                 DYDPBAL 8 APPRLIMT 8 ACCYTD 8 OPENDT 8 MOVEMENT 8
-                 MVRANGE 8 CUSTCODE 8 SECOND 8;
-          infile "{csv_path}" dlm=',' dsd firstobs=2 lrecl=1000 missover;
-          input REPTDATE BRANCH ACCTNO NAME $ DEBIT CREDIT DEPTYPE $
-                DPTYPE $ PRODUCT PRODCD $ CURBAL DYDPBAL APPRLIMT
-                ACCYTD OPENDT MOVEMENT MVRANGE CUSTCODE SECOND;
-          format REPTDATE yymmdd10.;
-        run;
-    """)
-    elapsed = time.time() - t0
-    print(f"  ✓ DATA step import: {elapsed:.1f}s")
-
-    # Show any SAS errors
-    log_tail = rc.get('LOG', '')[-1500:]
-    if 'ERROR' in log_tail.upper():
-        print("  ⚠ SAS LOG tail:")
-        print(log_tail)
-
-    # Verify row count
-    cnt = sas.submit(f"proc sql; select count(*) as N from {libref}.{table}; quit;")
-    print(cnt['LST'])
-
-print(f"\nImporting DYDP from {DYDP_CSV} via DATA step...")
-sas.submit(f"proc datasets lib={SAS_LIB_TEMP} nolist; delete DYDP; run;")
-import_dydp_via_datastep(DYDP_CSV, SAS_LIB_TEMP, 'DYDP')
-
-try:
-    os.remove(DYDP_CSV)
-    print(f"  ✓ removed scratch CSV")
-except OSError as e:
-    print(f"  ⚠ {e}")
-
-# All summaries
-save_sas(dyposn_pl, SAS_LIB_MIS, f'DYPOSN{reptmon:02d}')
-upsert_sas(dymvnt_pl, SAS_LIB_MIS, f'DYMVNT{reptmon:02d}')
-upsert_sas(dyibu_pl,  SAS_LIB_MIS, f'DYIBU{reptmon:02d}')
-upsert_sas(dyddcr_pl, SAS_LIB_MIS, f'DYDDCR{reptmon:02d}')
-upsert_sas(dybrdp_pl, SAS_LIB_MIS, f'DYBRDP{reptmon:02d}')
-upsert_sas(dydps_pl,  SAS_LIB_MIS, f'DYDPS{reptmon:02d}')
-upsert_sas(dyace_pl,  SAS_LIB_MIS, f'DYACE{reptmon:02d}')
-
-if is_weekly_or_monthend and len(sdrnge_pl) > 0:
-    save_sas(sdrnge_pl, SAS_LIB_MIS, f'SDRNGE{reptmon:02d}')
-
-append_ddmv(ddmv_pl)
-
-# ============================================================================
-# SUMMARY
-# ============================================================================
-
-print("\n" + "=" * 70)
-print("✓ EIBDDEPE Complete")
-print("=" * 70)
-print(f"Report Date : {reptdate.strftime('%d/%m/%Y')} (Week {nowk})")
-print(f"DDMV dedupe : {reptdat3.strftime('%d/%m/%Y')}")
-print(f"Output dirs : MIS={MIS_PATH}  MISQ={MISQ_PATH}  TEMP={TEMP_PATH}")
-print(f"Records     : DYMVNT={len(dymvnt_pl):,}  DYIBU={len(dyibu_pl):,}  "
-      f"DYBRDP={len(dybrdp_pl):,}  DYDDCR={len(dyddcr_pl):,}  "
-      f"DYDPS={len(dydps_pl):,}  DYACE={len(dyace_pl):,}  "
-      f"DDMV={len(ddmv_pl):,}"
-      + (f"  SDRNGE={len(sdrnge_pl):,}" if is_weekly_or_monthend else ""))
-print("=" * 70)
-
-sas.endsas()
+======================================================================
+✓ EIBDDEPE Complete
+======================================================================
+Report Date : 13/11/2026 (Week 2)
+DDMV dedupe : 13/10/2026
+Output dirs : MIS=/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDDEPE/MIS  MISQ=/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDDEPE/MISQ  TEMP=/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDDEPE/TEMP
+Records     : DYMVNT=794  DYIBU=322  DYBRDP=586  DYDDCR=10  DYDPS=6  DYACE=7  DDMV=29,554
+======================================================================
+SAS Connection terminated. Subprocess id was 2687478
