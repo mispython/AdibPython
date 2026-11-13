@@ -1,6 +1,7 @@
 """
 EIBDDEPE - Daily Deposit Position Extract
-DuckDB does everything; SAS gets small summaries + DYDP via CSV->PROC IMPORT.
+DuckDB does everything; SAS gets small summaries via SASPy,
+plus DYDP via DATA step + INFILE (fast, no PROC IMPORT guessing).
 """
 
 import duckdb
@@ -25,7 +26,6 @@ MIS_PATH  = f'{BASE_OUT}/MIS'
 MISQ_PATH = f'{BASE_OUT}/MISQ'
 TEMP_PATH = f'{BASE_OUT}/TEMP'
 
-# FIX 3: CSV on the shared mount, not local /tmp
 DYDP_CSV = f'{TEMP_PATH}/DYDP_import.csv'
 
 for p in (MIS_PATH, MISQ_PATH, TEMP_PATH):
@@ -39,32 +39,29 @@ ACE_PRODUCTS = sorted(PBBDPFMT.ACE)
 AGELIMIT, MAXAGE, AGEBELOW = 12, 18, 11
 
 # ============================================================================
-# SAS SESSION + FIX 1: verify libnames are visible
+# SAS SESSION
 # ============================================================================
 
 print("Connecting to SAS...")
 sas = saspy.SASsession(cfgname='default')
 print(f"SAS session: {sas}")
 
-# Assign libnames via saslib (more reliable than submit for later df2sd)
 for lib, path in [(SAS_LIB_MIS, MIS_PATH),
                   (SAS_LIB_MISQ, MISQ_PATH),
                   (SAS_LIB_TEMP, TEMP_PATH)]:
     sas.saslib(lib, engine=f'"{path}"')
     print(f"  libname {lib} -> {path}")
 
-# Verify visible
 rc = sas.submit("""
     proc sql;
-      select libname, path
-      from dictionary.libnames
+      select libname, path from dictionary.libnames
       where libname in ('MIS','MISQ','TEMP');
     quit;
 """)
 print(rc['LST'])
 
 # ============================================================================
-# HELPERS (same as before)
+# HELPERS
 # ============================================================================
 
 def parse_date(val):
@@ -89,15 +86,14 @@ def _rules_to_pairs(format_name, library):
     return [(lo, label) for lo, hi, *_rest, label, _opts in rules
             if isinstance(lo, int) and isinstance(hi, int) and lo == hi]
 
-SAPROD_PAIRS  = _rules_to_pairs('SAPROD',  PBBDPFMT)
-CAPROD_PAIRS  = _rules_to_pairs('CAPROD',  PBBDPFMT)
-FDPRODD_PAIRS = _rules_to_pairs('FDPRODD', PBBDPFMT)
-ODPROD_PAIRS  = _rules_to_pairs('ODPROD',  PBBLNFMT)
-
-SAPROD_DF  = pl.DataFrame(SAPROD_PAIRS,  schema={'PRODUCT': pl.Int64, 'SAPROD':  pl.String}, orient='row')
-CAPROD_DF  = pl.DataFrame(CAPROD_PAIRS,  schema={'PRODUCT': pl.Int64, 'CAPROD':  pl.String}, orient='row')
-FDPRODD_DF = pl.DataFrame(FDPRODD_PAIRS, schema={'PRODUCT': pl.Int64, 'FDPRODD': pl.String}, orient='row')
-ODPROD_DF  = pl.DataFrame(ODPROD_PAIRS,  schema={'PRODUCT': pl.Int64, 'ODPROD':  pl.String}, orient='row')
+SAPROD_DF  = pl.DataFrame(_rules_to_pairs('SAPROD',  PBBDPFMT),
+                          schema={'PRODUCT': pl.Int64, 'SAPROD':  pl.String}, orient='row')
+CAPROD_DF  = pl.DataFrame(_rules_to_pairs('CAPROD',  PBBDPFMT),
+                          schema={'PRODUCT': pl.Int64, 'CAPROD':  pl.String}, orient='row')
+FDPRODD_DF = pl.DataFrame(_rules_to_pairs('FDPRODD', PBBDPFMT),
+                          schema={'PRODUCT': pl.Int64, 'FDPRODD': pl.String}, orient='row')
+ODPROD_DF  = pl.DataFrame(_rules_to_pairs('ODPROD',  PBBLNFMT),
+                          schema={'PRODUCT': pl.Int64, 'ODPROD':  pl.String}, orient='row')
 
 # ============================================================================
 # PHASE 1: DuckDB
@@ -111,8 +107,6 @@ t0 = time.time()
 con = duckdb.connect()
 con.execute("PRAGMA threads=8;")
 con.execute("PRAGMA memory_limit='8GB';")
-
-# FIX 3: spill to shared mount
 con.execute(f"PRAGMA temp_directory='{TEMP_PATH}';")
 
 con.register('saprod_lkp',  SAPROD_DF.to_arrow())
@@ -139,9 +133,6 @@ print(f"  Weekly/Month-end: {is_weekly_or_monthend}")
 
 ACE_LIST = ','.join(str(p) for p in ACE_PRODUCTS)
 
-# FIX 2: keep CAPROD and ODPROD as SEPARATE columns.
-# DDMV filter uses CAPROD. TOTOVFT uses ODPROD.
-# PRODCD still follows the SAS DEPTYPE-based pick.
 enrich_sql = f"""
 CREATE OR REPLACE TEMP VIEW enriched AS
 WITH base AS (
@@ -169,8 +160,7 @@ with_acc AS (
     FROM with_year
 ),
 with_prod AS (
-    SELECT b.*,
-        s.SAPROD, c.CAPROD, f.FDPRODD, o.ODPROD
+    SELECT b.*, s.SAPROD, c.CAPROD, f.FDPRODD, o.ODPROD
     FROM with_acc b
     LEFT JOIN saprod_lkp  s ON b.PRODUCT = s.PRODUCT
     LEFT JOIN caprod_lkp  c ON b.PRODUCT = c.PRODUCT
@@ -239,8 +229,7 @@ COPY (
        OR (DEPTYPE IN ('D','N') AND CURBAL >= 0 AND PRODCD IN ('42110','42180','42310'))
 ) TO '{DYDP_CSV}' (HEADER, DELIMITER ',')
 """)
-print(f"  ✓ CSV written: {DYDP_CSV}  ({time.time()-t0:.1f}s)")
-print(f"  Size: {os.path.getsize(DYDP_CSV)/1e6:.1f} MB")
+print(f"  ✓ CSV: {DYDP_CSV}  ({time.time()-t0:.1f}s, {os.path.getsize(DYDP_CSV)/1e6:.1f} MB)")
 
 # ---- Summaries ----
 print("\n" + "=" * 70)
@@ -248,18 +237,15 @@ print("PHASE 1B: Summary aggregates in DuckDB")
 print("=" * 70)
 t0 = time.time()
 
-# FIX 2: DDMV filter uses CAPROD (as SAS does)
 ddmv_pl = con.execute("""
     SELECT REPTDATE, BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
            CAPROD AS PRODCD, PRODUCT, CURBAL
     FROM enriched
     WHERE DEPTYPE IN ('D','N') AND CURBAL < 0 AND CAPROD IN ('42110','42310')
 """).pl()
-print(f"  DDMV: {len(ddmv_pl):,} rows")
 
 dyposn_pl = con.execute(f"""
-    SELECT
-        DATE '{reptdate.isoformat()}' AS REPTDATE,
+    SELECT DATE '{reptdate.isoformat()}' AS REPTDATE,
         COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42120' AND CURBAL>=0 THEN CURBAL END), 0) AS TOTSAVG,
         COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' AND CURBAL>=0 THEN CURBAL END), 0) AS TOTSAVGI,
         COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODCD IN ('42110','42180') THEN CURBAL END), 0) AS TOTDMND,
@@ -335,8 +321,7 @@ dyddcr_pl = con.execute(f"""
             ELSE 10000001
         END AS RANGE,
         SUM(MOVEMENT_ADJ) AS MOVEMENT
-    FROM src
-    GROUP BY REPTDATE, RANGE
+    FROM src GROUP BY REPTDATE, RANGE
 """).pl()
 
 dydps_pl = con.execute(f"""
@@ -358,7 +343,6 @@ if is_weekly_or_monthend:
         WITH savg AS (
             SELECT BRANCH, PRODUCT, PRODCD,
                 CASE WHEN RACE IN ('0','1','2','3') THEN RACE ELSE '0' END AS RACE,
-                BDATE, CURBAL, ACCYTD,
                 CASE
                     WHEN BDATE IS NULL OR BDATE = 0 THEN 0
                     ELSE LEAST({MAXAGE}, GREATEST({AGEBELOW},
@@ -375,13 +359,13 @@ if is_weekly_or_monthend:
                     WHEN CURBAL < 1000 THEN 1000 WHEN CURBAL < 5000 THEN 5000
                     WHEN CURBAL < 10000 THEN 10000 WHEN CURBAL < 50000 THEN 50000
                     WHEN CURBAL < 100000 THEN 100000 ELSE 100001
-                END AS R2NGE
+                END AS R2NGE,
+                CURBAL, ACCYTD
             FROM enriched WHERE DEPTYPE = 'S' AND CURBAL >= 0
         )
         SELECT BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE, R2NGE,
                COUNT(*) AS NOACCT, SUM(CURBAL) AS CURBAL, SUM(ACCYTD) AS ACCYTD
-        FROM savg
-        GROUP BY BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE, R2NGE
+        FROM savg GROUP BY BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE, R2NGE
     """).pl()
 else:
     sdrnge_pl = pl.DataFrame([])
@@ -439,25 +423,44 @@ def append_ddmv(df_new):
     sas.df2sd(pdf, table='DDMV', libref=SAS_LIB_MISQ, replace=False)
     print(f"  ✓ MISQ.DDMV (appended, {len(df_new):,})")
 
-# DYDP via PROC IMPORT
-print(f"\nImporting DYDP from {DYDP_CSV} via PROC IMPORT...")
-t0 = time.time()
-rc = sas.submit(f"""
-    proc datasets lib={SAS_LIB_TEMP} nolist;
-      delete DYDP; run;
-    proc import datafile="{DYDP_CSV}"
-         out={SAS_LIB_TEMP}.DYDP
-         dbms=csv replace;
-      getnames=yes;
-      guessingrows=max;
-    run;
-""")
-print(f"  PROC IMPORT returned in {time.time()-t0:.1f}s")
-print(rc['LOG'][-2000:])   # show tail of SAS log for any error
+# ---------------------------------------------------------------------------
+# OPTION A: DYDP import via DATA step + INFILE (10-20x faster than PROC IMPORT)
+# ---------------------------------------------------------------------------
+def import_dydp_via_datastep(csv_path, libref, table):
+    """Fast alternative to PROC IMPORT: explicit types, single sequential read."""
+    print(f"  Reading {csv_path}")
+    print(f"  Size: {os.path.getsize(csv_path)/1e6:.1f} MB")
 
-# verify
-cnt = sas.submit(f"proc sql; select count(*) as N from {SAS_LIB_TEMP}.DYDP; quit;")
-print(cnt['LST'])
+    t0 = time.time()
+    rc = sas.submit(f"""
+        data {libref}.{table};
+          length REPTDATE 8 BRANCH 8 ACCTNO 8 NAME $15 DEBIT 8 CREDIT 8
+                 DEPTYPE $1 DPTYPE $1 PRODUCT 8 PRODCD $8 CURBAL 8
+                 DYDPBAL 8 APPRLIMT 8 ACCYTD 8 OPENDT 8 MOVEMENT 8
+                 MVRANGE 8 CUSTCODE 8 SECOND 8;
+          infile "{csv_path}" dlm=',' dsd firstobs=2 lrecl=1000 missover;
+          input REPTDATE BRANCH ACCTNO NAME $ DEBIT CREDIT DEPTYPE $
+                DPTYPE $ PRODUCT PRODCD $ CURBAL DYDPBAL APPRLIMT
+                ACCYTD OPENDT MOVEMENT MVRANGE CUSTCODE SECOND;
+          format REPTDATE yymmdd10.;
+        run;
+    """)
+    elapsed = time.time() - t0
+    print(f"  ✓ DATA step import: {elapsed:.1f}s")
+
+    # Show any SAS errors
+    log_tail = rc.get('LOG', '')[-1500:]
+    if 'ERROR' in log_tail.upper():
+        print("  ⚠ SAS LOG tail:")
+        print(log_tail)
+
+    # Verify row count
+    cnt = sas.submit(f"proc sql; select count(*) as N from {libref}.{table}; quit;")
+    print(cnt['LST'])
+
+print(f"\nImporting DYDP from {DYDP_CSV} via DATA step...")
+sas.submit(f"proc datasets lib={SAS_LIB_TEMP} nolist; delete DYDP; run;")
+import_dydp_via_datastep(DYDP_CSV, SAS_LIB_TEMP, 'DYDP')
 
 try:
     os.remove(DYDP_CSV)
@@ -479,7 +482,21 @@ if is_weekly_or_monthend and len(sdrnge_pl) > 0:
 
 append_ddmv(ddmv_pl)
 
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
 print("\n" + "=" * 70)
 print("✓ EIBDDEPE Complete")
 print("=" * 70)
+print(f"Report Date : {reptdate.strftime('%d/%m/%Y')} (Week {nowk})")
+print(f"DDMV dedupe : {reptdat3.strftime('%d/%m/%Y')}")
+print(f"Output dirs : MIS={MIS_PATH}  MISQ={MISQ_PATH}  TEMP={TEMP_PATH}")
+print(f"Records     : DYMVNT={len(dymvnt_pl):,}  DYIBU={len(dyibu_pl):,}  "
+      f"DYBRDP={len(dybrdp_pl):,}  DYDDCR={len(dyddcr_pl):,}  "
+      f"DYDPS={len(dydps_pl):,}  DYACE={len(dyace_pl):,}  "
+      f"DDMV={len(ddmv_pl):,}"
+      + (f"  SDRNGE={len(sdrnge_pl):,}" if is_weekly_or_monthend else ""))
+print("=" * 70)
+
 sas.endsas()
