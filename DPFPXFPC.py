@@ -1,544 +1,541 @@
-#!/usr/bin/env python3
 """
-EIBDAWSA - Average Savings Account Analysis
-Exact SAS parity (except REPTDATE = now() - 1 day, per operator instruction).
-Output dataset and file are lowercase: awsa<MM>.sas7bdat
-Input: hive-partitioned parquet at /host_pq/dp/parquet/year=.../month=.../day=.../DPTRBLGS.parquet
+EIBDDEPE - Daily Deposit Position Extract
+Faithful port of original SAS EIBDDEPE program.
+
+SAS-faithful behaviors:
+- REPTDAT3 = REPTDATE - 31 days (used ONLY for MISQ.DDMV dedupe)
+- DDMV: delete REPTDATE = REPTDAT3, then PROC APPEND (rolling ~1 month)
+- Day 01 monthly files: fresh write
+- Other days: delete-by-REPTDATE then append (SAS %MISAPPD macro)
+- SDRNGE: overwrite each run (SAS %WISEPBB)
 """
 
-from __future__ import annotations
-
-import argparse
-import gc
-import logging
-import os
-import sys
-import time
-import warnings
-from dataclasses import dataclass, field
+import polars as pl
 from datetime import datetime, timedelta
-from pathlib import Path
+import os
+import re
 
-import duckdb
-import pandas as pd
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
 
-warnings.filterwarnings('ignore')
+INPUT_FILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDMELW/DPTRBLGS.parquet'
+BASE_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDDEPE'
+DIRS = {
+    'temp': BASE_DIR,
+    'mis': f'{BASE_DIR}/MIS',
+    'misq': f'{BASE_DIR}/MIS/MISQ',
+    'bnm': f'{BASE_DIR}/MIS/MISQ/BNM'
+}
 
-import PBMISFMT
-import PBBDPFMT
+ACE_PRODUCTS = [161, 162, 163, 150, 151, 152, 181]
+EXCL_PROD, EXCL_OPEN = [297, 298], ['B', 'C', 'P']
+AGELIMIT, MAXAGE, AGEBELOW = 12, 18, 11
 
+for d in DIRS.values():
+    os.makedirs(d, exist_ok=True)
 
-# =============================================================================
-# CONFIG
-# =============================================================================
-@dataclass
-class Config:
-    # Hive-partitioned input — {reptyear}/{reptmon}/{reptday} filled at runtime
-    input_template: str = os.getenv(
-        'EIBDAWSA_INPUT',
-        '/host_pq/dp/parquet/year={reptyear}/month={reptmon}/day={reptday}/DPTRBLGS.parquet'
-    )
-    output_dir: Path = field(default_factory=lambda: Path(os.getenv(
-        'EIBDAWSA_OUTPUT',
-        '/host_pq/mis/input/AWSA'
-    )))
+print("=" * 70)
+print("EIBDDEPE - Daily Deposit Position Extract (SAS-faithful port)")
+print("=" * 70)
 
-    sas_cfgname: str = os.getenv('EIBDAWSA_SAS_CFG', 'default')
-    sas_libref: str = 'MISOUT'
+# ============================================================================
+# HELPERS
+# ============================================================================
 
-    duckdb_memory_limit: str = os.getenv('EIBDAWSA_MEM', '12GB')
-    duckdb_threads: int = int(os.getenv('EIBDAWSA_THREADS', '8'))
-    duckdb_tmp_dir: Path = Path('/tmp/duckdb_tmp')
-
-    # SAS macro values
-    agelimit: int = 12
-    maxage: int = 18
-    agebelow: int = 11
-
-    # SAS filter constants
-    bankno: int = 33
-    reptno: int = 1001
-    fmtcode: int = 1
-    exclude_openind: tuple = ('B', 'C', 'P')
-    exclude_products: tuple = (297, 298)
-
-    sa_products: tuple = (204, 207, 215)
-    ca_products: tuple = (93,)
-
-    min_input_rows: int = 1_000
-
-
-# =============================================================================
-# LOGGING (console only — no file)
-# =============================================================================
-def setup_logging(level: int = logging.INFO) -> logging.Logger:
-    logger = logging.getLogger('EIBDAWSA')
-    logger.setLevel(level)
-    logger.handlers.clear()
-    logger.propagate = False
-
-    fmt = logging.Formatter('%(asctime)s | %(levelname)-7s | %(message)s',
-                            datefmt='%Y-%m-%d %H:%M:%S')
-
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(fmt)
-    logger.addHandler(sh)
-
-    return logger
-
-
-# =============================================================================
-# FORMAT HELPER
-# =============================================================================
-def _fmt(func, value, default='0'):
-    """Call a SAS format function; None/NaN → default."""
-    if value is None or (isinstance(value, float) and value != value):
+def parse_date(val):
+    if not val:
+        return None
+    s = re.sub(r'[^0-9]', '', str(int(val)) if isinstance(val, (int, float)) else str(val))
+    if len(s) >= 8:
+        try: return datetime.strptime(s[:8], '%Y%m%d').date()
+        except: pass
+    if len(s) >= 6:
         try:
-            return func(None)
-        except Exception:
-            return default
-    return func(value)
+            y = int(s[:2]) + (1900 if int(s[:2]) >= 70 else 2000)
+            return datetime.strptime(f"{y}{s[2:6]}", '%Y%m%d').date()
+        except: pass
+    return None
 
+def range_ddmove(a):
+    return next((r for r in [300000,500000,1000000,1500000,2000000,3000000,4000000,5000000,10000000] if a < r), 10000001)
 
-# =============================================================================
-# AGE + ACCYTD (SAS parity)
-# =============================================================================
-def calculate_age(bdate_int, reptdate: datetime, cfg: Config) -> int:
-    if bdate_int is None or bdate_int == 0 or pd.isna(bdate_int):
-        return 0
+def range_mvtdep(a):
+    return next((r for r in [5000,10000,30000,50000,75000] if a <= r), 80000)
+
+def range_mvtace(a):
+    return next((r for r in [5000,10000,30000,50000,75000,100000] if a <= r), 200000)
+
+def range_s1(a):
+    return next((r for r in [500,1000,5000,10000,20000,50000,100000,200000] if a < r), 200001)
+
+def range_s2(a):
+    return next((r for r in [1000,5000,10000,50000,100000] if a < r), 100001)
+
+def is_ytd(opendt_str, closedt, year):
     try:
-        s = str(int(bdate_int)).zfill(6)
-        bday, bmonth, byear = int(s[4:6]), int(s[2:4]), int(s[0:2])
-        byear = 1900 + byear if byear > 30 else 2000 + byear
-
-        age = reptdate.year - byear
-        if (bmonth == reptdate.month and bday > reptdate.day) or bmonth > reptdate.month:
-            age -= 1
-
-        if age < cfg.agelimit:
-            return cfg.agebelow
-        if age >= cfg.maxage:
-            return cfg.maxage
-        return cfg.agelimit
-    except Exception:
-        return 0
-
-
-def accytd_flag(opendt, closedt, reptyear: int) -> int:
-    try:
-        opened = int(opendt) if opendt is not None and not pd.isna(opendt) else 0
-        closed = int(closedt) if closedt is not None and not pd.isna(closedt) else 0
-        if opened != 0 and closed == 0:
-            yy = int(str(opened).zfill(6)[:2])
-            yy = 1900 + yy if yy > 30 else 2000 + yy
-            return 1 if yy == reptyear else 0
-    except Exception:
-        pass
+        s = re.sub(r'[^0-9]', '', str(opendt_str).split('.')[0] if '.' in str(opendt_str) else str(opendt_str))
+        if len(s) >= 8 and datetime.strptime(s[:8], '%Y%m%d').date().year == year:
+            return 1
+    except: pass
     return 0
 
-
-# =============================================================================
-# RESOLVE HIVE INPUT PATH
-# =============================================================================
-def resolve_input_path(cfg: Config, reptdate: datetime) -> Path:
-    """Expand {reptyear}/{reptmon}/{reptday} in the hive partition template."""
-    path_str = cfg.input_template.format(
-        reptyear=reptdate.year,
-        reptmon=f"{reptdate.month:02d}",
-        reptday=f"{reptdate.day:02d}",
-    )
-    return Path(path_str)
-
-
-# =============================================================================
-# EXTRACT
-# =============================================================================
-def extract(input_path: Path, cfg: Config, reptdate: datetime,
-            logger: logging.Logger) -> pd.DataFrame:
-    logger.info("Initialising DuckDB (mem=%s, threads=%d)",
-                cfg.duckdb_memory_limit, cfg.duckdb_threads)
-    cfg.duckdb_tmp_dir.mkdir(parents=True, exist_ok=True)
-
-    con = duckdb.connect(':memory:')
-    con.execute(f"PRAGMA memory_limit='{cfg.duckdb_memory_limit}'")
-    con.execute(f"PRAGMA threads={cfg.duckdb_threads}")
-    con.execute(f"PRAGMA temp_directory='{cfg.duckdb_tmp_dir}'")
-
-    try:
-        con.execute(
-            f"CREATE OR REPLACE VIEW dptrblgs AS "
-            f"SELECT * FROM parquet_scan('{input_path}')"
-        )
-
-        cols = con.execute("DESCRIBE dptrblgs").fetchdf()
-        available = {c.upper() for c in cols['column_name'].tolist()}
-        required = {'BANKNO', 'REPTNO', 'FMTCODE', 'BRANCH', 'ACCTNO', 'CLOSEDT',
-                    'OPENDT', 'CUSTCODE', 'PURPOSE', 'OPENIND', 'AVGAMT',
-                    'PRODUCT', 'RACE', 'CURBAL', 'BDATE'}
-        missing = required - available
-        if missing:
-            raise ValueError(f"Missing required columns: {sorted(missing)}")
-
-        col_map = {c.upper(): c for c in cols['column_name'].tolist()}
-
-        def c(name: str) -> str:
-            return f'"{col_map[name.upper()]}"'
-
-        excl_openind = ','.join(f"'{x}'" for x in cfg.exclude_openind)
-        excl_prod    = ','.join(str(x) for x in cfg.exclude_products)
-        all_prod     = ','.join(str(x) for x in (*cfg.sa_products, *cfg.ca_products))
-
-        sql = f"""
-        SELECT
-            {c('BRANCH')}   AS BRANCH,
-            {c('ACCTNO')}   AS ACCTNO,
-            {c('CLOSEDT')}  AS CLOSEDT,
-            {c('OPENDT')}   AS OPENDT,
-            {c('CUSTCODE')} AS CUSTCODE,
-            {c('PURPOSE')}  AS PURPOSE,
-            {c('OPENIND')}  AS OPENIND,
-            {c('AVGAMT')}   AS AVGAMT,
-            {c('PRODUCT')}  AS PRODUCT,
-            {c('RACE')}     AS RACE,
-            {c('CURBAL')}   AS CURBAL,
-            {c('BDATE')}    AS BDATE
-        FROM dptrblgs
-        WHERE {c('BANKNO')}  = {cfg.bankno}
-          AND {c('REPTNO')}  = {cfg.reptno}
-          AND {c('FMTCODE')} = {cfg.fmtcode}
-          AND UPPER(TRIM(CAST({c('OPENIND')} AS VARCHAR))) NOT IN ({excl_openind})
-          AND {c('PRODUCT')} NOT IN ({excl_prod})
-          AND {c('PRODUCT')} IN ({all_prod})
-        """
-        df = con.execute(sql).fetchdf()
-    finally:
-        con.close()
-        gc.collect()
-
-    logger.info("Extracted %d rows (products %s)",
-                len(df), sorted((*cfg.sa_products, *cfg.ca_products)))
-
-    if len(df) < cfg.min_input_rows:
-        raise ValueError(
-            f"Extracted {len(df)} rows, below threshold {cfg.min_input_rows}"
-        )
-
-    if df.empty:
-        return df
-
-    df['PRODUCT']  = df['PRODUCT'].astype('int64')
-    df['CUSTCODE'] = pd.to_numeric(df['CUSTCODE'], errors='coerce').fillna(0).astype('int64')
-    df['BRANCH']   = pd.to_numeric(df['BRANCH'],   errors='coerce').fillna(0).astype('int64')
-    df['AVGAMT']   = pd.to_numeric(df['AVGAMT'],   errors='coerce').fillna(0.0).astype('float64')
-    df['CURBAL']   = pd.to_numeric(df['CURBAL'],   errors='coerce').fillna(0.0).astype('float64')
-    return df
-
-
-# =============================================================================
-# ALWSA / ALWSS (products 204, 207, 215)
-# =============================================================================
-def build_alwsa(df: pd.DataFrame, reptdate: datetime, cfg: Config,
-                logger: logging.Logger) -> pd.DataFrame:
-    sa = df[df['PRODUCT'].isin(cfg.sa_products)].copy()
-    if sa.empty:
-        logger.info("ALWSA/ALWSS pass: 0 rows")
-        return sa
-
-    logger.info("ALWSA/ALWSS pass: %d rows", len(sa))
-
-    sa['CUSTCD']  = sa['CUSTCODE'].map(lambda v: _fmt(PBBDPFMT.sacustcd_format, v, default='78'))
-    sa['PRODCD']  = sa['PRODUCT'].map(lambda v: _fmt(PBBDPFMT.saprod_format, v, default='42120'))
-    sa['DENOM']   = sa['PRODUCT'].map(lambda v: _fmt(PBBDPFMT.sadenom_format, v, default='D'))
-    sa['STATECD'] = sa['BRANCH'].map(lambda v: _fmt(PBBDPFMT.statecd_format, v, default='B'))
-    sa['AVGRNGE'] = sa['AVGAMT'].map(lambda v: _fmt(PBBDPFMT.ddrange_format, v, default='5000001'))
-    sa['AGE']     = sa['BDATE'].map(lambda v: calculate_age(v, reptdate, cfg))
-    sa['ACCYTD']  = sa.apply(
-        lambda r: accytd_flag(r['OPENDT'], r['CLOSEDT'], reptdate.year), axis=1
-    )
-
-    # DATA ALWSA1: DEPRANGE = PUT(CURBAL, IWSRNGE.)
-    sa['DEPRANGE'] = sa['CURBAL'].map(lambda v: _fmt(PBMISFMT.IWSRNGE, v, default=' '))
-
-    sa['PURPOSE'] = (sa['PURPOSE'].astype(str).str.strip()
-                       .replace({'': '0', 'nan': '0', 'None': '0'}))
-    sa['RACE']    = (sa['RACE'].astype(str).str.strip()
-                       .replace({'': '0', 'nan': '0', 'None': '0'}))
-    return sa
-
-
-# =============================================================================
-# ALWBC (product 93)
-# =============================================================================
-def build_alwbc(df: pd.DataFrame, reptdate: datetime, cfg: Config,
-                logger: logging.Logger) -> pd.DataFrame:
-    ca = df[df['PRODUCT'].isin(cfg.ca_products)].copy()
-    if ca.empty:
-        logger.info("ALWBC pass: 0 rows")
-        return ca
-
-    logger.info("ALWBC pass: %d rows", len(ca))
-
-    ca['CUSTCD']  = ca['CUSTCODE'].map(lambda v: _fmt(PBBDPFMT.ddcustcd_format, v, default='79'))
-    ca['PRODCD']  = ca['PRODUCT'].map(lambda v: _fmt(PBBDPFMT.caprod_format, v, default='42110'))
-    ca['DENOM']   = ca['PRODUCT'].map(lambda v: _fmt(PBBDPFMT.cadenom_format, v, default='D'))
-    ca['STATECD'] = ca['BRANCH'].map(lambda v: _fmt(PBBDPFMT.statecd_format, v, default='B'))
-    ca['AVGRNGE'] = ca['AVGAMT'].map(lambda v: _fmt(PBBDPFMT.ddrange_format, v, default='5000001'))
-    ca['AGE']     = ca['BDATE'].map(lambda v: calculate_age(v, reptdate, cfg))
-    ca['ACCYTD']  = ca.apply(
-        lambda r: accytd_flag(r['OPENDT'], r['CLOSEDT'], reptdate.year), axis=1
-    )
-
-    # DATA ALWBC1: DEPRANGE = PUT(CURBAL, IBWSRNGD.)
-    ca['DEPRANGE'] = ca['CURBAL'].map(lambda v: _fmt(PBMISFMT.IBWSRNGD, v, default=' '))
-
-    ca['PURPOSE'] = ca['PURPOSE'].astype(str).str.strip().replace(
-        {'': ' ', 'nan': ' ', 'None': ' '}
-    )
-    ca['RACE'] = ca['RACE'].astype(str).str.strip().replace(
-        {'': '0', 'nan': '0', 'None': '0'}
-    )
-    return ca
-
-
-# =============================================================================
-# AGGREGATE (PROC SUMMARY NWAY)
-# =============================================================================
-def aggregate(combined: pd.DataFrame, reptdate: datetime,
-              logger: logging.Logger) -> pd.DataFrame:
-    logger.info("Aggregating %d rows …", len(combined))
-
-    agg = (
-        combined.groupby(
-            ['PURPOSE', 'RACE', 'CUSTCD', 'AVGRNGE', 'DEPRANGE', 'PRODUCT'],
-            dropna=False
-        )
-        .agg(
-            NOACCT  = ('ACCTNO', 'count'),
-            CURBAL  = ('CURBAL', 'sum'),
-            AVGACCT = ('AVGAMT', 'count'),
-            AVGAMT  = ('AVGAMT', 'sum'),
-            ACCYTD  = ('ACCYTD', 'sum'),
-        )
-        .reset_index()
-    )
-
-    agg['REPTDATE'] = int(reptdate.strftime('%Y%m%d'))
-
-    denom_lookup  = combined.drop_duplicates('PRODUCT').set_index('PRODUCT')['DENOM'].to_dict()
-    prodcd_lookup = combined.drop_duplicates('PRODUCT').set_index('PRODUCT')['PRODCD'].to_dict()
-    agg['DENOM']  = agg['PRODUCT'].map(denom_lookup)
-    agg['PRODCD'] = agg['PRODUCT'].map(prodcd_lookup)
-
-    for col in ('NOACCT', 'AVGACCT', 'ACCYTD', 'REPTDATE'):
-        agg[col] = agg[col].astype('int64')
-
-    logger.info("Aggregated to %d rows", len(agg))
-    return agg
-
-
-# =============================================================================
-# RECONCILE
-# =============================================================================
-def reconcile(raw: pd.DataFrame, agg: pd.DataFrame, logger: logging.Logger) -> None:
-    raw_n, raw_b = len(raw), float(raw['CURBAL'].sum())
-    agg_n, agg_b = int(agg['NOACCT'].sum()), float(agg['CURBAL'].sum())
-    if raw_n != agg_n:
-        raise ValueError(f"Row reconciliation: raw={raw_n} agg={agg_n}")
-    if abs(raw_b - agg_b) > 0.01:
-        raise ValueError(f"Balance reconciliation: raw={raw_b:,.2f} agg={agg_b:,.2f}")
-    logger.info("Reconciliation OK: %d accounts, RM %s", agg_n, f"{agg_b:,.2f}")
-
-
-# =============================================================================
-# SAS WRITE
-# =============================================================================
-def write_sas(df: pd.DataFrame, table_name: str, cfg: Config,
-              logger: logging.Logger, append: bool = False) -> Path:
-    import saspy
-
-    sas_table = table_name.lower()
-
-    logger.info("Connecting to SAS (cfg=%s) …", cfg.sas_cfgname)
-    sas = saspy.SASsession(cfgname=cfg.sas_cfgname)
-
-    try:
-        sas.saslib(cfg.sas_libref, path=str(cfg.output_dir))
-        assigned = [x.upper() for x in sas.assigned_librefs()]
-        if cfg.sas_libref.upper() not in assigned:
-            raise RuntimeError(
-                f"Libref {cfg.sas_libref} not assigned. Present: {assigned}"
-            )
-        logger.info("Libref %s → %s", cfg.sas_libref, cfg.output_dir)
-
-        if not append:
-            logger.info("Ensuring prior %s.%s is removed (if present)",
-                        cfg.sas_libref, sas_table)
-            del_res = sas.submit(f"""
-                proc datasets lib={cfg.sas_libref} nolist;
-                    delete {sas_table};
-                quit;
-            """)
-            del_log = del_res.get('LOG', '') if isinstance(del_res, dict) else ''
-            if 'ERROR' in del_log.upper():
-                logger.warning("PROC DATASETS delete log tail:\n%s", del_log[-1000:])
-
-        logger.info("df2sd → %s.%s (%d rows)",
-                    cfg.sas_libref, sas_table, len(df))
-        write_res = sas.df2sd(df, table=sas_table, libref=cfg.sas_libref)
-        write_log = write_res.get('LOG', '') if isinstance(write_res, dict) else ''
-        if 'ERROR' in write_log.upper():
-            logger.error("df2sd LOG tail:\n%s", write_log[-2000:])
-            raise RuntimeError(
-                f"df2sd reported ERROR for {cfg.sas_libref}.{sas_table}"
-            )
-
-        if append:
-            logger.info("PROC APPEND into %s.%s", cfg.sas_libref, sas_table)
-            app_res = sas.submit(f"""
-                proc append base={cfg.sas_libref}.{sas_table}
-                             data=WORK.{sas_table} FORCE;
-                run;
-                proc datasets lib=WORK nolist;
-                    delete {sas_table};
-                quit;
-            """)
-            app_log = app_res.get('LOG', '') if isinstance(app_res, dict) else ''
-            if 'ERROR' in app_log.upper():
-                logger.error("PROC APPEND LOG tail:\n%s", app_log[-2000:])
-                raise RuntimeError(
-                    f"PROC APPEND failed for {cfg.sas_libref}.{sas_table}"
-                )
-
-        verify = sas.submit(f"""
-            data _null_;
-                if exist("{cfg.sas_libref}.{sas_table}") then
-                    put "EIBDAWSA_EXIST=1";
-                else
-                    put "EIBDAWSA_EXIST=0";
-            run;
-        """)
-        verify_log = verify.get('LOG', '') if isinstance(verify, dict) else ''
-        if 'EIBDAWSA_EXIST=1' not in verify_log:
-            logger.error("SAS says %s.%s does NOT exist. LOG tail:\n%s",
-                         cfg.sas_libref, sas_table, verify_log[-2000:])
-            raise RuntimeError(
-                f"SAS reports {cfg.sas_libref}.{sas_table} does NOT exist"
-            )
-        logger.info("SAS confirms %s.%s exists", cfg.sas_libref, sas_table)
-
-    finally:
-        try:
-            sas.endsas()
-        except Exception:
-            pass
-
-    try:
-        os.sync()
-    except Exception:
-        pass
-    time.sleep(1.0)
-
-    target = cfg.output_dir / f"{sas_table}.sas7bdat"
-    if not target.exists():
-        matches = [p for p in cfg.output_dir.iterdir()
-                   if p.name.lower() == f"{sas_table}.sas7bdat"]
-        if matches:
-            target = matches[0]
-            logger.info("Found (case-insensitive): %s", target)
-        else:
-            raise RuntimeError(f"Expected file not on disk: {target}")
-
-    size = target.stat().st_size
-    if size == 0:
-        raise RuntimeError(f"File on disk is 0 bytes: {target}")
-
-    logger.info("SAS dataset written: %s (%d bytes)", target, size)
-    return target
-
-
-# =============================================================================
-# MAIN
-# =============================================================================
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description='EIBDAWSA — SAS-parity pipeline')
-    p.add_argument('--date', help='Report date YYYY-MM-DD (default: yesterday)')
-    p.add_argument('--dry-run', action='store_true')
-    p.add_argument('--append', action='store_true',
-                   help='Append instead of replace (SAS PROC APPEND parity)')
-    p.add_argument('--verbose', action='store_true')
-    return p.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    cfg = Config()
-
-    # REPTDATE = now() - 1 day (SAS reads TBDATE; overridden per instruction)
-    if args.date:
-        reptdate = datetime.strptime(args.date, '%Y-%m-%d')
-    else:
-        reptdate = (datetime.now() - timedelta(days=1)).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-    table_name = f"awsa{reptdate.month:02d}"
-
-    # Hive-partitioned input path resolved from REPTDATE
-    input_path = resolve_input_path(cfg, reptdate)
-
-    logger = setup_logging(logging.DEBUG if args.verbose else logging.INFO)
-    logger.info("=" * 78)
-    logger.info("EIBDAWSA START")
-    logger.info("=" * 78)
-    logger.info("Report date : %s", reptdate.strftime('%d/%m/%Y'))
-    logger.info("Input       : %s", input_path)
-    logger.info("Output dir  : %s", cfg.output_dir)
-    logger.info("Target      : %s.%s", cfg.sas_libref, table_name)
-    logger.info("Mode        : %s",
-                'dry-run' if args.dry_run else 'append' if args.append else 'replace')
-
-    if not input_path.exists():
-        logger.error("Input not found: %s", input_path)
-        return 1
-
-    try:
-        raw = extract(input_path, cfg, reptdate, logger)
-        if raw.empty:
-            logger.warning("No rows after filtering")
-            return 0
-
-        alwsa = build_alwsa(raw, reptdate, cfg, logger)
-        alwbc = build_alwbc(raw, reptdate, cfg, logger)
-
-        combined = pd.concat([alwsa, alwbc], ignore_index=True, sort=False)
-        logger.info("Combined ALWSA+ALWBC: %d rows", len(combined))
-
-        agg = aggregate(combined, reptdate, logger)
-        reconcile(combined, agg, logger)
-
-        logger.info("-" * 78)
-        logger.info("Total accounts     : %d", int(agg['NOACCT'].sum()))
-        logger.info("Total balance      : RM %s", f"{agg['CURBAL'].sum():,.2f}")
-        logger.info("Total average amt  : RM %s", f"{agg['AVGAMT'].sum():,.2f}")
-        logger.info("New accts this year: %d", int(agg['ACCYTD'].sum()))
-        for prod, cnt in agg.groupby('PRODUCT')['NOACCT'].sum().items():
-            logger.info("  Product %3d      : %d", int(prod), int(cnt))
-        logger.info("-" * 78)
-
-        if args.dry_run:
-            logger.info("Dry-run — skipping SAS write")
-            return 0
-
-        target = write_sas(agg, table_name, cfg, logger, append=args.append)
-        logger.info("EIBDAWSA END — success. Output: %s", target)
+def calc_age(bdate, year, mon, day):
+    if not bdate:
         return 0
+    try:
+        s = re.sub(r'[^0-9]', '', str(bdate).split('.')[0] if '.' in str(bdate) else str(bdate))
+        if len(s) >= 8:
+            bd = datetime.strptime(s[:8], '%Y%m%d').date()
+        else:
+            y = int(s[:2]) + (1900 if int(s[:2]) >= 70 else 2000)
+            bd = datetime.strptime(f"{y}{s[2:6]}", '%Y%m%d').date()
+        age = year - bd.year
+        boundary = (bd.month == mon and bd.day > day) or bd.month > mon
+        if age == AGELIMIT and boundary: return AGEBELOW
+        if age == MAXAGE and boundary: return AGELIMIT
+        return max(AGELIMIT, min(MAXAGE, age)) if age < AGELIMIT or age > MAXAGE else age
+    except: return 0
 
-    except MemoryError as e:
-        logger.exception("OOM: %s", e)
-        return 1
-    except Exception as e:
-        logger.exception("EIBDAWSA failed: %s", e)
-        return 1
+def get_prodcd(deptype, prod):
+    if deptype == 'S':
+        return '42320' if prod in [210, 211, 214] else '42120'
+    if deptype in ['D', 'N']:
+        if prod in [150, 151, 152, 181]: return '42110'
+        if prod in [61, 161]: return '42310'
+        if prod in [63, 163]: return '42180'
+        return '42180'
+    if deptype == 'C':
+        return '42132' if prod in [317, 318] else '42130'
+    return ''
 
+def days_in_month(year, month):
+    if month == 2:
+        return 29 if year % 4 == 0 else 28
+    elif month in [4, 6, 9, 11]:
+        return 30
+    else:
+        return 31
 
-if __name__ == '__main__':
-    sys.exit(main())
+# ============================================================================
+# READ & FILTER
+# ============================================================================
+
+print("\nReading DPTRBL Parquet...")
+df = pl.read_parquet(INPUT_FILE)
+print(f"  Loaded {len(df):,} records")
+
+reptdate = None
+for col in ['TBDATE', 'REPTDATE', 'REPTDT']:
+    if col in df.columns:
+        reptdate = parse_date(df.select(col).row(0)[0])
+        if reptdate:
+            print(f"  Date: {reptdate.strftime('%d/%m/%Y')}")
+            break
+if not reptdate:
+    reptdate = datetime.now().date()
+    print(f"  Using: {reptdate}")
+
+reptyear, reptmon, reptday = reptdate.year, reptdate.month, reptdate.day
+nowk = str((reptday - 1) // 8 + 1) if reptday <= 24 else '4'
+
+# SAS: REPTDAT3 = REPTDATE - 31  (explicitly 31 days for DDMV rolling dedupe)
+reptdat3 = reptdate - timedelta(days=31)
+rdate   = reptdate.strftime('%d%m%y')
+rdate3  = reptdat3.strftime('%d%m%y')
+
+print(f"  Week: {nowk}, Month: {reptmon:02d}, Day: {reptday:02d}")
+print(f"  DDMV dedupe target (REPTDAT3 = REPTDATE - 31): {rdate3}")
+
+# Column mapping
+col_map = {'BANKNO':['BANKNO','BANK'], 'REPTNO':['REPTNO'], 'FMTCODE':['FMTCODE'],
+    'BRANCH':['BRANCH'], 'ACCTNO':['ACCTNO'], 'NAME':['NAME'], 'DEBIT':['DEBIT'],
+    'CREDIT':['CREDIT'], 'CLOSEDT':['CLOSEDT'], 'OPENDT':['OPENDT'],
+    'CUSTCODE':['CUSTCODE'], 'PURPOSE':['PURPOSE'], 'OPENIND':['OPENIND'],
+    'RACE':['RACE'], 'PRODUCT':['PRODUCT'], 'DEPTYPE':['DEPTYPE'],
+    'CURBAL':['CURBAL'], 'APPRLIMT':['APPRLIMT'], 'BDATE':['BDATE'],
+    'SECOND':['SECOND']}
+
+rename = {}
+for std, alts in col_map.items():
+    for alt in alts:
+        if alt in df.columns:
+            rename[alt] = std
+            break
+if rename:
+    df = df.rename(rename)
+
+df = df.filter(
+    (pl.col('BANKNO') == 33) & (pl.col('REPTNO') == 1001) & (pl.col('FMTCODE') == 1)
+)
+print(f"  Filtered (bank/rept/fmt): {len(df):,}")
+
+df = df.filter(
+    (~pl.col('OPENIND').is_in(EXCL_OPEN)) & (~pl.col('PRODUCT').is_in(EXCL_PROD))
+)
+print(f"  After OPENIND/PRODUCT filter: {len(df):,}")
+
+# ============================================================================
+# ENRICH
+# ============================================================================
+
+df = df.with_columns([
+    pl.col('OPENDT').cast(pl.String).alias('OPENDT_STR'),
+    pl.col('CLOSEDT').cast(pl.String).alias('CLOSEDT_STR'),
+    pl.when(pl.col('BRANCH') == 132).then(168).otherwise(pl.col('BRANCH')).alias('BRANCH'),
+    (pl.col('CREDIT') - pl.col('DEBIT')).alias('MOVEMENT'),
+    pl.col('CURBAL').alias('DYDPBAL'),
+    pl.lit(reptdate).alias('REPTDATE')
+])
+
+df = df.with_columns(
+    pl.struct(['OPENDT_STR', 'CLOSEDT']).map_elements(
+        lambda x: is_ytd(x['OPENDT_STR'], x['CLOSEDT'], reptyear), pl.Int64
+    ).alias('ACCYTD')
+)
+
+df = df.with_columns(
+    pl.struct(['DEPTYPE', 'PRODUCT']).map_elements(
+        lambda x: get_prodcd(x['DEPTYPE'], x['PRODUCT']), pl.String
+    ).alias('PRODCD')
+)
+
+df = df.with_columns(
+    pl.when(pl.col('DEPTYPE') == 'S').then(pl.lit('S'))
+     .otherwise(pl.lit('D'))
+     .alias('DPTYPE')
+)
+
+df = df.with_columns([
+    pl.when(pl.col('PRODUCT').is_in(ACE_PRODUCTS))
+      .then(pl.col('MOVEMENT').abs().map_elements(range_mvtace, pl.Int64))
+      .otherwise(pl.col('MOVEMENT').abs().map_elements(range_mvtdep, pl.Int64))
+      .alias('MVRANGE')
+])
+
+print(f"  Enriched: {len(df):,} records")
+
+# ============================================================================
+# SPLIT INTO DYDP, DDMV, SAVG
+# ============================================================================
+
+dydp_s = df.filter((pl.col('DEPTYPE') == 'S') & (pl.col('CURBAL') >= 0) &
+                   (pl.col('PRODCD').is_in(['42120', '42320'])))
+
+dydp_d = df.filter((pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') >= 0) &
+                   (pl.col('PRODCD').is_in(['42110', '42180', '42310'])))
+
+dydp = pl.concat([dydp_s, dydp_d]).select([
+    'REPTDATE', 'BRANCH', 'ACCTNO', 'NAME', 'DEBIT', 'CREDIT', 'DEPTYPE',
+    'DPTYPE', 'PRODUCT', 'PRODCD', 'CURBAL', 'DYDPBAL', 'APPRLIMT',
+    'ACCYTD', 'OPENDT', 'MOVEMENT', 'MVRANGE', 'CUSTCODE', 'SECOND'
+])
+
+ddmv = df.filter(
+    (pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') < 0) &
+    (pl.col('PRODCD').is_in(['42110', '42310']))
+).select([
+    'REPTDATE', 'BRANCH', 'ACCTNO', 'NAME', 'DEBIT', 'CREDIT', 'DEPTYPE',
+    'PRODCD', 'PRODUCT', 'CURBAL'
+])
+
+# SAS: MTHEND='Y' if REPTDAY = days_in_month; weekly if day in (08,15,22)
+mth = days_in_month(reptyear, reptmon)
+is_weekly_or_monthend = (reptday in [8, 15, 22]) or (reptday == mth)
+
+if is_weekly_or_monthend:
+    savg = df.filter((pl.col('DEPTYPE') == 'S') & (pl.col('CURBAL') >= 0)).with_columns([
+        pl.struct(['BDATE']).map_elements(
+            lambda x: calc_age(x['BDATE'], reptyear, reptmon, reptday), pl.Int64
+        ).alias('AGE'),
+        pl.col('CURBAL').map_elements(range_s1, pl.Int64).alias('RANGE'),
+        pl.col('CURBAL').map_elements(range_s2, pl.Int64).alias('R2NGE')
+    ]).select([
+        'ACCTNO', 'BRANCH', 'PRODUCT', 'DEPTYPE', 'NAME', 'OPENIND',
+        'RANGE', 'RACE', 'BDATE', 'CURBAL', 'PURPOSE', 'PRODCD',
+        'AGE', 'ACCYTD', 'OPENDT', 'R2NGE'
+    ])
+else:
+    savg = pl.DataFrame([])
+
+# ============================================================================
+# BRANCH-LEVEL SUMS
+# ============================================================================
+
+def branch_sum(df, valcol='CURBAL', cnt=False):
+    if len(df) == 0:
+        return {}
+    out = df.group_by('BRANCH').agg(
+        [pl.len().alias('CNT')] if cnt else [pl.col(valcol).sum().alias('SUM')]
+    )
+    return dict(zip(out['BRANCH'].to_list(), out[out.columns[1]].to_list()))
+
+s_pos = df.filter((pl.col('DEPTYPE') == 'S') & (pl.col('CURBAL') >= 0))
+SA_branch    = branch_sum(s_pos.filter(pl.col('PRODCD') == '42120'))
+SACAI_branch = branch_sum(s_pos.filter(pl.col('PRODCD') == '42320'))
+SAI_branch   = SACAI_branch.copy()
+SNO_branch   = branch_sum(s_pos.filter(pl.col('PRODCD') == '42320'), cnt=True)
+MBS_branch   = branch_sum(s_pos.filter((pl.col('PRODCD') == '42320') & (pl.col('PRODUCT') == 214)))
+MBSNO_branch = branch_sum(s_pos.filter((pl.col('PRODCD') == '42320') & (pl.col('PRODUCT') == 214)), cnt=True)
+
+d_pos = df.filter((pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') >= 0))
+CA_branch   = branch_sum(d_pos.filter(pl.col('PRODCD') == '42110'))
+HDA_branch  = branch_sum(d_pos.filter(pl.col('PRODCD') == '42180'))
+CAI_branch  = branch_sum(d_pos.filter(pl.col('PRODCD') == '42310'))
+CNO_branch  = branch_sum(d_pos.filter(pl.col('PRODCD') == '42310'), cnt=True)
+CAIG_branch = branch_sum(d_pos.filter((pl.col('PRODCD') == '42310') & (pl.col('PRODUCT').is_in([61, 161]))))
+CGNO_branch = branch_sum(d_pos.filter((pl.col('PRODCD') == '42310') & (pl.col('PRODUCT').is_in([61, 161]))), cnt=True)
+CAI_branch  = {k: CAI_branch.get(k, 0) + v for k, v in
+               branch_sum(d_pos.filter((pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63, 163])))).items()}
+CNO_branch  = {k: CNO_branch.get(k, 0) + v for k, v in
+               branch_sum(d_pos.filter((pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63, 163]))), cnt=True).items()}
+CAIH_branch = branch_sum(d_pos.filter((pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63, 163]))))
+CHNO_branch = branch_sum(d_pos.filter((pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63, 163]))), cnt=True)
+
+# Overdraft contribution to CAI/CAIH (SAS: CURBAL negative added to CAI{BRANCH})
+od = df.filter((pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('CURBAL') < 0))
+for k, v in branch_sum(od.filter(pl.col('PRODCD') == '42310')).items():
+    CAI_branch[k] = CAI_branch.get(k, 0) + v
+for k, v in branch_sum(od.filter(pl.col('PRODCD') == '42310'), cnt=True).items():
+    CNO_branch[k] = CNO_branch.get(k, 0) + v
+for k, v in branch_sum(od.filter((pl.col('PRODCD') == '42310') & (pl.col('PRODUCT').is_in([61, 161])))).items():
+    CAIG_branch[k] = CAIG_branch.get(k, 0) + v
+for k, v in branch_sum(od.filter((pl.col('PRODCD') == '42310') & (pl.col('PRODUCT').is_in([61, 161]))), cnt=True).items():
+    CGNO_branch[k] = CGNO_branch.get(k, 0) + v
+for k, v in branch_sum(od.filter((pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63, 163])))).items():
+    CAI_branch[k] = CAI_branch.get(k, 0) + v
+for k, v in branch_sum(od.filter((pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63, 163]))), cnt=True).items():
+    CNO_branch[k] = CNO_branch.get(k, 0) + v
+for k, v in branch_sum(od.filter((pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63, 163])))).items():
+    CAIH_branch[k] = CAIH_branch.get(k, 0) + v
+for k, v in branch_sum(od.filter((pl.col('PRODCD') == '42180') & (pl.col('PRODUCT').is_in([63, 163]))), cnt=True).items():
+    CHNO_branch[k] = CHNO_branch.get(k, 0) + v
+
+# ============================================================================
+# TOTALS
+# ============================================================================
+
+def safe_sum(s): return float(s) if s is not None else 0.0
+
+totals = {
+    'TOTSAVG':  safe_sum(dydp_s.filter(pl.col('PRODCD') == '42120')['CURBAL'].sum()),
+    'TOTSAVGI': safe_sum(dydp_s.filter(pl.col('PRODCD') == '42320')['CURBAL'].sum()),
+    'TOTDMND':  safe_sum(dydp_d.filter(pl.col('PRODCD').is_in(['42110', '42180']))['CURBAL'].sum()),
+    'TOTDMNDI': safe_sum(dydp_d.filter(pl.col('PRODCD') == '42310')['CURBAL'].sum()),
+    'TOTVOSF':  safe_sum(dydp_d.filter(pl.col('PRODUCT') == 105)['CURBAL'].sum()),
+    'TOTVOSC':  safe_sum(dydp_d.filter(pl.col('PRODUCT') == 104)['CURBAL'].sum()),
+    'OVDVOSF':  safe_sum(od.filter(pl.col('PRODUCT') == 105)['CURBAL'].sum()),
+    'OVDVOSC':  safe_sum(od.filter(pl.col('PRODUCT') == 104)['CURBAL'].sum()),
+    'TOTOVFT':  safe_sum(od['CURBAL'].sum()),
+    'TOTFD':    safe_sum(df.filter((pl.col('DEPTYPE') == 'C') & (pl.col('PRODCD') == '42130'))['CURBAL'].sum()),
+    'TOTFDI':   safe_sum(df.filter((pl.col('DEPTYPE') == 'C') & (pl.col('PRODCD') == '42132'))['CURBAL'].sum()),
+    'ACESA':    safe_sum(dydp_s.filter(pl.col('PRODUCT').is_in(ACE_PRODUCTS))['CURBAL'].sum()),
+    'ACECA':    safe_sum(dydp_d.filter(pl.col('PRODUCT').is_in(ACE_PRODUCTS))['CURBAL'].sum()),
+    'TOTMBSA':  safe_sum(dydp_s.filter((pl.col('PRODCD') == '42320') & (pl.col('PRODUCT') == 214))['CURBAL'].sum()),
+}
+
+# ============================================================================
+# OUTPUT DATAFRAMES
+# ============================================================================
+
+dyposn = pl.DataFrame([{'REPTDATE': reptdate, **totals}])
+
+all_branches = sorted(set().union(*[
+    set(d.keys()) for d in [SAI_branch, CAI_branch, CAIG_branch, CAIH_branch,
+                            SNO_branch, CNO_branch, CGNO_branch, CHNO_branch,
+                            MBS_branch, MBSNO_branch] if d
+]))
+
+dyibu_rows = []
+for br in all_branches:
+    row = {
+        'REPTDATE': reptdate, 'BRANCH': br,
+        'SAI': SAI_branch.get(br, 0.0), 'CAI': CAI_branch.get(br, 0.0),
+        'CAIG': CAIG_branch.get(br, 0.0), 'CAIH': CAIH_branch.get(br, 0.0),
+        'MBS': MBS_branch.get(br, 0.0), 'SNO': SNO_branch.get(br, 0),
+        'CNO': CNO_branch.get(br, 0), 'CGNO': CGNO_branch.get(br, 0),
+        'CHNO': CHNO_branch.get(br, 0), 'MBSNO': MBSNO_branch.get(br, 0),
+    }
+    if any(v != 0 for k, v in row.items() if k not in ('REPTDATE', 'BRANCH')):
+        dyibu_rows.append(row)
+
+dyibu = pl.DataFrame(dyibu_rows) if dyibu_rows else pl.DataFrame(
+    schema={'REPTDATE': pl.Date, 'BRANCH': pl.Int64, 'SAI': pl.Float64,
+            'CAI': pl.Float64, 'CAIG': pl.Float64, 'CAIH': pl.Float64,
+            'MBS': pl.Float64, 'SNO': pl.Int64, 'CNO': pl.Int64,
+            'CGNO': pl.Int64, 'CHNO': pl.Int64, 'MBSNO': pl.Int64}
+)
+
+dymvnt = dydp.filter(
+    ((pl.col('DEPTYPE') == 'S') & (pl.col('MOVEMENT').abs() >= 50000)) |
+    ((pl.col('DEPTYPE').is_in(['D', 'N'])) & (pl.col('DPTYPE') == 'D') &
+     (((pl.col('MOVEMENT').abs() >= 100000) & (pl.col('PRODUCT').is_in(ACE_PRODUCTS))) |
+      (pl.col('MOVEMENT').abs() >= 1000000)))
+).select([
+    'REPTDATE', 'BRANCH', 'ACCTNO', 'NAME', 'DEBIT', 'CREDIT', 'DEPTYPE',
+    'PRODUCT', 'CURBAL', 'APPRLIMT', 'CUSTCODE', 'SECOND'
+])
+
+dybrdp = dydp.filter(
+    (~pl.col('PRODCD').is_in(['42320', '42310'])) &
+    (~pl.col('PRODUCT').is_in([104, 105]))
+).group_by(['BRANCH', 'DPTYPE', 'REPTDATE']).agg(
+    pl.col('DYDPBAL').sum().alias('BALANCE')
+).select(['BRANCH', 'DPTYPE', 'REPTDATE', 'BALANCE'])
+
+dyddcr_base = dydp.filter(
+    (pl.col('DPTYPE') == 'D') &
+    (~pl.col('PRODUCT').is_in(ACE_PRODUCTS)) &
+    (pl.col('PRODCD') != '42310') &
+    (pl.col('PRODUCT') != 72) &
+    (pl.col('CURBAL') >= 0)
+).with_columns([
+    (pl.col('CURBAL') - (pl.col('CREDIT') - pl.col('DEBIT'))).alias('PREBAL'),
+    pl.when(pl.col('CURBAL') - (pl.col('CREDIT') - pl.col('DEBIT')) < 0)
+      .then(pl.col('CURBAL'))
+      .otherwise(pl.col('CURBAL') - (pl.col('CURBAL') - (pl.col('CREDIT') - pl.col('DEBIT'))))
+      .alias('MOVEMENT_ADJ')
+])
+
+if len(dyddcr_base) > 0:
+    dyddcr = dyddcr_base.with_columns(
+        pl.col('MOVEMENT_ADJ').abs().map_elements(range_ddmove, pl.Int64).alias('RANGE')
+    ).group_by(['REPTDATE', 'RANGE']).agg(
+        pl.col('MOVEMENT_ADJ').sum().alias('MOVEMENT')
+    )
+else:
+    dyddcr = pl.DataFrame(schema={'REPTDATE': pl.Date, 'RANGE': pl.Int64, 'MOVEMENT': pl.Float64})
+
+dydps = dydp.filter(
+    (pl.col('DPTYPE') == 'S') &
+    (~pl.col('PRODUCT').is_in(ACE_PRODUCTS)) &
+    (pl.col('PRODCD') == '42120')
+).group_by(['REPTDATE', 'MVRANGE']).agg(pl.col('MOVEMENT').sum())
+
+dyace = dydp.filter(
+    (pl.col('DPTYPE') == 'D') &
+    (pl.col('PRODUCT').is_in(ACE_PRODUCTS))
+).group_by(['REPTDATE', 'MVRANGE']).agg(pl.col('MOVEMENT').sum())
+
+if is_weekly_or_monthend and len(savg) > 0:
+    sdrnge = savg.group_by(['BRANCH', 'RACE', 'PRODCD', 'PRODUCT', 'RANGE', 'AGE', 'R2NGE']).agg([
+        pl.len().alias('NOACCT'),
+        pl.col('CURBAL').sum(),
+        pl.col('ACCYTD').sum()
+    ])
+else:
+    sdrnge = pl.DataFrame([])
+
+# ============================================================================
+# UPSERT / APPEND LOGIC (matches SAS exactly)
+# ============================================================================
+
+def upsert_monthly(df_new, name, dir_key):
+    """SAS %MISAPPD:
+       - REPTDAY = '01': delete file, write fresh
+       - Else: read old, delete rows with REPTDATE = current, append new
+    """
+    if len(df_new) == 0:
+        print(f"  ⚠ {name.format(month=reptmon)}: No data")
+        return
+    path = f"{DIRS[dir_key]}/{name.format(month=reptmon)}"
+    if reptday == 1:
+        # SAS: PROC DATASETS DELETE then PROC APPEND
+        df_new.write_parquet(path)
+        print(f"  ✓ {name.format(month=reptmon)} (new)")
+    else:
+        try:
+            df_old = pl.read_parquet(path)
+            # SAS: IF REPTDATE EQ &RDATE THEN DELETE
+            if 'REPTDATE' in df_old.columns:
+                df_old = df_old.filter(pl.col('REPTDATE') != reptdate)
+            pl.concat([df_old, df_new], how='diagonal_relaxed').write_parquet(path)
+            print(f"  ✓ {name.format(month=reptmon)} (appended)")
+        except FileNotFoundError:
+            df_new.write_parquet(path)
+            print(f"  ✓ {name.format(month=reptmon)} (created)")
+
+def append_ddmv_sas_faithful(df_new):
+    """SAS exact MISQ.DDMV logic:
+       DATA MISQ.DDMV; SET MISQ.DDMV; IF REPTDATE=&RDATE3 THEN DELETE;
+       PROC APPEND DATA=DDMV BASE=MISQ.DDMV;
+       RDATE3 = REPTDATE - 31 days.
+    """
+    if len(df_new) == 0:
+        print("  ⚠ DDMV: No data to append")
+        return
+    path = f"{DIRS['misq']}/DDMV.parquet"
+    try:
+        df_old = pl.read_parquet(path)
+        # SAS: IF REPTDATE = REPTDAT3 THEN DELETE  (REPTDAT3 = REPTDATE - 31)
+        before = len(df_old)
+        df_old = df_old.filter(pl.col('REPTDATE') != reptdat3)
+        removed = before - len(df_old)
+        df_combined = pl.concat([df_old, df_new], how='diagonal_relaxed')
+        df_combined.write_parquet(path)
+        print(f"  ✓ DDMV (removed {removed} rows dated {rdate3}, appended {len(df_new)}, total {len(df_combined):,})")
+    except FileNotFoundError:
+        df_new.write_parquet(path)
+        print(f"  ✓ DDMV (created, {len(df_new):,})")
+
+# ============================================================================
+# SAVE
+# ============================================================================
+
+print("\nSaving outputs...")
+
+# TEMP.DYDP
+dydp.write_parquet(f"{DIRS['temp']}/DYDP.parquet")
+print(f"  ✓ DYDP -> {DIRS['temp']}")
+
+# TEMP.SAVG
+if len(savg) > 0:
+    savg.write_parquet(f"{DIRS['temp']}/SAVG.parquet")
+    print(f"  ✓ SAVG -> {DIRS['temp']}")
+
+# Monthly MIS files (SAS %MISAPPD)
+upsert_monthly(dyposn, 'DYPOSN{month:02d}.parquet', 'mis')
+upsert_monthly(dymvnt, 'DYMVNT{month:02d}.parquet', 'mis')
+upsert_monthly(dyibu, 'DYIBU{month:02d}.parquet', 'mis')
+upsert_monthly(dyddcr, 'DYDDCR{month:02d}.parquet', 'mis')
+upsert_monthly(dybrdp, 'DYBRDP{month:02d}.parquet', 'mis')
+upsert_monthly(dydps, 'DYDPS{month:02d}.parquet', 'mis')
+upsert_monthly(dyace, 'DYACE{month:02d}.parquet', 'mis')
+
+# SDRNGE (SAS %WISEPBB: overwrite via OUTPUT OUT=MIS.SDRNGE&REPTMON)
+if is_weekly_or_monthend and len(sdrnge) > 0:
+    sdrnge.write_parquet(f"{DIRS['mis']}/SDRNGE{reptmon:02d}.parquet")
+    print(f"  ✓ SDRNGE{reptmon:02d} (overwrites, SAS %WISEPBB)")
+
+# DDMV (SAS exact: delete REPTDATE = REPTDATE-31, then append)
+append_ddmv_sas_faithful(ddmv)
+
+# ============================================================================
+# SUMMARY
+# ============================================================================
+
+print("\n" + "=" * 70)
+print("✓ EIBDDEPE Complete!")
+print("=" * 70)
+print(f"\nReport Date:            {reptdate.strftime('%d/%m/%Y')} (Week {nowk})")
+print(f"DDMV dedupe target:     {reptdat3.strftime('%d/%m/%Y')}  (REPTDATE - 31 days)")
+print(f"\nDeposits: RM {totals['TOTSAVG'] + totals['TOTDMND']:>15,.2f}")
+print(f"  Savings: RM {totals['TOTSAVG']:>15,.2f}")
+print(f"  Demand:  RM {totals['TOTDMND']:>15,.2f}")
+print(f"  Fixed:   RM {totals['TOTFD']:>15,.2f}")
+print(f"\nIslamic: RM {totals['TOTSAVGI'] + totals['TOTDMNDI']:>15,.2f}")
+print(f"  Savings: RM {totals['TOTSAVGI']:>15,.2f}")
+print(f"  Demand:  RM {totals['TOTDMNDI']:>15,.2f}")
+print(f"\nOverdrafts: RM {totals['TOTOVFT']:>15,.2f}")
+print(f"\nRecords:")
+print(f"  DYDP:   {len(dydp):>10,}")
+print(f"  DYMVNT: {len(dymvnt):>10,}")
+print(f"  DYIBU:  {len(dyibu):>10,}")
+print(f"  DYBRDP: {len(dybrdp):>10,}")
+print(f"  DYDDCR: {len(dyddcr):>10,}")
+print(f"  DYDPS:  {len(dydps):>10,}")
+print(f"  DYACE:  {len(dyace):>10,}")
+print(f"  DDMV:   {len(ddmv):>10,}")
+if is_weekly_or_monthend:
+    print(f"  SDRNGE: {len(sdrnge):>10,}")
+print("=" * 70)
