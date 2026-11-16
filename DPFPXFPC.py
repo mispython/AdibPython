@@ -8,12 +8,11 @@ Inputs:
   - EIIDLOAN/LKP_BRANCH   : flat file (no extension)
   - EIBRCGCS/enrh_ln_note_m{REPTMON}.sas7bdat : SAS7BDAT (pyreadstat, chunked)
   - EIIDLOAN/lndly{prevday}.sas7bdat          : SAS7BDAT (previous-day snapshot)
-  - EIIDLOAN/lndly{reptday}.sas7bdat          : SAS7BDAT (optional fallback for today)
 
-Outputs (in EIIDLOAN output dir):
-  - lndly{DD}.parquet
-  - mloan_<rdate>.csv, mcred_<rdate>.csv, mhp_<rdate>.csv
-  - dmloan_<rdate>.csv, dmcred_<rdate>.csv, dmhp_<rdate>.csv
+Outputs (in EIIDLOAN output dir), all SAS7BDAT (written via saspy):
+  - lndly{DD}.sas7bdat
+  - mloan_<rdate>.sas7bdat, mcred_<rdate>.sas7bdat, mhp_<rdate>.sas7bdat
+  - dmloan_<rdate>.sas7bdat, dmcred_<rdate>.sas7bdat, dmhp_<rdate>.sas7bdat
 
 SAS-faithful date logic:
   REPTDATE = INPUT(SUBSTR(PUT(EXTDATE, Z11.), 1, 8), MMDDYY8.);
@@ -34,32 +33,57 @@ from datetime import datetime, timedelta
 import pyreadstat
 import pandas as pd
 import tempfile
+import saspy
 
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-DATEFILE_PATH  = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/DATEFILE') #/sasdata/rawdata/ln
-BRANCH_PATH    = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/LKP_BRANCH') #/sasdata/rawdata/lookup
-LNNOTE_DIR     = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS') #/sas/ln/dwh/enrichment/enrh_ln_note_d{reptday}.sas7bdat
-OUTPUT_DIR     = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN') #/host_pq/mis/input/LOAN
+DATEFILE_PATH  = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/DATEFILE')
+BRANCH_PATH    = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/LKP_BRANCH')
+LNNOTE_DIR     = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBRCGCS')
+OUTPUT_DIR     = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN')
 
-# SAS: MIS1.LNDLY&PREVDAY  and  MIS.LNDLY&REPTDAY
-LNDLY_REPTYEAR = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly{reptday}.sas7bdat')
 LNDLY_PREVYEAR = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly{prevday}.sas7bdat')
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Chunk size for streaming SAS7BDAT files
 CHUNK_SIZE = 500_000
 
-# DuckDB temp directory (for spilling on large data)
 TMP_DB_DIR = Path(tempfile.gettempdir()) / 'eiidloan_duckdb'
 TMP_DB_DIR.mkdir(parents=True, exist_ok=True)
 
 con = duckdb.connect()
 con.execute(f"SET temp_directory = '{TMP_DB_DIR}'")
 con.execute("SET preserve_insertion_order = false")
+
+# SAS session for writing SAS7BDAT outputs
+sas = saspy.SASsession()
+
+
+# ---------------------------------------------------------------------------
+# Helper: write a DuckDB table to a SAS7BDAT file via saspy
+# ---------------------------------------------------------------------------
+def write_sas7bdat(table_name: str, out_path: Path):
+    """
+    Materialise `table_name` from DuckDB to a pandas DataFrame and write it
+    out as a SAS7BDAT file using the saspy SAS session.
+    """
+    df = con.execute(f"SELECT * FROM {table_name}").df()
+
+    # saspy needs a SAS libref; point a temporary libref at the output dir
+    sas_lib = 'eiidout'
+    sas_lib_path = str(out_path.parent).replace("'", "''")
+    sas.submit(f"""
+        libname {sas_lib} '{sas_lib_path}';
+    """)
+
+    # Dataset name = file stem (without .sas7bdat)
+    ds_name = out_path.stem
+    sas.df2sd(df, table=ds_name, libref=sas_lib, replace=True)
+
+    sas.submit(f"libname {sas_lib} clear;")
+    print(f"  Wrote {out_path} ({len(df):,} rows)")
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +119,6 @@ print(f"  REPTDATE : {reptdate.date()}  (num: {reptdate_num})")
 print(f"  PREVDATE : {prevdate.date()}")
 print(f"  DLETDATE : {dletdate.date()}")
 print(f"  REPTMON  : {reptmon:02d}")
-print(f"  LNDLY_REPTYEAR : {LNDLY_REPTYEAR}")
 print(f"  LNDLY_PREVYEAR : {LNDLY_PREVYEAR}")
 
 
@@ -142,7 +165,6 @@ def ingest_sas7bdat_to_table(sas_file: Path, table_name: str, select_cols: list)
         df_chunk.columns = [c.upper() for c in df_chunk.columns]
         df_chunk = df_chunk[select_cols].copy()
 
-        # SAS stores the branch in PENDBRH; normalise
         if 'PENDBRH' in df_chunk.columns:
             df_chunk = df_chunk.rename(columns={'PENDBRH': 'BRANCH'})
 
@@ -189,11 +211,10 @@ ingest_sas7bdat_to_table(lnnote_file, 'loan_raw', REQUIRED_COLS)
 
 
 # ---------------------------------------------------------------------------
-# 3. Persist LNDLY{reptday}.parquet  (today's output)
+# 3. Persist LNDLY{reptday}.sas7bdat  (today's output)
 # ---------------------------------------------------------------------------
-lndly_today_parquet = OUTPUT_DIR / f"lndly{reptday:02d}.parquet"
-con.execute(f"COPY loan_raw TO '{lndly_today_parquet}'")
-print(f"  Wrote {lndly_today_parquet}")
+lndly_today_sas = OUTPUT_DIR / f"lndly{reptday:02d}.sas7bdat"
+write_sas7bdat('loan_raw', lndly_today_sas)
 
 con.execute("CREATE OR REPLACE VIEW loan AS SELECT * FROM loan_raw")
 
@@ -242,10 +263,7 @@ con.execute("""
 
 # ---------------------------------------------------------------------------
 # 6. Previous-day input (SAS: SET MIS1.LNDLY&PREVDAY)
-#    Priority:
-#      1) lndly{prevday}.sas7bdat  (SAS-faithful source)
-#      2) lndly{prevday}.parquet   (parquet fallback from earlier runs)
-#      3) skip movement reports
+#    Source: lndly{prevday}.sas7bdat
 # ---------------------------------------------------------------------------
 print(f"Reading previous day (SAS7BDAT): {LNDLY_PREVYEAR}")
 
@@ -260,18 +278,7 @@ if LNDLY_PREVYEAR.exists():
     HAVE_PREV = True
     prev_source = str(LNDLY_PREVYEAR)
 else:
-    lndly_prev_parquet = OUTPUT_DIR / f"lndly{prevday:02d}.parquet"
-    print(f"  {LNDLY_PREVYEAR.name} not found, trying parquet fallback: {lndly_prev_parquet}")
-    if lndly_prev_parquet.exists():
-        con.execute(f"""
-            CREATE OR REPLACE TABLE prev_loan AS
-            SELECT acctno, noteno, name, balance, loantype, curbal, branch
-            FROM read_parquet('{lndly_prev_parquet}')
-        """)
-        HAVE_PREV = True
-        prev_source = str(lndly_prev_parquet)
-    else:
-        print("  WARNING: no previous-day source found — previous-day tables will be empty.")
+    print("  WARNING: no previous-day SAS7BDAT found — previous-day tables will be empty.")
 
 if HAVE_PREV:
     print(f"  Using previous-day source: {prev_source}")
@@ -404,10 +411,9 @@ con.execute("""
 """)
 
 rdate_file = rdate.replace('/', '-')
-con.execute(f"COPY mloan TO '{OUTPUT_DIR}/mloan_{rdate_file}.csv' (HEADER, DELIMITER ',')")
-con.execute(f"COPY mcred TO '{OUTPUT_DIR}/mcred_{rdate_file}.csv' (HEADER, DELIMITER ',')")
-con.execute(f"COPY mhp   TO '{OUTPUT_DIR}/mhp_{rdate_file}.csv'   (HEADER, DELIMITER ',')")
-print(f"  Wrote mloan_{rdate_file}.csv, mcred_{rdate_file}.csv, mhp_{rdate_file}.csv")
+write_sas7bdat('mloan', OUTPUT_DIR / f"mloan_{rdate_file}.sas7bdat")
+write_sas7bdat('mcred', OUTPUT_DIR / f"mcred_{rdate_file}.sas7bdat")
+write_sas7bdat('mhp',   OUTPUT_DIR / f"mhp_{rdate_file}.sas7bdat")
 
 
 # ---------------------------------------------------------------------------
@@ -492,10 +498,9 @@ if HAVE_PREV:
         ORDER BY h.acctno, h.noteno
     """)
 
-    con.execute(f"COPY dmloan TO '{OUTPUT_DIR}/dmloan_{rdate_file}.csv' (HEADER, DELIMITER ',')")
-    con.execute(f"COPY dmcred TO '{OUTPUT_DIR}/dmcred_{rdate_file}.csv' (HEADER, DELIMITER ',')")
-    con.execute(f"COPY dmhp   TO '{OUTPUT_DIR}/dmhp_{rdate_file}.csv'   (HEADER, DELIMITER ',')")
-    print(f"  Wrote dmloan_{rdate_file}.csv, dmcred_{rdate_file}.csv, dmhp_{rdate_file}.csv")
+    write_sas7bdat('dmloan', OUTPUT_DIR / f"dmloan_{rdate_file}.sas7bdat")
+    write_sas7bdat('dmcred', OUTPUT_DIR / f"dmcred_{rdate_file}.sas7bdat")
+    write_sas7bdat('dmhp',   OUTPUT_DIR / f"dmhp_{rdate_file}.sas7bdat")
 
     loan_mvmt = con.execute("SELECT COUNT(*) FROM dmloan").fetchone()[0]
     cred_mvmt = con.execute("SELECT COUNT(*) FROM dmcred").fetchone()[0]
@@ -524,15 +529,16 @@ Customer Movements (>= RM 500K):
   - Revolving Credit : {cred_mvmt} accounts
   - HP Loans         : {hp_mvmt} accounts
 
-Output Files:
-  - mloan_{rdate_file}.csv
-  - mcred_{rdate_file}.csv
-  - mhp_{rdate_file}.csv
-  - dmloan_{rdate_file}.csv   (emitted only if previous-day source present)
-  - dmcred_{rdate_file}.csv   (emitted only if previous-day source present)
-  - dmhp_{rdate_file}.csv     (emitted only if previous-day source present)
-  - lndly{reptday:02d}.parquet
+Output Files (SAS7BDAT):
+  - mloan_{rdate_file}.sas7bdat
+  - mcred_{rdate_file}.sas7bdat
+  - mhp_{rdate_file}.sas7bdat
+  - dmloan_{rdate_file}.sas7bdat   (emitted only if previous-day source present)
+  - dmcred_{rdate_file}.sas7bdat   (emitted only if previous-day source present)
+  - dmhp_{rdate_file}.sas7bdat     (emitted only if previous-day source present)
+  - lndly{reptday:02d}.sas7bdat
 """)
 
 con.close()
+sas.endsas()
 print(f"Completed: {OUTPUT_DIR}")
