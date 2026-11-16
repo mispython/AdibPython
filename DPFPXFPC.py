@@ -1,855 +1,556 @@
-//EIBDNLFE JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M,NOTIFY=&SYSUID      JOB56893
-/*JOBPARM S=S1M2
-//*
-//EIBWCR2A  EXEC SAS609
-//DEPOSIT   DD DSN=SAP.PBB.MNITB.DAILY(0),DISP=SHR
-//STOREGL   DD DSN=SAP.PBB.GL.NLF.DAILY,DISP=OLD
-//STORE     DD DSN=SAP.PBB.NLF.DAILY,DISP=OLD
-//BASE      DD DSN=SAP.PBB.NLF.DAILY.BASE,DISP=OLD
-//FINAL     DD DSN=SAP.PBB.NLF.DAILY.SA,DISP=OLD
-//SASLIST   DD DSN=SAP.PBB.NLF.BEHAVE.TEXT(+1),                         00290013
-//             DISP=(NEW,CATLG,DELETE),                                 00300013
-//             DCB=(RECFM=FBA,LRECL=250,BLKSIZE=0,DSORG=PS),            00310013
-//             SPACE=(CYL,(1,1),RLSE),UNIT=SYSDA                        00320013
-//SORTWK01  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
-//SORTWK02  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
-//SORTWK03  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
-//SORTWK04  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
-//SORTWK05  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
-//SYSIN     DD *
-OPTIONS NOCENTER;
-DATA REPTDATE;
-  SET DEPOSIT.REPTDATE;
-  LAST = PUT(DAY(INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
-                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1),Z2.);
-  REPTDAY = PUT(DAY(REPTDATE), Z2.);
-  IF REPTDAY IN ('08','15','22') THEN INSERT = 'Y';
-  ELSE IF REPTDAY = LAST & DAY(TODAY()) < 8 THEN INSERT = 'Y';
-  CALL SYMPUT('DATEX',PUT(REPTDATE,DDMMYY8.));
-  CALL SYMPUT('DATE',REPTDATE);
-  CALL SYMPUT('WKLYDATE',REPTDATE);
-  CALL SYMPUT('INSERT',INSERT);
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-  CALL SYMPUT('REPTDATE',REPTDATE);
-RUN;
- * PROC PRINT DATA=STORE.NOTE20100930;
-DATA DEPOSIT;
-   SET STORE.NOTE&REPTYEAR&REPTMON&REPTDAY;
-   PROD = SUBSTR(BNMCODE,1,7);
-   INDNON = SUBSTR(BNMCODE,6,2);
-   IF PROD = '9531108' THEN DESC = 'INDRMFD';
-   IF PROD = '9531109' THEN DESC = 'NONRMFD';
-   IF PROD = '9531208' THEN DESC = 'INDRMSA';
-   IF PROD = '9531209' THEN DESC = 'NONRMSA';
-   IF PROD = '9531308' THEN DESC = 'INDRMDD';
-   IF PROD = '9531309' THEN DESC = 'NONRMDD';
-   IF PROD = '9631108' THEN DESC = 'INDFXFD';
-   IF PROD = '9631109' THEN DESC = 'NONFXFD';
-   IF PROD = '9631308' THEN DESC = 'INDFXCA';
-   IF PROD = '9631309' THEN DESC = 'NONFXCA';
-   AMOUNT = ROUND(AMOUNT,1000.)/1000;
-RUN;
-PROC TRANSPOSE DATA=DEPOSIT OUT=STORE.DEP
-   (RENAME=(COL1=WEEK COL2=MONTH COL3=QTR COL4=HALFYR COL5=YEAR
-            COL6=LAST));
-   BY PROD DESC;
-   VAR AMOUNT;
-RUN;
-DATA STORE.DEPRMP2
-     STORE.DEPFXP2;
-   SET STORE.DEP;
-   IF PROD = '9531108' THEN DO;
-      DESC = 'INDRMFD';
-      ITEM = 'A1.15';
-      ITEM4= '- FIXED  ';
-   END;
-   IF PROD = '9531109' THEN DO;
-      DESC = 'NONRMFD';
-      ITEM = 'A1.12';
-      ITEM4= '- FIXED  ';
-   END;
-   IF PROD = '9531208' THEN DO;
-      DESC = 'INDRMSA';
-      ITEM = 'A1.16';
-      ITEM4= '- SAVINGS';
-   END;
-   IF PROD = '9531209' THEN DO;
-      DESC = 'NONRMSA';
-      ITEM = 'A1.13';
-      ITEM4= '- SAVINGS';
-   END;
-   IF PROD = '9531308' THEN DO;
-      DESC = 'INDRMDD';
-      ITEM = 'A1.17';
-      ITEM4= '- CURRENT';
-   END;
-   IF PROD = '9531309' THEN DO;
-      DESC = 'NONRMDD';
-      ITEM = 'A1.14';
-      ITEM4= '- CURRENT';
-   END;
-   IF PROD = '9631108' THEN DO;
-      DESC = 'INDFXFD';
-      ITEM = 'B1.15';
-      ITEM4= '- FIXED  ';
-   END;
-   IF PROD = '9631109' THEN DO;
-      DESC = 'NONFXFD';
-      ITEM = 'B1.12';
-      ITEM4= '- FIXED  ';
-   END;
-   IF PROD = '9631308' THEN DO;
-      DESC = 'INDFXCA';
-      ITEM = 'B1.17';
-      ITEM4= '- CURRENT';
-   END;
-   IF PROD = '9631309' THEN DO;
-      DESC = 'NONFXCA';
-      ITEM = 'B1.14';
-      ITEM4= '- CURRENT';
-   END;
-   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);
-   INDNON = SUBSTR(PROD,6,2);
-   WEEK    = WEEK    * (-1);
-   MONTH   = MONTH   * (-1);
-   QTR     = QTR     * (-1);
-   HALFYR  = HALFYR  * (-1);
-   YEAR    = YEAR    * (-1);
-   LAST    = LAST    * (-1);
-   BALANCE = BALANCE * (-1);
-   DATEX = "&DATEX";
-   DATE = &DATE;
-   IF SUBSTR(PROD,1,2) = '95' THEN OUTPUT STORE.DEPRMP2;
-   ELSE IF SUBSTR(PROD,1,2) = '96' THEN OUTPUT STORE.DEPFXP2;
-RUN;
-PROC SORT DATA=STORE.DEPFXP2; BY ITEM;
-PROC SORT DATA=STOREGL.GLRMFXP2&REPTYEAR&REPTMON&REPTDAY; BY ITEM;
-DATA STORE.DEPFXP2;
-   MERGE STOREGL.GLRMFXP2&REPTYEAR&REPTMON&REPTDAY(IN=B
-         RENAME=(WEEK=WEEK1 LAST=LAST1 BALANCE=BALANCE1))
-         STORE.DEPFXP2;
-   BY ITEM;
-   WEEK   = SUM(WEEK,WEEK1);
-   LAST   = SUM(LAST,LAST1);
-   BALANCE= SUM(BALANCE,BALANCE1);
-   DROP WEEK1 LAST1 BALANCE1;
-RUN;
+"""
+EIBDMELW - Conventional BNM EL Daily Deposit Extract (Production Ready)
+SAS reference: daily_deposit_extraction (EL computation)
 
-PROC SORT DATA=STORE.DEPRMP2;
-  BY DESCENDING INDNON;
-PROC SORT DATA=STORE.DEPFXP2;
-  BY DESCENDING INDNON;
-DATA BASE.DEPOSIT;
-   SET STORE.DEPRMP2 STORE.DEPFXP2;
-RUN;
-    /** INPUT **/
+Input : /host_pq/dp/parquet/year={reptyear}/month={reptmon}/day={reptday}/DPTRBLGS.parquet
+        (Hive-partitioned; path constructed from report date)
 
-%MACRO MISAPPD;
-%IF "&INSERT" EQ "Y" %THEN
-    %DO;
-      DATA &PROD;
-         SET BASE.DEPOSIT;
-         WHERE DATE = &DATE & DESC = "&PROD";
-         BALANCE = BALANCE * (-1);
-         KEEP DATEX DATE BALANCE;
-      RUN;
-      DATA BASE.&PROD;
-         SET BASE.&PROD;
-         IF DATE EQ "&DATE" THEN DELETE;
-      RUN;
-      PROC SORT; BY DATE;
-   *   PROC PRINT;
-      PROC APPEND DATA=&PROD BASE=BASE.&PROD; RUN;
-      DATA STORE.&PROD;
-         SET BASE.&PROD;
-         WHERE DATE <= &DATE;
-   *   PROC PRINT;
-    %END;
-%ELSE %DO;
-      DATA &PROD;
-         SET BASE.DEPOSIT;
-         WHERE DATE = &DATE & DESC = "&PROD";
-         BALANCE = BALANCE * (-1);
-         KEEP DATEX DATE BALANCE;
-      RUN;
-      DATA STORE.&PROD;
-         SET BASE.&PROD &PROD;
-         WHERE DATE <= &DATE;
-      PROC SORT; BY DATE;
-   *  PROC PRINT;
-      RUN;
-%END;
-%MEND MISAPPD;
-RUN;
-DATA _NULL_;
-   PROD = 'INDRMDD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-DATA _NULL_;
-   PROD = 'INDRMFD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-DATA _NULL_;
-   PROD = 'INDRMSA';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-RUN;
-DATA _NULL_;
-   PROD = 'INDFXCA';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-RUN;
-DATA _NULL_;
-   PROD = 'INDFXFD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-RUN;
-DATA _NULL_;
-   PROD = 'NONRMDD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-DATA _NULL_;
-   PROD = 'NONRMFD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-DATA _NULL_;
-   PROD = 'NONRMSA';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-RUN;
-DATA _NULL_;
-   PROD = 'NONFXCA';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-RUN;
-DATA _NULL_;
-   PROD = 'NONFXFD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%MISAPPD;
-RUN;
-   /** PART-1 **/
+Output: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDMELW/MELW{MM}{W}.sas7bdat
+        (via SASPy df2sd into SAS library XMISOUT)
 
-%MACRO REPORT;
-PROC DATASETS LIB=FINAL;
-  DELETE WEEKLY&PROD MONTHLY&PROD QTRLY&PROD
-         HALFYRLY&PROD YEARLY&PROD;
-RUN;
-DATA &PROD;
-   SET STORE.&PROD;
-   REPTDATE = &REPTDATE;
-   /*
-   REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
-                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
-   */
-   QTR1X = MONTH(REPTDATE)-3;
-   QTR2X = MONTH(REPTDATE)-6;
-   QTR3X = MONTH(REPTDATE)-9;
-   IF QTR1X <=0 THEN QTR1 = 12 + QTR1X;
-   ELSE QTR1 = QTR1X;
-   IF QTR2X <=0 THEN QTR2 = 12 + QTR2X;
-   ELSE QTR2 = QTR2X;
-   IF QTR3X <=0 THEN QTR3 = 12 + QTR3X;
-   ELSE QTR3 = QTR3X;
+Includes:
+- PBBLNFMT : Loan formats (ACE products, ODPROD, ODCUSTCD, etc.)
+- PBBDPFMT : Deposit formats (SAPROD, CAPROD, FDPRODD, SACUSTCD, DDCUSTCD, FDCUSTCD)
 
-   CALL SYMPUT('QTR1',QTR1);
-   CALL SYMPUT('QTR2',QTR2);
-   CALL SYMPUT('QTR3',QTR3);
-RUN;
-DATA COUNT;
-   SET STORE.&PROD NOBS=COUNT;
-   CALL SYMPUT('COUNT',COUNT);
-   ACOUNT = COUNT - 49;
-   WKLYDAY= DAY(&WKLYDATE);
-   IF WKLYDAY <= 8      THEN WCOUNT = COUNT - 45;
-   ELSE IF WKLYDAY <=15 THEN WCOUNT = COUNT - 46;
-   ELSE WCOUNT = COUNT - 47;
-   MCOUNT = COUNT - 44;
-   QCOUNT = COUNT - 36;
-   HCOUNT = COUNT - 24;
-   YCOUNT = COUNT;
-   CALL SYMPUT('ACOUNT',ACOUNT);
-   CALL SYMPUT('WCOUNT',WCOUNT);
-   CALL SYMPUT('MCOUNT',MCOUNT);
-   CALL SYMPUT('QCOUNT',QCOUNT);
-   CALL SYMPUT('HCOUNT',HCOUNT);
-   CALL SYMPUT('YCOUNT',YCOUNT);
-RUN;
+Key behaviour (all align with SAS source):
+  * CONVENTIONAL only (COSTCTR NOT in 3000-3999)
+  * Product 318 (deptype C) dropped
+  * ACE (>5000) split for {40,42,43,150,151,152,181}
+  * Overdraft grouped by ODCUSTCD 02/03/11/12/13/17
+  * BNM codes (conventional):
+      MISC : 4929980000000Y
+      SPTF : 4929980000000I  at branch+3000
+      INTP : 4911080000000Y
+      ODFIN: 3410011000000Y
+      SA   : 4212000000000Y
+      SACAI: 4230000000000Y
+      CA   : 4211000000000Y
+      HDA  : 4218000000000Y
+      ODCOM: 3410002000000Y
+      ODIS : 3410003000000Y
+      ODMB : 3410012000000Y
+      ODDH : 3410013000000Y
+      ODCAG: 3410017000000Y
+  * Interest routing:
+      INTP : prodcd in {42110,42120,42130}
+      SPTF : prodcd in {42310,42320,42132}
+      MISC : everything else
+"""
 
-DATA FINAL.BEHAVE&PROD;
-   SET STORE.&PROD END=EOF;
-      IF _N_ > &ACOUNT;
-      IF EOF THEN CALL SYMPUT('OUTSTAND',BALANCE);
-RUN;
+import os
+import re
+import sys
+import glob
+import traceback
+from datetime import datetime, timedelta
 
-%MACRO PROCESS;
-DATA GETBAL;
-   SET STORE.&PROD;
-   WHERE &WEEKSTDT <= DATE <= &WEEKEND ;
-   STATUS = "&STATUS";
-RUN;
-DATA LAST;
-   SET STORE.&PROD;
-   IF DATE = &LASTDT THEN CALL SYMPUT('LAST',BALANCE);
-RUN;
-PROC SORT DATA=GETBAL OUT=MIN;
-   BY BALANCE;
-PROC SORT DATA=GETBAL OUT=MAX;
-   BY DESCENDING BALANCE;
-RUN;
-DATA MIN(KEEP=STATUS MIN DATEMIN);
-   SET MIN;
-   IF _N_ = 1;
-   MIN = BALANCE;
-   DATEMIN = DATE;
-RUN;
-DATA MAX (KEEP=STATUS MAX DATEMAX);
-   SET MAX;
-   IF _N_ = 1;
-   MAX = BALANCE;
-   DATEMAX = DATE;
-RUN;
-DATA TEMP;
-  MERGE MAX MIN;
-  BY STATUS;
-  IF DATEMAX > DATEMIN THEN
-     PCTAGE = ROUND((((MAX - MIN) / &LAST) * 100),.01);
-  ELSE PCTAGE = ROUND((((MIN - MAX) / &LAST) * 100),.01);
-  DATE = &WEEKEND;
-RUN;
-PROC APPEND DATA=TEMP BASE=FINAL.&STATUS&PROD;
-%MEND PROCESS;
-*;
-%MACRO WEEKLY;
-   %DO I = &WCOUNT %TO &COUNT;
-   DATA &PROD;
-      SET STORE.&PROD;
-      IF _N_ = &I;
-   SETDAY = DAY(DATE);
-   SETMTH = MONTH(DATE);
-   SETYEAR = YEAR(DATE);
-   IF SETDAY <= 8      THEN WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                                           PUT(SETYEAR,4.), DDMMYY8.)-1;
-   ELSE IF SETDAY <=15 THEN WEEKSTDT=INPUT('08'||PUT(SETMTH,Z2.)||
-                                           PUT(SETYEAR,4.), DDMMYY8.);
-   ELSE IF SETDAY <=22 THEN WEEKSTDT=INPUT('15'||PUT(SETMTH,Z2.)||
-                                           PUT(SETYEAR,4.), DDMMYY8.);
-   ELSE                     WEEKSTDT=INPUT('22'||PUT(SETMTH,Z2.)||
-                                           PUT(SETYEAR,4.), DDMMYY8.);
-   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                PUT(SETYEAR,4.), DDMMYY8.)-1;
-   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
-   CALL SYMPUT('WEEKEND',DATE);
-   CALL SYMPUT('STATUS','WEEKLY');
-   CALL SYMPUT('LASTDT',WEEKSTDT);
-RUN;
-%PROCESS
-   %END;
-%MEND WEEKLY;
-*;
-%WEEKLY;
-RUN;
-*;
-DATA FINAL.WEEKLY&PROD;
-   SET FINAL.WEEKLY&PROD;
-   RENAME PCTAGE= WPCTAGE;
-RUN; /*
-PROC PRINT DATA=FINAL.WEEKLY&PROD;
-  FORMAT DATE DDMMYY8.;
-RUN;
-     */
-%MACRO MONTHLY;
-   %DO I = &MCOUNT %TO &COUNT;
-   DATA &PROD;
-      SET STORE.&PROD;
-      IF _N_ = &I;
-   SETDAY = DAY(DATE);
-   SETMTH = MONTH(DATE);
-   SETYEAR = YEAR(DATE);
-   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                   PUT(SETYEAR,4.), DDMMYY8.);
-   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                PUT(SETYEAR,4.), DDMMYY8.)-1;
-   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
-   CALL SYMPUT('WEEKEND',DATE);
-   CALL SYMPUT('STATUS','MONTHLY');
-   CALL SYMPUT('LASTDT',LASTDT);
-RUN;
-%PROCESS
-   %END;
-%MEND MONTHLY;
-%MONTHLY
+import polars as pl
+import pandas as pd
+import saspy
 
-PROC SORT DATA=FINAL.MONTHLY&PROD; BY DATE;
-DATA FINAL.MONTHLY&PROD;
-   SET FINAL.MONTHLY&PROD;
-   BY STATUS;
-   IF DAY(DATE) NOT IN (8,15,22) OR LAST.STATUS;
-   RENAME PCTAGE= MPCTAGE;
-RUN; /*
-PROC PRINT DATA=FINAL.MONTHLY&PROD;
-  FORMAT DATE DDMMYY8.;
-RUN;
-       */
-%MACRO QTRLY;
-   %DO I = &QCOUNT %TO &COUNT;
-   DATA &PROD;
-      SET STORE.&PROD;
-      IF _N_ = &I;
-   SETDAY = DAY(DATE);
-   SETMTHX = MONTH(DATE)-2;
-   SETYEAR = YEAR(DATE);
-   IF SETMTHX <=0 THEN DO;
-      SETMTH = 12 + SETMTHX;
-      SETYEAR = SETYEAR - 1;
-   END;
-   ELSE SETMTH = SETMTHX;
-   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                  PUT(SETYEAR,4.), DDMMYY8.);
-   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                PUT(SETYEAR,4.), DDMMYY8.)-1;
-   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
-   CALL SYMPUT('WEEKEND',DATE);
-   CALL SYMPUT('STATUS','QTRLY');
-   CALL SYMPUT('LASTDT',LASTDT);
-RUN;
-%PROCESS
-   %END;
-%MEND QTRLY;
-%QTRLY
+# ------------------------------------------------------------------
+# Format libraries
+# ------------------------------------------------------------------
+import PBBDPFMT as DPF
+import PBBLNFMT as LNF
 
-PROC SORT DATA=FINAL.QTRLY&PROD; BY DATE;
 
-DATA FINAL.QTRLY&PROD;
-   SET FINAL.QTRLY&PROD;
-   BY STATUS ;
-   IF LAST.STATUS OR
-      (DAY(DATE) NOT IN (8,15,22) AND
-      MONTH(DATE) IN (&QTR1,&QTR2,&QTR3));
-   RENAME PCTAGE= QPCTAGE;
-RUN;
-     /*
-PROC PRINT;
-  FORMAT DATE DATEMIN DATEMAX DDMMYY8.;
-       */
-%MACRO HALFYRLY;
-   %DO I = &HCOUNT %TO &COUNT;
-   DATA &PROD;
-      SET STORE.&PROD;
-      IF _N_ = &I;
-   SETDAY = DAY(DATE);
-   SETMTHX = MONTH(DATE)-5;
-   SETYEAR = YEAR(DATE);
-   IF SETMTHX <=0 THEN DO;
-      SETMTH = 12 + SETMTHX;
-      SETYEAR = SETYEAR - 1;
-   END;
-   ELSE SETMTH = SETMTHX;
-   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                  PUT(SETYEAR,4.), DDMMYY8.);
-   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                PUT(SETYEAR,4.), DDMMYY8.)-1;
-   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
-   CALL SYMPUT('WEEKEND',DATE);
-   CALL SYMPUT('STATUS','HALFYRLY');
-   CALL SYMPUT('LASTDT',LASTDT);
-%PROCESS
-   %END;
-%MEND HALFYRLY;
-%HALFYRLY
-DATA FINAL.HALFYRLY&PROD;
-   SET FINAL.HALFYRLY&PROD;
-   BY STATUS ;
+# ------------------------------------------------------------------
+# CONFIG
+# ------------------------------------------------------------------
+PQ_BASE = '/host_pq/dp/parquet'      # Hive root: .../{year=YYYY}/{month=MM}/{day=DD}/DPTRBLGS.parquet
+BNM_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDMELW/'
 
-   IF LAST.STATUS OR
-      (DAY(DATE) NOT IN (8,15,22) AND
-      MONTH(DATE) IN (&QTR2));
-   RENAME PCTAGE= HPCTAGE;
-RUN; /*
-PROC PRINT;
-  FORMAT DATE DATEMIN DATEMAX DDMMYY8.;
-       */
-%MACRO YEARLY;
-   %DO I = &YCOUNT %TO &COUNT;
-   DATA &PROD;
-      SET STORE.&PROD;
-      IF _N_ = &I;
-   SETDAY = DAY(DATE);
-   SETMTHX = MONTH(DATE)-11;
-   SETYEAR = YEAR(DATE);
-   IF SETMTHX <=0 THEN DO;
-      SETMTH = 12 + SETMTHX;
-      SETYEAR = SETYEAR - 1;
-   END;
-   ELSE SETMTH = SETMTHX;
-   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                  PUT(SETYEAR,4.), DDMMYY8.);
-   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
-                PUT(SETYEAR,4.), DDMMYY8.)-1;
-   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
-   CALL SYMPUT('WEEKEND',DATE);
-   CALL SYMPUT('STATUS','YEARLY');
-   CALL SYMPUT('LASTDT',LASTDT);
-RUN;
-%PROCESS
-   %END;
-%MEND YEARLY;
-*;
-%YEARLY;
-RUN;
-*;
-DATA FINAL.YEARLY&PROD;
-   SET FINAL.YEARLY&PROD;
-   BY STATUS ;
-   IF LAST.STATUS;
-   RENAME PCTAGE= YPCTAGE;
-RUN; /*
-PROC PRINT DATA=FINAL.YEARLY&PROD;
-  FORMAT DATE DDMMYY8.;
-RUN; */
+SASPY_CFGNAME = 'default'
+SAS_LIBREF    = 'XMISOUT'
 
-PROC SORT DATA=FINAL.WEEKLY&PROD; BY DATE;
-PROC SORT DATA=FINAL.MONTHLY&PROD; BY DATE;
-PROC SORT DATA=FINAL.QTRLY&PROD; BY DATE;
-PROC SORT DATA=FINAL.HALFYRLY&PROD; BY DATE;
-PROC SORT DATA=FINAL.YEARLY&PROD; BY DATE;
-DATA FINAL.BEHAVE&PROD(KEEP=DATE WPCTAGE MPCTAGE QPCTAGE
-                       BALANCE HPCTAGE YPCTAGE);
-   MERGE FINAL.BEHAVE&PROD
-         FINAL.WEEKLY&PROD
-         FINAL.MONTHLY&PROD
-         FINAL.QTRLY&PROD
-         FINAL.HALFYRLY&PROD
-         FINAL.YEARLY&PROD
-   ;
-   BY DATE;
-RUN;
-TITLE1 &PROD 'BEHAVIORAL TABLE' &RDATE;
-PROC PRINT DATA=FINAL.BEHAVE&PROD;
-   FORMAT DATE DDMMYY8.;
+EMIT_ZERO_ROWS  = True
+PROGRESS_EVERY  = 500_000
+WEEK_START_DAYS = ('01', '09', '16', '23')
 
-%MACRO HIGHLOW;
-   PROC SORT DATA=BEHAVE OUT=MIN;
-      BY PCTAGE;
-   PROC SORT DATA=BEHAVE OUT=MAX;
-      BY DESCENDING PCTAGE;
-   RUN;
-   DATA MIN(KEEP=STATUS &STATUS);
-      SET MIN;
-      IF _N_ = 1;
-      &STATUS = PCTAGE;
-      STATUS = 'LOWEST';
-   RUN;
-   DATA MAX (KEEP=STATUS &STATUS);
-      SET MAX;
-      IF _N_ = 1;
-      &STATUS = PCTAGE;
-      STATUS = 'HIGHEST';
-   RUN;
-   DATA &STATUS;
-      SET MAX MIN;
-      BY STATUS;
-   RUN;
-%MEND HIGHLOW;
+os.makedirs(BNM_DIR, exist_ok=True)
 
-DATA BEHAVE;
-  SET FINAL.BEHAVE&PROD;
-  PCTAGE = WPCTAGE;
-  IF PCTAGE = . THEN DELETE;
-  CALL SYMPUT('STATUS','WEEK');
-RUN;
-%HIGHLOW
-DATA BEHAVE;
-   SET FINAL.BEHAVE&PROD;
-   PCTAGE = MPCTAGE;
-   IF PCTAGE = . THEN DELETE;
-   CALL SYMPUT('STATUS','MONTH');
-RUN;
-%HIGHLOW
-DATA BEHAVE;
-   SET FINAL.BEHAVE&PROD;
-   PCTAGE = QPCTAGE;
-   IF PCTAGE = . THEN DELETE;
-   CALL SYMPUT('STATUS','QTR');
-RUN;
-%HIGHLOW
-DATA BEHAVE;
-   SET FINAL.BEHAVE&PROD;
-   PCTAGE = HPCTAGE;
-   IF PCTAGE = . THEN DELETE;
-   CALL SYMPUT('STATUS','HALFYR');
-RUN;
-%HIGHLOW
-DATA BEHAVE;
-   SET FINAL.BEHAVE&PROD;
-   PCTAGE = YPCTAGE;
-   IF PCTAGE = . THEN DELETE;
-   CALL SYMPUT('STATUS','YEAR');
-RUN;
-%HIGHLOW
-DATA FINAL.HIGHLOW&PROD;
-   MERGE WEEK MONTH QTR HALFYR YEAR;
-   BY STATUS;
-RUN; /*
-PROC PRINT DATA=FINAL.HIGHLOW&PROD;
-    */
-DATA FINAL.HIGHLOW&PROD;
-   SET FINAL.HIGHLOW&PROD;
-   IF STATUS = 'HIGHEST' THEN DO;
-      IF WEEK  > MONTH THEN MONTH = WEEK;
-      IF MONTH > QTR THEN QTR = MONTH;
-      IF QTR > HALFYR THEN HALFYR = QTR;
-      IF HALFYR > YEAR THEN YEAR = HALFYR;
-      IF WEEK  > 100 THEN WEEK   = 100;
-      IF MONTH > 100 THEN MONTH  = 100;
-      IF QTR   > 100 THEN QTR    = 100;
-      IF HALFYR> 100 THEN HALFYR = 100;
-      IF YEAR  > 100 THEN YEAR   = 100;
-   END;
-   IF STATUS = 'LOWEST' THEN DO;
-      IF WEEK  < MONTH THEN MONTH = WEEK;
-      IF MONTH < QTR THEN QTR = MONTH;
-      IF QTR < HALFYR THEN HALFYR = QTR;
-      IF HALFYR < YEAR THEN YEAR = HALFYR;
-      IF WEEK  < -100 THEN WEEK   = -100;
-      IF MONTH < -100 THEN MONTH  = -100;
-      IF QTR   < -100 THEN QTR    = -100;
-      IF HALFYR< -100 THEN HALFYR = -100;
-      IF YEAR  < -100 THEN YEAR   = -100;
-   END;
-RUN;
-   /*
-DATA FINAL.HIGHLOW&PROD;
-   SET FINAL.HIGHLOW&PROD;
-      IF ABS(WEEK)  > ABS(MONTH) THEN MONTH = WEEK;
-      IF ABS(MONTH) > ABS(QTR) THEN QTR = MONTH;
-      IF ABS(QTR) > ABS(HALFYR) THEN HALFYR = QTR;
-      IF ABS(HALFYR) > ABS(YEAR) THEN YEAR = HALFYR;
-RUN;
-  */
 
-PROC PRINT DATA=FINAL.HIGHLOW&PROD;
+# ------------------------------------------------------------------
+# Format-library startup checks
+# ------------------------------------------------------------------
+_DPF_REQUIRED = (
+    'ACE', 'saprod_format', 'caprod_format', 'fdprodd_format',
+    'sacustcd_format', 'ddcustcd_format', 'fdcustcd_format',
+)
+_LNF_REQUIRED = ('ODPROD', 'ODCUSTCD')
 
-DATA HIGH (DROP=STATUS);
-  SET FINAL.HIGHLOW&PROD;
-  WHERE STATUS = 'HIGHEST';
-  FINALSTAT = 'FINAL';
-RUN;
-DATA LOW(DROP=STATUS);
-  SET FINAL.HIGHLOW&PROD(RENAME=(WEEK=WEEK1 MONTH=MONTH1
-                            QTR=QTR1 HALFYR=HALFYR1 YEAR=YEAR1));
-  WHERE STATUS = 'LOWEST';
-  FINALSTAT = 'FINAL';
-RUN;
-DATA FINAL.MAXMIN&PROD;
-   MERGE HIGH LOW;
-   BY FINALSTAT;
-   DESC = "&PROD";
-   IF ABS(WEEK1) > ABS(WEEK) THEN WEEK = ABS(WEEK1);
-   ELSE WEEK = ABS(WEEK);
-   IF ABS(MONTH1) > ABS(MONTH) THEN MONTH = ABS(MONTH1);
-   ELSE MONTH = ABS(MONTH);
-   IF ABS(QTR1) > ABS(QTR) THEN QTR = ABS(QTR1);
-   ELSE QTR = ABS(QTR);
-   IF ABS(HALFYR1) > ABS(HALFYR) THEN HALFYR = ABS(HALFYR1);
-   ELSE HALFYR = ABS(HALFYR);
-   IF ABS(YEAR1) > ABS(YEAR) THEN YEAR = ABS(YEAR1);
-   ELSE YEAR = ABS(YEAR);
-   WEEK   = ROUND((WEEK * &OUTSTAND / 100),1.);
-   MONTH  = ROUND(((MONTH * &OUTSTAND / 100) - WEEK),1.);
-   QTR    = ROUND(((QTR * &OUTSTAND / 100) - SUM(WEEK,MONTH)),1.);
-   HALFYR = ROUND(((HALFYR * &OUTSTAND /100) - SUM(WEEK,MONTH,QTR)),1.);
-   YEAR   = ROUND(((YEAR * &OUTSTAND /100) -
-                    SUM(WEEK,MONTH,QTR,HALFYR)),1.);
-   LAST   = ROUND((&OUTSTAND - SUM(WEEK,MONTH,QTR,HALFYR,YEAR)),1.);
-   TOTAL  = ROUND(&OUTSTAND,1.);
-   IF WEEK   < 0 THEN WEEK   = 0;
-   IF MONTH  < 0 THEN MONTH  = 0;
-   IF QTR    < 0 THEN QTR    = 0;
-   IF HALFYR < 0 THEN HALFYR = 0;
-   IF YEAR   < 0 THEN YEAR   = 0;
-   DROP WEEK1 MONTH1 QTR1 HALFYR1 YEAR1;
-RUN;
-PROC PRINT DATA=FINAL.MAXMIN&PROD;
-TITLE1 &PROD 'BEHAVIORAL FIGURE TO BE REPORTED' &RDATE ;
-RUN;
-%MEND REPORT;
-*;
-DATA _NULL_;
-   PROD = 'INDRMDD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-DATA _NULL_;
-   PROD = 'INDRMFD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-DATA _NULL_;
-   PROD = 'INDRMSA';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-RUN;
-DATA _NULL_;
-   PROD = 'INDFXCA';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-RUN;
-DATA _NULL_;
-   PROD = 'INDFXFD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-RUN;
-DATA _NULL_;
-   PROD = 'NONRMDD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-DATA _NULL_;
-   PROD = 'NONRMFD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-DATA _NULL_;
-   PROD = 'NONRMSA';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-RUN;
-DATA _NULL_;
-   PROD = 'NONFXCA';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-RUN;
-DATA _NULL_;
-   PROD = 'NONFXFD';
-   CALL SYMPUT('PROD',PROD);
-RUN;
-%REPORT;
-RUN;
-*;
-   /**  NLB1 **/
-DATA STORE.BEHAVENOTE;
-   SET FINAL.MAXMINNONRMFD
-       FINAL.MAXMINNONRMSA
-       FINAL.MAXMINNONRMDD
-       FINAL.MAXMININDRMFD
-       FINAL.MAXMININDRMSA
-       FINAL.MAXMININDRMDD
-       FINAL.MAXMINNONFXFD
-       FINAL.MAXMINNONFXCA
-       FINAL.MAXMININDFXFD
-       FINAL.MAXMININDFXCA;
-   IF DESC = 'INDRMFD' THEN PROD = '9331108';
-   IF DESC = 'NONRMFD' THEN PROD = '9331109';
-   IF DESC = 'INDRMSA' THEN PROD = '9331208';
-   IF DESC = 'NONRMSA' THEN PROD = '9331209';
-   IF DESC = 'INDRMDD' THEN PROD = '9331308';
-   IF DESC = 'NONRMDD' THEN PROD = '9331309';
-   IF DESC = 'INDFXFD' THEN PROD = '9631108';
-   IF DESC = 'NONFXFD' THEN PROD = '9631109';
-   IF DESC = 'INDFXCA' THEN PROD = '9631308';
-   IF DESC = 'NONFXCA' THEN PROD = '9631309';
-   INDNON = SUBSTR(BNMCODE,6,2);
-   AMOUNT = ROUND(AMOUNT,1000.)/1000;
-RUN;
-PROC SORT;
-   BY PROD DESC;
-RUN;
-DATA STORE.DEPRMP1
-     STORE.DEPFXP1;
-   SET STORE.BEHAVENOTE;
-   IF PROD = '9331108' THEN DO;
-      ITEM = 'A1.15';
-      ITEM4= '- FIXED  ';
-   END;
-   IF PROD = '9331109' THEN DO;
-      ITEM = 'A1.12';
-      ITEM4= '- FIXED  ';
-   END;
-   IF PROD = '9331208' THEN DO;
-      ITEM = 'A1.16';
-      ITEM4= '- SAVINGS';
-   END;
-   IF PROD = '9331209' THEN DO;
-      ITEM = 'A1.13';
-      ITEM4= '- SAVINGS';
-   END;
-   IF PROD = '9331308' THEN DO;
-      ITEM = 'A1.17';
-      ITEM4= '- CURRENT';
-   END;
-   IF PROD = '9331309' THEN DO;
-      ITEM = 'A1.14';
-      ITEM4= '- CURRENT';
-   END;
-   IF PROD = '9631108' THEN DO;
-      ITEM = 'B1.15';
-      ITEM4= '- FIXED  ';
-   END;
-   IF PROD = '9631109' THEN DO;
-      ITEM = 'B1.12';
-      ITEM4= '- FIXED  ';
-   END;
-   IF PROD = '9631308' THEN DO;
-      ITEM = 'B1.17';
-      ITEM4= '- CURRENT';
-   END;
-   IF PROD = '9631309' THEN DO;
-      ITEM = 'B1.14';
-      ITEM4= '- CURRENT';
-   END;
-   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);
-   INDNON = SUBSTR(PROD,6,2);
-   WEEK    = WEEK    * (-1);
-   MONTH   = MONTH   * (-1);
-   QTR     = QTR     * (-1);
-   HALFYR  = HALFYR  * (-1);
-   YEAR    = YEAR    * (-1);
-   LAST    = LAST    * (-1);
-   BALANCE = BALANCE * (-1);
-   IF SUBSTR(PROD,1,2) = '93' THEN OUTPUT STORE.DEPRMP1;
-   ELSE IF SUBSTR(PROD,1,2) = '96' THEN OUTPUT STORE.DEPFXP1;
-RUN;
-PROC SORT DATA=STORE.DEPRMP1;
-  BY DESCENDING INDNON;
- * PROC PRINT;
-PROC SORT DATA=STORE.DEPFXP1;
-  BY DESCENDING INDNON;
- * PROC PRINT;
-  /**** REPORT ***/
-OPTIONS MISSING=0;
-DATA REPORT;
-   SET STORE.DEPRMP1;
-   ITEM2 = 'DEPOSIT :';
-   IF INDNON = '08' THEN      ITEM3 = 'INDIVIDUALS    ';
-   ELSE IF INDNON = '09' THEN ITEM3 = 'NON-INDIVUDUALS';
-   BALANCE = BALANCE * (-1);
-   WEEK    = WEEK    * (-1);
-   MONTH   = MONTH   * (-1);
-   QTR     = QTR     * (-1);
-   HALFYR  = HALFYR  * (-1);
-   YEAR    = YEAR    * (-1);
-   LAST    = LAST    * (-1);
-RUN;
- * PROC PRINT;
-RUN;
-/*
-//
-*;
+_missing_dpf = [n for n in _DPF_REQUIRED if not hasattr(DPF, n)]
+_missing_lnf = [n for n in _LNF_REQUIRED if not hasattr(LNF, n)]
+if _missing_dpf or _missing_lnf:
+    print("FATAL: format library missing expected symbols.")
+    if _missing_dpf:
+        print(f"  PBBDPFMT missing: {_missing_dpf}")
+    if _missing_lnf:
+        print(f"  PBBLNFMT missing: {_missing_lnf}")
+    sys.exit(1)
+
+
+ACE_PRODUCTS = set(DPF.ACE)
+INTEREST_CUSTCODES = {
+    '80','81','82','83','84','85','86','87','88','89',
+    '90','91','92','93','94','95','96','97','98','99',
+}
+
+
+# ------------------------------------------------------------------
+# Format wrappers
+# ------------------------------------------------------------------
+def _find_saprod_map(module):
+    for name in ('_SAPROD_MAPPINGS', 'SAPROD_MAPPINGS'):
+        if hasattr(module, name):
+            return getattr(module, name)
+    return None
+
+_SAPROD_MAP = _find_saprod_map(DPF)
+
+def _saprod(product: int) -> str:
+    if _SAPROD_MAP is not None:
+        return _SAPROD_MAP.get(product, '')
+    return DPF.saprod_format(product)
+
+def _caprod(product: int)   -> str: return DPF.caprod_format(product)
+def _fdprodd(product: int)  -> str: return DPF.fdprodd_format(product)
+def _odprod(product: int)   -> str: return LNF.ODPROD(product)
+def _odcustcd(cc: int)      -> str: return LNF.ODCUSTCD(cc)
+def _sacustcd(cc: int)      -> str: return DPF.sacustcd_format(cc)
+def _ddcustcd(cc: int)      -> str: return DPF.ddcustcd_format(cc)
+def _fdcustcd(cc: int)      -> str: return DPF.fdcustcd_format(cc)
+
+
+# ------------------------------------------------------------------
+# TBDATE parser
+# ------------------------------------------------------------------
+def _parse_tbdate(raw):
+    if raw is None:
+        raise ValueError("TBDATE is null")
+    if isinstance(raw, float) and raw != raw:
+        raise ValueError("TBDATE is NaN")
+    if isinstance(raw, datetime):
+        return raw.date()
+    if hasattr(raw, 'year') and hasattr(raw, 'month') and hasattr(raw, 'day') \
+       and not isinstance(raw, (int, float)):
+        return raw
+    if isinstance(raw, float):
+        if raw == 0.0:
+            raise ValueError("TBDATE is 0 (SAS missing)")
+        raw = int(raw)
+    s = str(raw).strip()
+    if not s:
+        raise ValueError("TBDATE is blank")
+    if len(s) == 6 and s.isdigit():
+        try: return datetime.strptime(s, '%y%m%d').date()
+        except ValueError: pass
+    if len(s) == 8 and s.isdigit():
+        try: return datetime.strptime(s, '%Y%m%d').date()
+        except ValueError: pass
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%b-%Y'):
+        try: return datetime.strptime(s, fmt).date()
+        except ValueError: pass
+    if s.isdigit():
+        for width, fmt in ((8, '%Y%m%d'), (8, '%d%m%Y'), (8, '%m%d%Y'), (6, '%y%m%d')):
+            if len(s) >= width:
+                try: return datetime.strptime(s[:width], fmt).date()
+                except ValueError: continue
+    n = raw if isinstance(raw, int) else int(raw)
+    if 0 < n < 60000:
+        return (datetime(1960, 1, 1) + timedelta(days=n)).date()
+    raise ValueError(f"Unrecognised TBDATE value: {raw!r}")
+
+
+# ------------------------------------------------------------------
+# Hive partition discovery
+# ------------------------------------------------------------------
+def _hive_path(year: str, mon: str, day: str) -> str:
+    """Build the Hive-partitioned parquet path for a given date."""
+    return f'{PQ_BASE}/year={year}/month={mon}/day={day}/DPTRBLGS.parquet'
+
+def _find_latest_partition(base: str):
+    """Return the latest (year, month, day) triple present under base."""
+    pattern = os.path.join(base, 'year=*', 'month=*', 'day=*')
+    parts = glob.glob(pattern)
+    if not parts:
+        return None
+    parsed = []
+    for p in parts:
+        m = re.search(r'year=(\d{4})/month=(\d{2})/day=(\d{2})', p.replace('\\', '/'))
+        if m:
+            parsed.append((int(m.group(1)), int(m.group(2)), int(m.group(3))))
+    if not parsed:
+        return None
+    y, mo, d = max(parsed)
+    return f'{y:04d}', f'{mo:02d}', f'{d:02d}'
+
+
+def _resolve_input_path(cli_arg_date=None) -> str:
+    """
+    Determine the input parquet path.
+
+    Resolution order:
+      1. CLI arg YYYY-MM-DD or YYYYMMDD (if provided) → use that partition
+      2. Latest partition under PQ_BASE → peek at its TBDATE, use that date
+      3. Latest partition's own path (fallback)
+    """
+    # 1. Explicit CLI argument wins
+    if cli_arg_date:
+        s = cli_arg_date.strip()
+        for fmt in ('%Y-%m-%d', '%Y%m%d'):
+            try:
+                dt = datetime.strptime(s, fmt).date()
+                y, mo, d = f'{dt.year:04d}', f'{dt.month:02d}', f'{dt.day:02d}'
+                path = _hive_path(y, mo, d)
+                if not os.path.exists(path):
+                    print(f"ERROR: requested partition missing: {path}")
+                    sys.exit(1)
+                print(f"Using CLI date {dt.isoformat()} → {path}")
+                return path
+            except ValueError:
+                continue
+        print(f"ERROR: CLI date '{cli_arg_date}' not YYYY-MM-DD or YYYYMMDD")
+        sys.exit(1)
+
+    # 2. Peek latest partition's TBDATE
+    latest = _find_latest_partition(PQ_BASE)
+    if latest is None:
+        print(f"ERROR: no partitions found under {PQ_BASE}")
+        sys.exit(1)
+    y, mo, d = latest
+    probe = _hive_path(y, mo, d)
+    print(f"Probing latest partition: {probe}")
+    if not os.path.exists(probe):
+        print(f"ERROR: probe file missing: {probe}")
+        sys.exit(1)
+
+    try:
+        tbdate_raw = pl.read_parquet(probe, columns=['TBDATE']) \
+                       .select(pl.col('TBDATE').first()).item()
+        reptdate = _parse_tbdate(tbdate_raw)
+    except Exception as e:
+        print(f"WARN: cannot parse TBDATE from probe ({e}); using partition date {y}-{mo}-{d}")
+        reptdate = datetime(int(y), int(mo), int(d)).date()
+
+    # 3. Preferred path is partition matching the parsed TBDATE
+    y2, mo2, d2 = f'{reptdate.year:04d}', f'{reptdate.month:02d}', f'{reptdate.day:02d}'
+    preferred = _hive_path(y2, mo2, d2)
+    if os.path.exists(preferred):
+        print(f"Using TBDATE-derived partition: {preferred}")
+        return preferred
+
+    print(f"WARN: TBDATE={reptdate.isoformat()} but partition {preferred} missing.")
+    print(f"      Falling back to latest available: {probe}")
+    return probe
+
+
+# ------------------------------------------------------------------
+# Null-safe scalar helpers
+# ------------------------------------------------------------------
+def _int(v, default=0):
+    return default if v is None else int(v)
+
+def _float(v, default=0.0):
+    return default if v is None else float(v)
+
+def _str(v, default=''):
+    return default if v is None else str(v).strip()
+
+
+# ------------------------------------------------------------------
+# SASPy helpers
+# ------------------------------------------------------------------
+def _sas_table_exists(sas, libref, table):
+    try:
+        sas.sd2df(table, libref); return True
+    except Exception:
+        return False
+
+def _read_sas_table_to_df(sas, libref, table):
+    return sas.sd2df(table, libref)
+
+def _write_df_to_sas(sas, df_pd, libref, table):
+    if 'REPTDATE' in df_pd.columns:
+        df_pd = df_pd.copy()
+        df_pd['REPTDATE'] = pd.to_datetime(df_pd['REPTDATE'])
+    sas.df2sd(df_pd, table=table, libref=libref)
+
+
+# ------------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------------
+def main() -> int:
+    print("EIBDMELW - Conventional BNM EL Daily Deposit Extract")
+    print("=" * 60)
+
+    # ---------- resolve input path ----------
+    cli_date = sys.argv[1] if len(sys.argv) > 1 else None
+    input_path = _resolve_input_path(cli_date)
+    print(f"\nReading {input_path} ...")
+    try:
+        df_in = pl.read_parquet(input_path)
+    except Exception as e:
+        print(f"Error reading parquet: {e}")
+        return 1
+
+    REQUIRED_COLS = {
+        'TBDATE','BANKNO','REPTNO','FMTCODE','BRANCH','DEBIT','CREDIT',
+        'CUSTCODE','PRODUCT','DEPTYPE','INT1','INT2','CURBAL',
+        'OPENIND','COSTCTR',
+    }
+    missing = REQUIRED_COLS - set(df_in.columns)
+    if missing:
+        print(f"ERROR: parquet missing columns: {sorted(missing)}")
+        return 1
+
+    # ---------- parse TBDATE ----------
+    tbdate_raw = None
+    try:
+        tbdate_raw = df_in.select(pl.col('TBDATE').first()).item()
+        reptdate   = _parse_tbdate(tbdate_raw)
+    except Exception as e:
+        print(f"Error parsing TBDATE: {e}")
+        print(f"  Raw value: {tbdate_raw!r}")
+        return 1
+
+    day = reptdate.day
+    if   1 <= day <=  8: nowk = '1'
+    elif 9 <= day <= 15: nowk = '2'
+    elif 16<= day <= 22: nowk = '3'
+    else:                nowk = '4'
+
+    reptmon = f'{reptdate.month:02d}'
+    reptday = f'{reptdate.day:02d}'
+
+    print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+    print(f"Week: {nowk}, Month: {reptmon}, Day: {reptday}")
+    print("=" * 60)
+
+    # ---------- ELDAY ----------
+    def _elday_for(day_, nowk_, date_):
+        m = {
+            '1': {1:'DAYA', 2:'DAYB', 3:'DAYC', 4:'DAYD', 5:'DAYE', 6:'DAYF', 7:'DAYG', 8:'DAYI'},
+            '2': {9:'DAYA',10:'DAYB',11:'DAYC',12:'DAYD',13:'DAYE',14:'DAYF',15:'DAYI'},
+            '3': {16:'DAYA',17:'DAYB',18:'DAYC',19:'DAYD',20:'DAYE',21:'DAYF',22:'DAYI'},
+        }
+        if nowk_ == '4':
+            if 23 <= day_ <= 27:
+                return {23:'DAYA',24:'DAYB',25:'DAYC',26:'DAYD',27:'DAYE'}[day_]
+            if day_ == 28:
+                return 'DAYI' if (date_ + timedelta(days=1)).day == 1 else 'DAYF'
+            if day_ == 29:
+                return 'DAYI' if (date_ + timedelta(days=1)).day == 1 else 'DAYG'
+            if day_ == 30:
+                return 'DAYI' if (date_ + timedelta(days=1)).day == 1 else 'DAYH'
+            if day_ == 31:
+                return 'DAYI'
+        return m.get(nowk_, {}).get(day_, '')
+
+    elday = _elday_for(day, nowk, reptdate)
+    print(f"ELDAY: {elday}")
+
+    # ---------- accumulators ----------
+    _FIELDS = ('INTP','MISC','SPTF','ODFIN',
+               'SA','SACAI','CA','HDA',
+               'ODCOM','ODIS','ODMB','ODDH','ODCAG')
+    branch_data = {i: {k: 0.0 for k in _FIELDS} for i in range(1, 1000)}
+
+    # ---------- connect to SAS ----------
+    print(f"\nConnecting to SAS via SASPy (cfgname={SASPY_CFGNAME}) ...")
+    try:
+        sas = saspy.SASsession(cfgname=SASPY_CFGNAME)
+    except Exception as e:
+        print(f"FATAL: cannot establish SAS session: {e}")
+        return 1
+
+    try:
+        sas.saslib(SAS_LIBREF, path=BNM_DIR)
+        print(f"SAS library {SAS_LIBREF} assigned to {BNM_DIR}")
+    except Exception as e:
+        print(f"FATAL: cannot assign SAS library {SAS_LIBREF}: {e}")
+        return 1
+
+    # ---------- main scan ----------
+    print("\nProcessing parquet (CONVENTIONAL, COSTCTR NOT 3000-3999)...")
+    n_read = 0
+    n_kept = 0
+    n_after_common = 0
+    n_dropped_cctr = 0
+
+    try:
+        for row in df_in.iter_rows(named=True):
+            n_read += 1
+            if n_read % PROGRESS_EVERY == 0:
+                print(f"  ... {n_read:,} read, {n_kept:,} kept")
+
+            bankno  = _int(row['BANKNO'])
+            reptno  = _int(row['REPTNO'])
+            fmtcode = _int(row['FMTCODE'])
+            if not (bankno == 33 and reptno == 1001 and fmtcode == 1):
+                continue
+
+            openind  = _str(row['OPENIND'])
+            product  = _int(row['PRODUCT'])
+            if openind in ('B','C','P') or product in (297,298):
+                continue
+            n_after_common += 1
+
+            costctr = _int(row['COSTCTR'])
+            if 3000 <= costctr <= 3999:
+                n_dropped_cctr += 1
+                continue
+
+            branch   = _int(row['BRANCH'])
+            custcode = _int(row['CUSTCODE'])
+            deptype  = _str(row['DEPTYPE'])
+            int1     = _float(row['INT1'])
+            int2     = _float(row['INT2'])
+            curbal   = _float(row['CURBAL'])
+
+            n_kept += 1
+            intpaybl = int1 + int2
+
+            if deptype == 'S':
+                prodcd = _saprod(product)
+            elif deptype in ('D','N'):
+                prodcd = _caprod(product)
+            elif deptype == 'C':
+                if product == 318:
+                    continue
+                prodcd = _fdprodd(product)
+            else:
+                prodcd = ''
+
+            if product == 104:
+                custcd = '02'
+            elif product == 105:
+                custcd = '81'
+            elif deptype == 'S':
+                custcd = _sacustcd(custcode)
+            elif deptype in ('D','N'):
+                custcd = _ddcustcd(custcode)
+            elif deptype == 'C':
+                custcd = _fdcustcd(custcode)
+            else:
+                custcd = '79'
+
+            if deptype == 'S' and curbal >= 0:
+                if   prodcd == '42120': branch_data[branch]['SA']    += curbal
+                elif prodcd == '42320': branch_data[branch]['SACAI'] += curbal
+            elif deptype in ('D','N'):
+                if curbal >= 0:
+                    if prodcd == '42110':
+                        if product in ACE_PRODUCTS and curbal > 5000:
+                            branch_data[branch]['SA'] += curbal - 5000
+                            branch_data[branch]['CA'] += 5000
+                        else:
+                            branch_data[branch]['CA'] += curbal
+                    elif prodcd == '42180':
+                        branch_data[branch]['HDA']   += curbal
+                    elif prodcd == '42310':
+                        branch_data[branch]['SACAI'] += curbal
+                else:
+                    od_bal    = -curbal
+                    od_prodcd = _odprod(product)
+                    if od_prodcd == '34240':
+                        od_prodcd = '34180'
+                    if od_prodcd in ('34180','34380'):
+                        odc = _odcustcd(custcode)
+                        if   odc == '02': branch_data[branch]['ODCOM'] += od_bal
+                        elif odc == '03': branch_data[branch]['ODIS']  += od_bal
+                        elif odc == '11': branch_data[branch]['ODFIN'] += od_bal
+                        elif odc == '12': branch_data[branch]['ODMB']  += od_bal
+                        elif odc == '13': branch_data[branch]['ODDH']  += od_bal
+                        elif odc == '17': branch_data[branch]['ODCAG'] += od_bal
+
+            if custcd in INTEREST_CUSTCODES and deptype in ('S','D','N','C'):
+                if prodcd in ('42110','42120','42130'):
+                    branch_data[branch]['INTP'] += intpaybl
+                elif prodcd in ('42310','42320','42132'):
+                    branch_data[branch]['SPTF'] += intpaybl
+                else:
+                    branch_data[branch]['MISC'] += intpaybl
+    except Exception:
+        print("ERROR while scanning rows:")
+        traceback.print_exc()
+        return 1
+
+    print(f"  Rows read       : {n_read:,}")
+    print(f"  After common flt: {n_after_common:,}")
+    print(f"  Dropped COSTCTR : {n_dropped_cctr:,}")
+    print(f"  Kept (Convent.) : {n_kept:,}")
+
+    # ---------- emit ----------
+    print("\nGenerating BNM code records...")
+    def _emit(recs, branch, code, amount):
+        if EMIT_ZERO_ROWS or amount != 0:
+            recs.append({'REPTDATE': reptdate, 'BRANCH': branch,
+                         'ELDAY': elday, 'BNMCODE': code,
+                         'AMOUNT': float(amount)})
+
+    melw_records = []
+    for branch in range(1, 1000):
+        d = branch_data[branch]
+        _emit(melw_records, branch,        '3410011000000Y', d['ODFIN'])
+        _emit(melw_records, branch,        '4911080000000Y', d['INTP'])
+        _emit(melw_records, branch,        '4929980000000Y', d['MISC'])
+        _emit(melw_records, branch + 3000, '4929980000000I', d['SPTF'])
+        _emit(melw_records, branch, '4212000000000Y', d['SA'])
+        _emit(melw_records, branch, '4230000000000Y', d['SACAI'])
+        _emit(melw_records, branch, '4211000000000Y', d['CA'])
+        _emit(melw_records, branch, '4218000000000Y', d['HDA'])
+        _emit(melw_records, branch, '3410002000000Y', d['ODCOM'])
+        _emit(melw_records, branch, '3410003000000Y', d['ODIS'])
+        _emit(melw_records, branch, '3410012000000Y', d['ODMB'])
+        _emit(melw_records, branch, '3410013000000Y', d['ODDH'])
+        _emit(melw_records, branch, '3410017000000Y', d['ODCAG'])
+
+    if not melw_records:
+        print("  WARNING: no MELW records produced")
+        df_melw = pd.DataFrame(columns=['REPTDATE','BRANCH','ELDAY','BNMCODE','AMOUNT'])
+    else:
+        df_melw = pd.DataFrame(melw_records)
+    print(f"  Generated {len(df_melw):,} BNM code records")
+
+    # ---------- write ----------
+    table_name = f'MELW{reptmon}{nowk}'
+    print(f"\nWriting to SAS table {SAS_LIBREF}.{table_name} ...")
+    try:
+        if reptday in WEEK_START_DAYS:
+            print(f"  Week start (Day {reptday}): full replace")
+            _write_df_to_sas(sas, df_melw, SAS_LIBREF, table_name)
+        else:
+            print(f"  Mid-week (Day {reptday}): append (dedupe on REPTDATE)")
+            if not _sas_table_exists(sas, SAS_LIBREF, table_name):
+                print(f"  NOTE: {table_name} not found — bootstrapping fresh table.")
+                _write_df_to_sas(sas, df_melw, SAS_LIBREF, table_name)
+            else:
+                try:
+                    df_existing = _read_sas_table_to_df(sas, SAS_LIBREF, table_name)
+                except Exception as e:
+                    print(f"  ERROR reading existing {table_name}: {e}")
+                    return 1
+                if 'REPTDATE' in df_existing.columns:
+                    df_existing = df_existing[df_existing['REPTDATE'].dt.date != reptdate]
+                df_combined = pd.concat([df_existing, df_melw], ignore_index=True)
+                _write_df_to_sas(sas, df_combined, SAS_LIBREF, table_name)
+                print(f"    Combined: {len(df_combined):,} records")
+    except Exception:
+        print("ERROR while writing output via SASPy:")
+        traceback.print_exc()
+        return 1
+
+    print(f"\n{'='*60}")
+    print("EIBDMELW Complete")
+    print(f"{'='*60}")
+    print(f"Input   : {input_path}")
+    print(f"Output  : {SAS_LIBREF}.{table_name} ({BNM_DIR})")
+    print(f"Records : {len(df_melw):,}")
+    print(f"ELDAY   : {elday}, Week: {nowk}")
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
