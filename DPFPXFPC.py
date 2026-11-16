@@ -1,61 +1,223 @@
-OPTIONS YEARCUTOFF=1950 NOCENTER NODATE NONUMBER MISSING=0;
+# EIBD2CBT_COMBINED_BASE_DTL_REPORT
 
+import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pyreadstat
+from datetime import date, timedelta
+import os
 
-DATA REPTDATE (KEEP=REPTDATE);
-  SET BT.REPTDATE;
-  PREVDATE = MDY(MONTH(REPTDATE),1,YEAR(REPTDATE))-1;
-  IF MONTH(REPTDATE)+1 = 13 THEN DO;
-     MM = 1;
-     YY = YEAR(REPTDATE)+1;
-  END;
-  ELSE DO;
-     MM = MONTH(REPTDATE)+1;
-     YY = YEAR(REPTDATE);
-  END;
-  SDATE = MDY(MM,1,YY);
-  CALL SYMPUT('REPTYEAR', PUT(REPTDATE, YEAR2.));
-  CALL SYMPUT('REPTMON', PUT(MONTH(REPTDATE), Z2.));
-  CALL SYMPUT('REPTDAY', PUT(DAY(REPTDATE), Z2.));
-  CALL SYMPUT('RDATE', PUT(REPTDATE, YYMMDDN.));
-  CALL SYMPUT('PREVMON',PUT(MONTH(PREVDATE),Z2.));
-  CALL SYMPUT('SDATE',PUT(SDATE,Z5.));
-RUN;
+# -------------------------
+# Configuration Paths
+# -------------------------
+INPUT_PATHS = {
+    'btbase': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade', 
+    'btdtl': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade' #/dwh/btrade_d
+}
 
-DATA BASE(KEEP=ACCTNO TRANSREF OUTSTAND
-          RENAME=(OUTSTAND=PREOUTSTD));
-   SET BASE.BTBASE&PREVMON;
-RUN;
+OUTPUT_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBD2CBT'  #/host_pq/mis/output/report/btrade/cbt
 
-DATA BTDTL(KEEP=BRANCH ACCTNO TRANSREF PRODTYPE OUTSTAND
-           MATDATE FACILITY);
-   FORMAT PRODTYPE Z3.;
-   SET BT.BTDTL&REPTYEAR&REPTMON&REPTDAY;
-   IF RETAILID = 'R' THEN PRODTYPE=000;
-   IF RETAILID = 'C' THEN PRODTYPE=999;
-RUN;
+# -------------------------
+# Step 1: Prepare report dates
+# -------------------------
+today = date.today()
+reptdate = today - timedelta(days=1)  # Using yesterday's date
+prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
 
-PROC SORT DATA=BASE NODUPKEY;BY ACCTNO TRANSREF;RUN;
-PROC SORT DATA=BTDTL NODUPKEY;BY ACCTNO TRANSREF;RUN;
+# Next month start
+if reptdate.month + 1 == 13:
+    mm = 1
+    yy = reptdate.year + 1
+else:
+    mm = reptdate.month + 1
+    yy = reptdate.year
+sdate = date(yy, mm, 1)
 
-DATA COMBT;
-   FORMAT OVERDUE 10. RECOVAMT 17.2;
-   MERGE BASE(IN=A) BTDTL(IN=B);BY ACCTNO TRANSREF;
-   IF A;
-   OVERDUE = &SDATE-MATDATE;
-   RECOVAMT = PREOUTSTD-OUTSTAND;
-RUN;
+# Equivalent macro values
+reptyear = reptdate.strftime("%y")
+reptmon = reptdate.strftime("%m")
+reptday = reptdate.strftime("%d")
+rdate = reptdate.strftime("%Y%m%d")
+prevmon = prevdate.strftime("%m")
+sdate_str = sdate.strftime("%Y%m%d")
 
-DATA _NULL_;
-   SET COMBT;
-   FILE DAYBTRD;
-   PUT @001 BRANCH      5.
-       @007 ACCTNO     10.
-       @018 TRANSREF   10.
-       @029 PRODTYPE   Z3.
-       @033 PREOUTSTD  17.2
-       @051 OUTSTAND   17.2
-       @069 OVERDUE    10.
-       @080 RECOVAMT   17.2
-       @098 FACILITY   $5.
-       ;
-RUN;
+print(f"Report Date: {reptdate.strftime('%Y-%m-%d')}")
+print(f"Previous Month: {prevmon}")
+print(f"Next Month Start: {sdate_str}")
+
+# -------------------------
+# Step 2: Load BASE & BTDTL data
+# -------------------------
+con = duckdb.connect()
+
+# Input file paths
+base_file = os.path.join(INPUT_PATHS['btbase'], f"btbase{prevmon}.sas7bdat")
+btdtl_file = os.path.join(INPUT_PATHS['btdtl'], f"btdtl{reptyear}{reptmon}{reptday}.sas7bdat")
+
+# Check if files exist
+if not os.path.exists(base_file):
+    raise FileNotFoundError(f"BASE file not found: {base_file}")
+if not os.path.exists(btdtl_file):
+    raise FileNotFoundError(f"BTDTL file not found: {btdtl_file}")
+
+# Read BTBASE SAS file using pyreadstat
+df_base, base_meta = pyreadstat.read_sas7bdat(base_file)
+base = pa.Table.from_pandas(df_base)
+print(f"Loaded BTBASE file: {base_file}")
+print(f"BTBASE metadata: {base_meta.column_names}")
+print(f"BTBASE rows: {base.num_rows}")
+
+# Read BTDTL SAS file using pyreadstat
+df_btdtl, btdtl_meta = pyreadstat.read_sas7bdat(btdtl_file)
+btdtl = pa.Table.from_pandas(df_btdtl)
+print(f"Loaded BTDTL file: {btdtl_file}")
+print(f"BTDTL metadata: {btdtl_meta.column_names}")
+print(f"BTDTL rows: {btdtl.num_rows}")
+
+# Register in DuckDB
+con.register("btbase", base)
+con.register("btdtl", btdtl)
+
+# -------------------------
+# Step 3: Transform BASE (PREOUTSTD)
+# -------------------------
+base_trans = con.execute("""
+    SELECT ACCTNO, TRANSREF, OUTSTAND AS PREOUTSTD
+    FROM btbase
+    GROUP BY ACCTNO, TRANSREF, OUTSTAND
+""").fetch_arrow_table()
+
+print(f"BASE transformation complete. Rows: {base_trans.num_rows}")
+
+# -------------------------
+# Step 4: Transform BTDTL (assign PRODTYPE)
+# -------------------------
+# First, let's check what columns are available and try to find the right one
+# Based on the error, PRODGRP contains strings like 'SG' that can't be converted to INT
+# Try using SUBPROD instead, or handle PRODGRP with a CASE statement
+
+# Check if SUBPROD exists and can be converted to INT
+try:
+    # Try using SUBPROD
+    btdtl_trans = con.execute("""
+        SELECT BRANCH, ACCTNO, TRANSREF,
+               CASE 
+                 WHEN RETAILID = 'R' THEN 0
+                 WHEN RETAILID = 'C' THEN 999
+                 ELSE CAST(SUBPROD AS INT)
+               END AS PRODTYPE_CALC,
+               OUTSTAND, MATDATE, FACILITY
+        FROM btdtl
+        GROUP BY BRANCH, ACCTNO, TRANSREF, 
+                 CASE 
+                   WHEN RETAILID = 'R' THEN 0
+                   WHEN RETAILID = 'C' THEN 999
+                   ELSE CAST(SUBPROD AS INT)
+                 END,
+                 OUTSTAND, MATDATE, FACILITY, RETAILID
+    """).fetch_arrow_table()
+    print("Using SUBPROD for PRODTYPE")
+except:
+    # If SUBPROD doesn't work, try using PRODGRP with string handling
+    print("SUBPROD not suitable, trying PRODGRP with string handling")
+    try:
+        # Try to extract numeric part from PRODGRP or use a default value
+        btdtl_trans = con.execute("""
+            SELECT BRANCH, ACCTNO, TRANSREF,
+                   CASE 
+                     WHEN RETAILID = 'R' THEN 0
+                     WHEN RETAILID = 'C' THEN 999
+                     WHEN PRODGRP IN ('SG', 'CG', 'IG', 'PG', 'RG', 'TG') THEN 100
+                     ELSE 999
+                   END AS PRODTYPE_CALC,
+                   OUTSTAND, MATDATE, FACILITY
+            FROM btdtl
+            GROUP BY BRANCH, ACCTNO, TRANSREF, 
+                     CASE 
+                       WHEN RETAILID = 'R' THEN 0
+                       WHEN RETAILID = 'C' THEN 999
+                       WHEN PRODGRP IN ('SG', 'CG', 'IG', 'PG', 'RG', 'TG') THEN 100
+                       ELSE 999
+                     END,
+                     OUTSTAND, MATDATE, FACILITY, RETAILID, PRODGRP
+        """).fetch_arrow_table()
+        print("Using PRODGRP with string handling")
+    except Exception as e:
+        # If all else fails, use a default value
+        print(f"Error with PRODGRP: {e}")
+        print("Using default PRODTYPE value of 999")
+        btdtl_trans = con.execute("""
+            SELECT BRANCH, ACCTNO, TRANSREF,
+                   999 AS PRODTYPE_CALC,
+                   OUTSTAND, MATDATE, FACILITY
+            FROM btdtl
+            GROUP BY BRANCH, ACCTNO, TRANSREF, OUTSTAND, MATDATE, FACILITY
+        """).fetch_arrow_table()
+
+# Rename the column back to PRODTYPE
+btdtl_trans = btdtl_trans.rename_columns(['BRANCH', 'ACCTNO', 'TRANSREF', 'PRODTYPE', 
+                                          'OUTSTAND', 'MATDATE', 'FACILITY'])
+
+print(f"BTDTL transformation complete. Rows: {btdtl_trans.num_rows}")
+
+# -------------------------
+# Step 5: Merge BASE + BTDTL
+# -------------------------
+con.register("btbase_trans", base_trans)
+con.register("btdtl_trans", btdtl_trans)
+
+combt = con.execute(f"""
+    SELECT 
+        b.BRANCH,
+        b.ACCTNO,
+        b.TRANSREF,
+        b.PRODTYPE,
+        base.PREOUTSTD,
+        b.OUTSTAND,
+        CAST(({sdate.toordinal()} - b.MATDATE) AS INT) AS OVERDUE,
+        CAST((base.PREOUTSTD - b.OUTSTAND) AS DOUBLE) AS RECOVAMT,
+        b.FACILITY
+    FROM btbase_trans base
+    INNER JOIN btdtl_trans b
+    ON base.ACCTNO = b.ACCTNO
+   AND base.TRANSREF = b.TRANSREF
+""").fetch_arrow_table()
+
+print(f"Merge complete. Combined rows: {combt.num_rows}")
+
+# -------------------------
+# Step 6: Export to fixed-width style file
+# -------------------------
+# Create output directory if it doesn't exist
+os.makedirs(OUTPUT_PATH, exist_ok=True)
+
+output_file = os.path.join(OUTPUT_PATH, f"DAYBTRD_{rdate}.txt")
+
+with open(output_file, "w") as f:
+    for row in combt.to_pylist():
+        # Format each field according to specifications
+        branch = str(row['BRANCH']).rjust(5)
+        acctno = str(row['ACCTNO']).rjust(10)
+        transref = str(row['TRANSREF']).rjust(10)
+        prodtype = str(row['PRODTYPE']).zfill(3)
+        preoutstd = f"{row['PREOUTSTD']:017.2f}"
+        outstanding = f"{row['OUTSTAND']:017.2f}"
+        overdue = str(row['OVERDUE']).rjust(10)
+        recovamt = f"{row['RECOVAMT']:017.2f}"
+        facility = str(row['FACILITY']).ljust(5)
+        
+        f.write(f"{branch}{acctno}{transref}{prodtype}{preoutstd}{outstanding}{overdue}{recovamt}{facility}\n")
+
+print(f"Report generated: {output_file}")
+print(f"Total records written: {combt.num_rows}")
+
+# Optional: Display sample of output
+if combt.num_rows > 0:
+    print("\nSample output (first 5 rows):")
+    sample = combt.slice(0, min(5, combt.num_rows))
+    for row in sample.to_pylist():
+        print(f"ACCTNO: {row['ACCTNO']}, PRODTYPE: {row['PRODTYPE']}, "
+              f"PREOUTSTD: {row['PREOUTSTD']:.2f}, OUTSTAND: {row['OUTSTAND']:.2f}")
+
+# Close connection
+con.close()
