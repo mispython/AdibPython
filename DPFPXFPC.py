@@ -26,8 +26,6 @@ PARQUET_CACHE = {
 }
 
 OUTPUT_PATHS = {
-    "PARQUET": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.parquet",
-    "CSV": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCI_{date}.csv",
     "SAS": "/exdwh/host/kapiti/sasdata_dly/dci{mon}{wk}.sas7bdat",
     "TEXT": "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDCITX/DCITXT.txt",
 }
@@ -922,20 +920,10 @@ def main():
     # -------------------------------------------------------------------
     print("\nWriting output files...")
 
-    parquet_path = get_output_path("PARQUET", date_vars)
-    if len(dci_final) > 0:
-        dci_final.write_parquet(parquet_path)
-        print(f"  ✓ Parquet written: {parquet_path}")
-
     sas_path = get_output_path("SAS", date_vars)
     if len(dci_final) > 0:
         print(f"\nWriting SAS dataset to {sas_path}...")
         write_sas_file(dci_final, sas_path)
-
-    csv_path = get_output_path("CSV", date_vars)
-    if len(dci_final) > 0:
-        dci_final.write_csv(csv_path)
-        print(f"  ✓ CSV written: {csv_path}")
 
     print("\n" + "=" * 80)
     print(f"EIBDCITX completed successfully for {RDATE}!")
