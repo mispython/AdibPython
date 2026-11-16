@@ -37,6 +37,13 @@ import saspy
 
 
 # ---------------------------------------------------------------------------
+# TESTING CONTROLS
+# ---------------------------------------------------------------------------
+TESTING  = True          # set to False to process full data
+MAX_ROWS = 1_000_000     # cap rows read per SAS7BDAT input when TESTING is True
+
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 DATEFILE_PATH  = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/DATEFILE')
@@ -71,14 +78,12 @@ def write_sas7bdat(table_name: str, out_path: Path):
     """
     df = con.execute(f"SELECT * FROM {table_name}").df()
 
-    # saspy needs a SAS libref; point a temporary libref at the output dir
     sas_lib = 'eiidout'
     sas_lib_path = str(out_path.parent).replace("'", "''")
     sas.submit(f"""
         libname {sas_lib} '{sas_lib_path}';
     """)
 
-    # Dataset name = file stem (without .sas7bdat)
     ds_name = out_path.stem
     sas.df2sd(df, table=ds_name, libref=sas_lib, replace=True)
 
@@ -120,6 +125,8 @@ print(f"  PREVDATE : {prevdate.date()}")
 print(f"  DLETDATE : {dletdate.date()}")
 print(f"  REPTMON  : {reptmon:02d}")
 print(f"  LNDLY_PREVYEAR : {LNDLY_PREVYEAR}")
+if TESTING:
+    print(f"  *** TESTING MODE: row cap = {MAX_ROWS:,} per SAS7BDAT input ***")
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +137,8 @@ def ingest_sas7bdat_to_table(sas_file: Path, table_name: str, select_cols: list)
     Stream `sas_file` in chunks and INSERT the selected columns into `table_name`.
     Column names in `select_cols` must be UPPERCASE and match what SAS emits.
     Renames PENDBRH -> BRANCH for compatibility with the rest of the pipeline.
+
+    When TESTING is True, reads at most MAX_ROWS rows (for quick test runs).
     """
     if not sas_file.exists():
         raise FileNotFoundError(f"SAS7BDAT not found: {sas_file}")
@@ -141,7 +150,14 @@ def ingest_sas7bdat_to_table(sas_file: Path, table_name: str, select_cols: list)
     if miss:
         raise ValueError(f"{sas_file.name}: missing columns {miss}")
 
-    print(f"  Ingesting {sas_file.name}: {total:,} rows")
+    # Apply testing row cap
+    limit = total
+    if TESTING and MAX_ROWS is not None:
+        limit = min(total, MAX_ROWS)
+        print(f"  Ingesting {sas_file.name}: {total:,} rows available "
+              f"(TESTING cap -> reading {limit:,})")
+    else:
+        print(f"  Ingesting {sas_file.name}: {total:,} rows")
 
     con.execute(f"""
         CREATE OR REPLACE TABLE {table_name} (
@@ -157,11 +173,15 @@ def ingest_sas7bdat_to_table(sas_file: Path, table_name: str, select_cols: list)
 
     offset = 0
     chunk_idx = 0
-    while offset < total:
+    while offset < limit:
         chunk_idx += 1
+        read_n = min(CHUNK_SIZE, limit - offset)
         df_chunk, _ = pyreadstat.read_sas7bdat(
-            str(sas_file), row_offset=offset, row_limit=CHUNK_SIZE
+            str(sas_file), row_offset=offset, row_limit=read_n
         )
+        if df_chunk.empty:
+            break
+
         df_chunk.columns = [c.upper() for c in df_chunk.columns]
         df_chunk = df_chunk[select_cols].copy()
 
@@ -194,10 +214,10 @@ def ingest_sas7bdat_to_table(sas_file: Path, table_name: str, select_cols: list)
         con.unregister(f'_chunk_{table_name}_{chunk_idx}')
 
         offset += len(df_chunk)
-        print(f"    chunk {chunk_idx}: rows {offset:,} / {total:,}")
+        print(f"    chunk {chunk_idx}: rows {offset:,} / {limit:,}")
         del df_chunk
 
-    print(f"  Finished {table_name}: {offset:,} rows")
+    print(f"  Finished {table_name}: {offset:,} rows (cap {limit:,})")
 
 
 # ---------------------------------------------------------------------------
@@ -537,6 +557,8 @@ Output Files (SAS7BDAT):
   - dmcred_{rdate_file}.sas7bdat   (emitted only if previous-day source present)
   - dmhp_{rdate_file}.sas7bdat     (emitted only if previous-day source present)
   - lndly{reptday:02d}.sas7bdat
+
+Testing mode: {'ON' if TESTING else 'OFF'} (MAX_ROWS = {MAX_ROWS if TESTING else 'n/a'})
 """)
 
 con.close()
