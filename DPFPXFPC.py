@@ -12,10 +12,10 @@ import os
 # -------------------------
 INPUT_PATHS = {
     'btbase': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade', 
-    'btdtl': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade' #/dwh/btrade_d
+    'btdtl': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade'
 }
 
-OUTPUT_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBD2CBT'  #/host_pq/mis/output/report/btrade/cbt
+OUTPUT_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBD2CBT'
 
 # -------------------------
 # Step 1: Prepare report dates
@@ -79,132 +79,143 @@ con.register("btbase", base)
 con.register("btdtl", btdtl)
 
 # -------------------------
-# Step 3: Transform BASE (PREOUTSTD)
+# Step 3: Transform BASE (PREOUTSTD) - matching DATA BASE step
+# Keep only ACCTNO, TRANSREF, OUTSTAND (renamed to PREOUTSTD)
 # -------------------------
 base_trans = con.execute("""
     SELECT ACCTNO, TRANSREF, OUTSTAND AS PREOUTSTD
     FROM btbase
-    GROUP BY ACCTNO, TRANSREF, OUTSTAND
 """).fetch_arrow_table()
 
 print(f"BASE transformation complete. Rows: {base_trans.num_rows}")
 
 # -------------------------
-# Step 4: Transform BTDTL (assign PRODTYPE)
+# Step 4: Transform BTDTL (assign PRODTYPE) - matching DATA BTDTL step
+# SAS: KEEP BRANCH ACCTNO TRANSREF PRODTYPE OUTSTAND MATDATE FACILITY
+#      IF RETAILID = 'R' THEN PRODTYPE=000;
+#      IF RETAILID = 'C' THEN PRODTYPE=999;
 # -------------------------
-# First, let's check what columns are available and try to find the right one
-# Based on the error, PRODGRP contains strings like 'SG' that can't be converted to INT
-# Try using SUBPROD instead, or handle PRODGRP with a CASE statement
+# Determine which column to use for PRODTYPE
+btdtl_cols = set(btdtl.column_names)
+if 'PRODTYPE' in btdtl_cols:
+    prodtype_expr = "CAST(PRODTYPE AS INT)"
+    print("Using PRODTYPE column from BTDTL")
+elif 'SUBPROD' in btdtl_cols:
+    prodtype_expr = "CAST(SUBPROD AS INT)"
+    print("Using SUBPROD column for PRODTYPE")
+else:
+    # PRODGRP contains string codes like 'SG' - map to numeric or default
+    print("Using PRODGRP with string mapping for PRODTYPE")
+    prodtype_expr = """CASE 
+        WHEN PRODGRP IN ('SG', 'CG', 'IG', 'PG', 'RG', 'TG') THEN 100
+        ELSE 999
+    END"""
 
-# Check if SUBPROD exists and can be converted to INT
-try:
-    # Try using SUBPROD
-    btdtl_trans = con.execute("""
-        SELECT BRANCH, ACCTNO, TRANSREF,
-               CASE 
-                 WHEN RETAILID = 'R' THEN 0
-                 WHEN RETAILID = 'C' THEN 999
-                 ELSE CAST(SUBPROD AS INT)
-               END AS PRODTYPE_CALC,
-               OUTSTAND, MATDATE, FACILITY
-        FROM btdtl
-        GROUP BY BRANCH, ACCTNO, TRANSREF, 
-                 CASE 
-                   WHEN RETAILID = 'R' THEN 0
-                   WHEN RETAILID = 'C' THEN 999
-                   ELSE CAST(SUBPROD AS INT)
-                 END,
-                 OUTSTAND, MATDATE, FACILITY, RETAILID
-    """).fetch_arrow_table()
-    print("Using SUBPROD for PRODTYPE")
-except:
-    # If SUBPROD doesn't work, try using PRODGRP with string handling
-    print("SUBPROD not suitable, trying PRODGRP with string handling")
-    try:
-        # Try to extract numeric part from PRODGRP or use a default value
-        btdtl_trans = con.execute("""
-            SELECT BRANCH, ACCTNO, TRANSREF,
-                   CASE 
-                     WHEN RETAILID = 'R' THEN 0
-                     WHEN RETAILID = 'C' THEN 999
-                     WHEN PRODGRP IN ('SG', 'CG', 'IG', 'PG', 'RG', 'TG') THEN 100
-                     ELSE 999
-                   END AS PRODTYPE_CALC,
-                   OUTSTAND, MATDATE, FACILITY
-            FROM btdtl
-            GROUP BY BRANCH, ACCTNO, TRANSREF, 
-                     CASE 
-                       WHEN RETAILID = 'R' THEN 0
-                       WHEN RETAILID = 'C' THEN 999
-                       WHEN PRODGRP IN ('SG', 'CG', 'IG', 'PG', 'RG', 'TG') THEN 100
-                       ELSE 999
-                     END,
-                     OUTSTAND, MATDATE, FACILITY, RETAILID, PRODGRP
-        """).fetch_arrow_table()
-        print("Using PRODGRP with string handling")
-    except Exception as e:
-        # If all else fails, use a default value
-        print(f"Error with PRODGRP: {e}")
-        print("Using default PRODTYPE value of 999")
-        btdtl_trans = con.execute("""
-            SELECT BRANCH, ACCTNO, TRANSREF,
-                   999 AS PRODTYPE_CALC,
-                   OUTSTAND, MATDATE, FACILITY
-            FROM btdtl
-            GROUP BY BRANCH, ACCTNO, TRANSREF, OUTSTAND, MATDATE, FACILITY
-        """).fetch_arrow_table()
+btdtl_trans = con.execute(f"""
+    SELECT 
+        BRANCH, 
+        ACCTNO, 
+        TRANSREF,
+        CASE 
+            WHEN RETAILID = 'R' THEN 0
+            WHEN RETAILID = 'C' THEN 999
+            ELSE {prodtype_expr}
+        END AS PRODTYPE,
+        OUTSTAND, 
+        MATDATE, 
+        FACILITY
+    FROM btdtl
+""").fetch_arrow_table()
 
-# Rename the column back to PRODTYPE
-btdtl_trans = btdtl_trans.rename_columns(['BRANCH', 'ACCTNO', 'TRANSREF', 'PRODTYPE', 
-                                          'OUTSTAND', 'MATDATE', 'FACILITY'])
+# Rename to ensure clean column names
+btdtl_trans = btdtl_trans.rename_columns(
+    ['BRANCH', 'ACCTNO', 'TRANSREF', 'PRODTYPE', 'OUTSTAND', 'MATDATE', 'FACILITY']
+)
 
 print(f"BTDTL transformation complete. Rows: {btdtl_trans.num_rows}")
 
 # -------------------------
-# Step 5: Merge BASE + BTDTL
+# Step 5: Deduplicate by ACCTNO, TRANSREF (matching PROC SORT NODUPKEY)
 # -------------------------
-con.register("btbase_trans", base_trans)
-con.register("btdtl_trans", btdtl_trans)
+base_dedup = con.execute("""
+    SELECT ACCTNO, TRANSREF, PREOUTSTD
+    FROM (
+        SELECT ACCTNO, TRANSREF, PREOUTSTD,
+               ROW_NUMBER() OVER (PARTITION BY ACCTNO, TRANSREF ORDER BY PREOUTSTD) AS rn
+        FROM base_trans
+    )
+    WHERE rn = 1
+""").fetch_arrow_table()
+
+print(f"BASE deduplicated by ACCTNO/TRANSREF. Rows: {base_dedup.num_rows}")
+
+btdtl_dedup = con.execute("""
+    SELECT BRANCH, ACCTNO, TRANSREF, PRODTYPE, OUTSTAND, MATDATE, FACILITY
+    FROM (
+        SELECT BRANCH, ACCTNO, TRANSREF, PRODTYPE, OUTSTAND, MATDATE, FACILITY,
+               ROW_NUMBER() OVER (PARTITION BY ACCTNO, TRANSREF ORDER BY BRANCH) AS rn
+        FROM btdtl_trans
+    )
+    WHERE rn = 1
+""").fetch_arrow_table()
+
+print(f"BTDTL deduplicated by ACCTNO/TRANSREF. Rows: {btdtl_dedup.num_rows}")
+
+# -------------------------
+# Step 6: Merge BASE + BTDTL - matching MERGE BASE(IN=A) BTDTL(IN=B); IF A;
+# Use LEFT JOIN from BASE to keep all BASE records
+# -------------------------
+con.register("base_dedup", base_dedup)
+con.register("btdtl_dedup", btdtl_dedup)
 
 combt = con.execute(f"""
     SELECT 
         b.BRANCH,
-        b.ACCTNO,
-        b.TRANSREF,
+        base.ACCTNO,
+        base.TRANSREF,
         b.PRODTYPE,
         base.PREOUTSTD,
         b.OUTSTAND,
         CAST(({sdate.toordinal()} - b.MATDATE) AS INT) AS OVERDUE,
         CAST((base.PREOUTSTD - b.OUTSTAND) AS DOUBLE) AS RECOVAMT,
         b.FACILITY
-    FROM btbase_trans base
-    INNER JOIN btdtl_trans b
+    FROM base_dedup base
+    LEFT JOIN btdtl_dedup b
     ON base.ACCTNO = b.ACCTNO
    AND base.TRANSREF = b.TRANSREF
 """).fetch_arrow_table()
 
-print(f"Merge complete. Combined rows: {combt.num_rows}")
+print(f"Merge complete (BASE left join BTDTL). Combined rows: {combt.num_rows}")
 
 # -------------------------
-# Step 6: Export to fixed-width style file
+# Step 7: Export to fixed-width style file (matching SAS PUT)
 # -------------------------
-# Create output directory if it doesn't exist
 os.makedirs(OUTPUT_PATH, exist_ok=True)
 
 output_file = os.path.join(OUTPUT_PATH, f"DAYBTRD_{rdate}.txt")
 
 with open(output_file, "w") as f:
     for row in combt.to_pylist():
-        # Format each field according to specifications
-        branch = str(row['BRANCH']).rjust(5)
+        # SAS PUT format:
+        # @001 BRANCH     5.
+        # @007 ACCTNO    10.
+        # @018 TRANSREF  10.
+        # @029 PRODTYPE  Z3.
+        # @033 PREOUTSTD 17.2
+        # @051 OUTSTAND  17.2
+        # @069 OVERDUE   10.
+        # @080 RECOVAMT  17.2
+        # @098 FACILITY  $5.
+        
+        branch = str(row['BRANCH']).rjust(5) if row['BRANCH'] is not None else "     "
         acctno = str(row['ACCTNO']).rjust(10)
         transref = str(row['TRANSREF']).rjust(10)
-        prodtype = str(row['PRODTYPE']).zfill(3)
-        preoutstd = f"{row['PREOUTSTD']:017.2f}"
-        outstanding = f"{row['OUTSTAND']:017.2f}"
-        overdue = str(row['OVERDUE']).rjust(10)
-        recovamt = f"{row['RECOVAMT']:017.2f}"
-        facility = str(row['FACILITY']).ljust(5)
+        prodtype = str(row['PRODTYPE']).zfill(3) if row['PRODTYPE'] is not None else "999"
+        preoutstd = f"{row['PREOUTSTD']:017.2f}" if row['PREOUTSTD'] is not None else f"{0:017.2f}"
+        outstanding = f"{row['OUTSTAND']:017.2f}" if row['OUTSTAND'] is not None else f"{0:017.2f}"
+        overdue = str(row['OVERDUE']).rjust(10) if row['OVERDUE'] is not None else "         0"
+        recovamt = f"{row['RECOVAMT']:017.2f}" if row['RECOVAMT'] is not None else f"{0:017.2f}"
+        facility = str(row['FACILITY']).ljust(5) if row['FACILITY'] is not None else "     "
         
         f.write(f"{branch}{acctno}{transref}{prodtype}{preoutstd}{outstanding}{overdue}{recovamt}{facility}\n")
 
