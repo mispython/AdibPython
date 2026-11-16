@@ -1,684 +1,855 @@
-"""
-EIIDDEPE - Islamic Deposit Position Extract
-DuckDB does everything; SAS gets small summaries via SASPy,
-plus DYDP via DATA step + INFILE.
-
-Input: Hive-partitioned Parquet at
-       /host_pq/dp/parquet/year={YYYY}/month={MM}/day={DD}/DPTRBLGS.parquet
-
-Islamic-specific logic:
-- Only COSTCTR 3000-3999 records
-- ACE split: PRODCD=42110, product in (150,151,152,181), CURBAL>5000
-  -> 5000 stays CA (DYDPBAL=5000, DPTYPE='D'),
-     remainder becomes SA (DYDPBAL=CURBAL-5000, DPTYPE='S')
-- DDMV appended to MIS.DDMV (not MISQ)
-- SDRNGE uses SDRANGE only, no R2NGE
-- Materialized TEMP TABLE (3-branch UNION computed once)
-"""
-
-import duckdb
-import polars as pl
-import saspy
-from datetime import datetime, timedelta
-import os
-import re
-import time
-import warnings
-
-import PBBDPFMT
-import PBBLNFMT
-
-warnings.filterwarnings("ignore", message=".*Noticed 'ERROR:'.*")
-
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
-# Hive-partitioned input directory
-INPUT_ROOT = '/host_pq/dp/parquet'
-
-# Output base
-BASE_OUT  = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDDEPE'
-MIS_PATH  = f'{BASE_OUT}/MIS_PIBB'
-MISQ_PATH = f'{BASE_OUT}/MISQ'
-TEMP_PATH = f'{BASE_OUT}/TEMP'
-
-for p in (MIS_PATH, MISQ_PATH, TEMP_PATH):
-    os.makedirs(p, exist_ok=True)
-
-DYDP_CSV = f'{TEMP_PATH}/DYDP_import.csv'
-
-SAS_LIB_MIS  = 'MIS'
-SAS_LIB_MISQ = 'MISQ'
-SAS_LIB_TEMP = 'TEMP'
-
-ACE_PRODUCTS = sorted(PBBDPFMT.ACE)
-ISLAMIC_COSTCTR_MIN, ISLAMIC_COSTCTR_MAX = 3000, 3999
-EXCL_PROD, EXCL_OPEN = [297, 298], ['B', 'C', 'P']
-AGELIMIT, MAXAGE, AGEBELOW = 12, 18, 11
-
-# ============================================================================
-# SAS SESSION
-# ============================================================================
-
-print("Connecting to SAS...")
-sas = saspy.SASsession(cfgname='default')
-print("SAS session ready")
-
-sas.submit("""
-    ods html close;
-    ods listing;
-    options nonumber nodate;
-""")
-
-for lib, path in [(SAS_LIB_MIS, MIS_PATH),
-                  (SAS_LIB_MISQ, MISQ_PATH),
-                  (SAS_LIB_TEMP, TEMP_PATH)]:
-    sas.saslib(lib, engine=f'"{path}"')
-    print(f"  libname {lib:<5} -> {path}")
-
-rc = sas.submit("""
-    proc sql;
-      select libname, path from dictionary.libnames
-      where libname in ('MIS','MISQ','TEMP');
-    quit;
-""")
-tbl = rc.get('TABLE')
-if tbl is not None and len(tbl) > 0:
-    for _, row in tbl.iterrows():
-        print(f"  ✓ {row['libname']:<5} -> {row['path']}")
-
-# ============================================================================
-# HELPERS
-# ============================================================================
-
-def parse_date(val):
-    if not val: return None
-    s = re.sub(r'[^0-9]', '', str(int(val)) if isinstance(val, (int, float)) else str(val))
-    if len(s) >= 8:
-        try: return datetime.strptime(s[:8], '%Y%m%d').date()
-        except: pass
-    return None
-
-def days_in_month(year, month):
-    if month == 2: return 29 if year % 4 == 0 else 28
-    elif month in [4, 6, 9, 11]: return 30
-    else: return 31
-
-def sas_scalar(sql):
-    rc = sas.submit(sql.rstrip(';') + '; quit;')
-    tbl = rc.get('TABLE')
-    if tbl is not None and len(tbl) > 0:
-        return tbl.iloc[0, 0]
-    return None
-
-def build_input_path(reptdate):
-    """Build Hive-partitioned path from a date object."""
-    return (f"{INPUT_ROOT}/year={reptdate.year}"
-            f"/month={reptdate.month:02d}"
-            f"/day={reptdate.day:02d}"
-            f"/DPTRBLGS.parquet")
-
-def find_latest_partition(root):
-    """Find the most recent year/month/day partition that has DPTRBLGS.parquet."""
-    if not os.path.isdir(root):
-        return None
-    years = sorted([d for d in os.listdir(root) if d.startswith('year=')], reverse=True)
-    for y in years:
-        ydir = os.path.join(root, y)
-        months = sorted([d for d in os.listdir(ydir) if d.startswith('month=')], reverse=True)
-        for m in months:
-            mdir = os.path.join(ydir, m)
-            days = sorted([d for d in os.listdir(mdir) if d.startswith('day=')], reverse=True)
-            for d in days:
-                fpath = os.path.join(mdir, d, 'DPTRBLGS.parquet')
-                if os.path.isfile(fpath):
-                    return fpath
-    return None
-
-# ============================================================================
-# LOOKUP TABLES
-# ============================================================================
-
-def _rules_to_pairs(format_name, library):
-    rules = library.FORMATS[format_name]['rules']
-    return [(lo, label) for lo, hi, *_rest, label, _opts in rules
-            if isinstance(lo, int) and isinstance(hi, int) and lo == hi]
-
-SAPROD_DF  = pl.DataFrame(_rules_to_pairs('SAPROD',  PBBDPFMT),
-                          schema={'PRODUCT': pl.Int64, 'SAPROD':  pl.String}, orient='row')
-CAPROD_DF  = pl.DataFrame(_rules_to_pairs('CAPROD',  PBBDPFMT),
-                          schema={'PRODUCT': pl.Int64, 'CAPROD':  pl.String}, orient='row')
-FDPRODD_DF = pl.DataFrame(_rules_to_pairs('FDPRODD', PBBDPFMT),
-                          schema={'PRODUCT': pl.Int64, 'FDPRODD': pl.String}, orient='row')
-ODPROD_DF  = pl.DataFrame(_rules_to_pairs('ODPROD',  PBBLNFMT),
-                          schema={'PRODUCT': pl.Int64, 'ODPROD':  pl.String}, orient='row')
-
-# ============================================================================
-# DETERMINE REPORT DATE
-# ============================================================================
-
-probe_path = find_latest_partition(INPUT_ROOT)
-if probe_path is None:
-    probe_path = build_input_path(datetime.now().date())
-    if not os.path.isfile(probe_path):
-        raise FileNotFoundError(f"No DPTRBLGS.parquet found under {INPUT_ROOT}")
-
-print(f"\nProbing input: {probe_path}")
-_con = duckdb.connect()
-_rd = _con.execute(f"SELECT TBDATE FROM read_parquet('{probe_path}') LIMIT 1").pl()
-_con.close()
-
-reptdate = None
-if 'TBDATE' in _rd.columns and len(_rd) > 0:
-    reptdate = parse_date(_rd.select('TBDATE').row(0)[0])
-
-if not reptdate:
-    m = re.search(r'year=(\d+)/month=(\d+)/day=(\d+)', probe_path)
-    if m:
-        reptdate = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
-if not reptdate:
-    reptdate = datetime.now().date()
-
-INPUT_FILE = build_input_path(reptdate)
-if not os.path.isfile(INPUT_FILE):
-    raise FileNotFoundError(f"Input not found: {INPUT_FILE}")
-
-print(f"  Input file: {INPUT_FILE}")
-print(f"  Report date: {reptdate.strftime('%d/%m/%Y')}")
-
-reptyear, reptmon, reptday = reptdate.year, reptdate.month, reptdate.day
-nowk = str((reptday - 1) // 8 + 1) if reptday <= 24 else '4'
-reptdat3 = reptdate - timedelta(days=31)
-mth = days_in_month(reptyear, reptmon)
-is_weekly_or_monthend = (reptday in [8, 15, 22]) or (reptday == mth)
-
-print(f"  Week: {nowk}  Weekly/Month-end: {is_weekly_or_monthend}")
-
-# ============================================================================
-# PHASE 1: DuckDB
-# ============================================================================
-
-print("\n" + "=" * 70)
-print("PHASE 1: DuckDB reads and enriches (Islamic only)")
-print("=" * 70)
-
-t0 = time.time()
-con = duckdb.connect()
-con.execute("PRAGMA threads=8;")
-con.execute("PRAGMA memory_limit='8GB';")
-con.execute(f"PRAGMA temp_directory='{TEMP_PATH}';")
-
-con.register('saprod_lkp',  SAPROD_DF.to_arrow())
-con.register('caprod_lkp',  CAPROD_DF.to_arrow())
-con.register('fdprodd_lkp', FDPRODD_DF.to_arrow())
-con.register('odprod_lkp',  ODPROD_DF.to_arrow())
-
-ACE_LIST = ','.join(str(p) for p in ACE_PRODUCTS)
-
-enrich_sql = f"""
-CREATE OR REPLACE TEMP TABLE enriched AS
-WITH base AS (
-    SELECT *,
-        (CREDIT - DEBIT) AS MOVEMENT,
-        CURBAL AS DYDPBAL,
-        DATE '{reptdate.isoformat()}' AS REPTDATE,
-        CASE WHEN BRANCH = 132 THEN 168 ELSE BRANCH END AS BRANCH2
-    FROM read_parquet('{INPUT_FILE}')
-    WHERE BANKNO = 33 AND REPTNO = 1001 AND FMTCODE = 1
-      AND COSTCTR BETWEEN {ISLAMIC_COSTCTR_MIN} AND {ISLAMIC_COSTCTR_MAX}
-      AND OPENIND NOT IN ('B','C','P')
-      AND PRODUCT NOT IN (297, 298)
-),
-with_year AS (
-    SELECT *,
-        CASE
-            WHEN OPENDT IS NULL OR OPENDT = 0 THEN NULL
-            ELSE CAST(SUBSTR(REGEXP_REPLACE(CAST(OPENDT AS VARCHAR), '[^0-9]', '', 'g'), 1, 8) AS BIGINT) / 10000
-        END AS OPEN_YEAR
-    FROM base
-),
-with_acc AS (
-    SELECT *,
-        CASE WHEN OPEN_YEAR = {reptyear} AND CLOSEDT = 0 THEN 1 ELSE 0 END AS ACCYTD
-    FROM with_year
-),
-with_prod AS (
-    SELECT b.*, s.SAPROD, c.CAPROD, f.FDPRODD, o.ODPROD
-    FROM with_acc b
-    LEFT JOIN saprod_lkp  s ON b.PRODUCT = s.PRODUCT
-    LEFT JOIN caprod_lkp  c ON b.PRODUCT = c.PRODUCT
-    LEFT JOIN fdprodd_lkp f ON b.PRODUCT = f.PRODUCT
-    LEFT JOIN odprod_lkp  o ON b.PRODUCT = o.PRODUCT
-),
-with_prodcd AS (
-    SELECT *,
-        CASE
-            WHEN DEPTYPE = 'S' THEN COALESCE(SAPROD, '42120')
-            WHEN DEPTYPE IN ('D','N') AND CURBAL >= 0 THEN COALESCE(CAPROD, '42110')
-            WHEN DEPTYPE IN ('D','N') AND CURBAL <  0 THEN COALESCE(ODPROD, '34180')
-            WHEN DEPTYPE = 'C' THEN COALESCE(FDPRODD, '42130')
-            ELSE ''
-        END AS PRODCD
-    FROM with_prod
-),
-with_split_flag AS (
-    SELECT *,
-        CASE
-            WHEN PRODCD = '42110'
-             AND PRODUCT IN ({ACE_LIST})
-             AND CURBAL > 5000
-            THEN 1 ELSE 0
-        END AS IS_ACE_SPLIT
-    FROM with_prodcd
-),
-with_mvrange AS (
-    SELECT *,
-        CASE
-            WHEN PRODUCT IN ({ACE_LIST}) THEN
-                CASE
-                    WHEN ABS(MOVEMENT) <= 5000 THEN 5000
-                    WHEN ABS(MOVEMENT) <= 10000 THEN 10000
-                    WHEN ABS(MOVEMENT) <= 30000 THEN 30000
-                    WHEN ABS(MOVEMENT) <= 50000 THEN 50000
-                    WHEN ABS(MOVEMENT) <= 75000 THEN 75000
-                    WHEN ABS(MOVEMENT) <= 100000 THEN 100000
-                    ELSE 200000
-                END
-            ELSE
-                CASE
-                    WHEN ABS(MOVEMENT) <= 5000 THEN 5000
-                    WHEN ABS(MOVEMENT) <= 10000 THEN 10000
-                    WHEN ABS(MOVEMENT) <= 30000 THEN 30000
-                    WHEN ABS(MOVEMENT) <= 50000 THEN 50000
-                    WHEN ABS(MOVEMENT) <= 75000 THEN 75000
-                    ELSE 80000
-                END
-        END AS MVRANGE
-    FROM with_split_flag
-),
-normal_rows AS (
-    SELECT
-        REPTDATE, BRANCH2 AS BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
-        CASE WHEN DEPTYPE = 'S' THEN 'S' ELSE 'D' END AS DPTYPE,
-        PRODUCT, PRODCD, CAPROD, ODPROD,
-        CURBAL, DYDPBAL, APPRLIMT, ACCYTD, OPENDT,
-        MOVEMENT, MVRANGE, CUSTCODE, SECOND, COSTCTR, IS_ACE_SPLIT
-    FROM with_mvrange
-    WHERE IS_ACE_SPLIT = 0
-),
-split_sa AS (
-    SELECT
-        REPTDATE, BRANCH2 AS BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
-        'S' AS DPTYPE,
-        PRODUCT, PRODCD, CAPROD, ODPROD,
-        CURBAL, CAST(CURBAL - 5000 AS DOUBLE) AS DYDPBAL,
-        APPRLIMT, ACCYTD, OPENDT, MOVEMENT, MVRANGE, CUSTCODE, SECOND,
-        COSTCTR, IS_ACE_SPLIT
-    FROM with_mvrange
-    WHERE IS_ACE_SPLIT = 1
-),
-split_ca AS (
-    SELECT
-        REPTDATE, BRANCH2 AS BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
-        'D' AS DPTYPE,
-        PRODUCT, PRODCD, CAPROD, ODPROD,
-        CURBAL, CAST(5000 AS DOUBLE) AS DYDPBAL,
-        APPRLIMT, ACCYTD, OPENDT, MOVEMENT, MVRANGE, CUSTCODE, SECOND,
-        COSTCTR, IS_ACE_SPLIT
-    FROM with_mvrange
-    WHERE IS_ACE_SPLIT = 1
-)
-SELECT * FROM normal_rows
-UNION ALL
-SELECT * FROM split_sa
-UNION ALL
-SELECT * FROM split_ca
-"""
-con.execute(enrich_sql)
-print(f"  Enriched table created  ({time.time()-t0:.1f}s)")
-
-# ---- DYDP CSV ----
-print("\n" + "=" * 70)
-print("PHASE 1A: Export DYDP to CSV via DuckDB")
-print("=" * 70)
-t0 = time.time()
-con.execute(f"""
-COPY (
-    SELECT CAST(STRFTIME(REPTDATE, '%Y%m%d') AS BIGINT) AS REPTDATE,
-           BRANCH, ACCTNO,
-           REPLACE(REPLACE(COALESCE(NAME, ''), ',', ' '), '"', ' ') AS NAME,
-           DEBIT, CREDIT, DEPTYPE, DPTYPE, PRODUCT, PRODCD,
-           CURBAL, DYDPBAL, APPRLIMT, ACCYTD,
-           CAST(
-               SUBSTR(
-                   REGEXP_REPLACE(
-                       CAST(COALESCE(OPENDT, 0) AS VARCHAR),
-                       '[^0-9].*', '', 'g'
-                   ),
-                   1, 6
-               ) AS BIGINT
-           ) AS OPENDT,
-           MOVEMENT, MVRANGE
-    FROM enriched
-    WHERE (DEPTYPE = 'S' AND CURBAL >= 0 AND PRODCD IN ('42120','42320'))
-       OR (DEPTYPE IN ('D','N') AND CURBAL >= 0 AND PRODCD IN ('42110','42180','42310'))
-) TO '{DYDP_CSV}' (HEADER, DELIMITER ',')
-""")
-print(f"  ✓ CSV: {DYDP_CSV}  ({time.time()-t0:.1f}s, {os.path.getsize(DYDP_CSV)/1e6:.1f} MB)")
-
-# ---- Summaries ----
-print("\n" + "=" * 70)
-print("PHASE 1B: Summary aggregates in DuckDB")
-print("=" * 70)
-t0 = time.time()
-
-ddmv_pl = con.execute("""
-    SELECT REPTDATE, BRANCH, ACCTNO,
-           REPLACE(REPLACE(COALESCE(NAME, ''), ',', ' '), '"', ' ') AS NAME,
-           DEBIT, CREDIT, DEPTYPE,
-           CAPROD AS PRODCD, PRODUCT, CURBAL
-    FROM enriched
-    WHERE DEPTYPE IN ('D','N') AND CURBAL < 0 AND CAPROD IN ('42110','42310')
-""").pl()
-
-dyposn_pl = con.execute(f"""
-    SELECT DATE '{reptdate.isoformat()}' AS REPTDATE,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42120' AND CURBAL>=0 THEN CURBAL END), 0) AS TOTSAVG,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' AND CURBAL>=0 THEN CURBAL END), 0) AS TOTSAVGI,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODCD IN ('42110','42180') THEN CURBAL END), 0) AS TOTDMND,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODCD='42310' THEN CURBAL END), 0) AS TOTDMNDI,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODUCT=105 THEN CURBAL END), 0) AS TOTVOSF,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODUCT=104 THEN CURBAL END), 0) AS TOTVOSC,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND PRODUCT=105 THEN CURBAL END), 0) AS OVDVOSF,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND PRODUCT=104 THEN CURBAL END), 0) AS OVDVOSC,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND ODPROD IN ('34180','34380') THEN ABS(CURBAL) END), 0) AS TOTOVFT,
-        COALESCE(SUM(CASE WHEN DEPTYPE='C' AND PRODCD='42130' THEN CURBAL END), 0) AS TOTFD,
-        COALESCE(SUM(CASE WHEN DEPTYPE='C' AND PRODCD='42132' THEN CURBAL END), 0) AS TOTFDI,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND CURBAL>=0 AND PRODUCT IN ({ACE_LIST}) THEN CURBAL END), 0) AS ACESA,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODUCT IN ({ACE_LIST}) THEN CURBAL END), 0) AS ACECA,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' AND PRODUCT=214 AND CURBAL>=0 THEN CURBAL END), 0) AS TOTMBSA
-    FROM enriched
-""").pl()
-
-dyibu_pl = con.execute("""
-    SELECT REPTDATE, BRANCH,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' THEN CURBAL END), 0) AS SAI,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42310' THEN CURBAL END)
-               + SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42180' AND PRODUCT IN (63,163) THEN CURBAL END), 0) AS CAI,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42310' AND PRODUCT IN (61,161) THEN CURBAL END), 0) AS CAIG,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42180' AND PRODUCT IN (63,163) THEN CURBAL END), 0) AS CAIH,
-        COALESCE(SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' AND PRODUCT=214 THEN CURBAL END), 0) AS MBS,
-        SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' THEN 1 ELSE 0 END) AS SNO,
-        SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42310' THEN 1 ELSE 0 END)
-        + SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42180' AND PRODUCT IN (63,163) THEN 1 ELSE 0 END) AS CNO,
-        SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42310' AND PRODUCT IN (61,161) THEN 1 ELSE 0 END) AS CGNO,
-        SUM(CASE WHEN DEPTYPE IN ('D','N') AND PRODCD='42180' AND PRODUCT IN (63,163) THEN 1 ELSE 0 END) AS CHNO,
-        SUM(CASE WHEN DEPTYPE='S' AND PRODCD='42320' AND PRODUCT=214 THEN 1 ELSE 0 END) AS MBSNO
-    FROM enriched
-    GROUP BY REPTDATE, BRANCH
-    HAVING SAI + CAI + CAIG + CAIH + MBS > 0
-""").pl()
-
-dymvnt_pl = con.execute(f"""
-    SELECT REPTDATE, BRANCH, ACCTNO,
-           REPLACE(REPLACE(COALESCE(NAME, ''), ',', ' '), '"', ' ') AS NAME,
-           DEBIT, CREDIT, DEPTYPE,
-           PRODUCT, CURBAL, APPRLIMT
-    FROM enriched
-    WHERE (DEPTYPE = 'S' AND ABS(MOVEMENT) >= 50000)
-       OR (DEPTYPE IN ('D','N') AND DPTYPE = 'D' AND (
-              (ABS(MOVEMENT) >= 100000 AND PRODUCT IN ({ACE_LIST}))
-           OR (ABS(MOVEMENT) >= 1000000)))
-""").pl()
-
-dybrdp_pl = con.execute("""
-    SELECT BRANCH, DPTYPE, REPTDATE, SUM(DYDPBAL) AS BALANCE
-    FROM enriched
-    WHERE PRODCD NOT IN ('42320','42310') AND PRODUCT NOT IN (104, 105)
-    GROUP BY BRANCH, DPTYPE, REPTDATE
-""").pl()
-
-dyddcr_pl = con.execute(f"""
-    WITH src AS (
-        SELECT REPTDATE,
-            CASE WHEN CURBAL - (CREDIT - DEBIT) < 0 THEN CURBAL
-                 ELSE CURBAL - (CURBAL - (CREDIT - DEBIT))
-            END AS MOVEMENT_ADJ
-        FROM enriched
-        WHERE DPTYPE = 'D'
-          AND PRODUCT NOT IN ({ACE_LIST})
-          AND PRODCD <> '42310' AND PRODUCT <> 72 AND CURBAL >= 0
-    )
-    SELECT REPTDATE,
-        CASE
-            WHEN ABS(MOVEMENT_ADJ) < 300000 THEN 300000
-            WHEN ABS(MOVEMENT_ADJ) < 500000 THEN 500000
-            WHEN ABS(MOVEMENT_ADJ) < 1000000 THEN 1000000
-            WHEN ABS(MOVEMENT_ADJ) < 1500000 THEN 1500000
-            WHEN ABS(MOVEMENT_ADJ) < 2000000 THEN 2000000
-            WHEN ABS(MOVEMENT_ADJ) < 3000000 THEN 3000000
-            WHEN ABS(MOVEMENT_ADJ) < 4000000 THEN 4000000
-            WHEN ABS(MOVEMENT_ADJ) < 5000000 THEN 5000000
-            WHEN ABS(MOVEMENT_ADJ) < 10000000 THEN 10000000
-            ELSE 10000001
-        END AS RANGE,
-        SUM(MOVEMENT_ADJ) AS MOVEMENT
-    FROM src GROUP BY REPTDATE, RANGE
-""").pl()
-
-dydps_pl = con.execute(f"""
-    SELECT REPTDATE, MVRANGE, SUM(MOVEMENT) AS MOVEMENT
-    FROM enriched
-    WHERE DPTYPE='S' AND PRODUCT NOT IN ({ACE_LIST}) AND PRODCD='42120'
-    GROUP BY REPTDATE, MVRANGE
-""").pl()
-
-dyace_pl = con.execute(f"""
-    SELECT REPTDATE, MVRANGE, SUM(MOVEMENT) AS MOVEMENT
-    FROM enriched
-    WHERE DPTYPE='D' AND PRODUCT IN ({ACE_LIST})
-    GROUP BY REPTDATE, MVRANGE
-""").pl()
-
-if is_weekly_or_monthend:
-    sdrnge_pl = con.execute(f"""
-        WITH savg AS (
-            SELECT BRANCH, PRODUCT, PRODCD,
-                CASE WHEN RACE IN ('0','1','2','3') THEN RACE ELSE '0' END AS RACE,
-                CASE
-                    WHEN BDATE IS NULL OR BDATE = 0 THEN 0
-                    ELSE LEAST({MAXAGE}, GREATEST({AGEBELOW},
-                        {reptyear} - CAST(SUBSTR(REGEXP_REPLACE(CAST(BDATE AS VARCHAR), '[^0-9]', '', 'g'), 1, 4) AS BIGINT)))
-                END AS AGE,
-                CASE
-                    WHEN CURBAL < 5 THEN 5
-                    WHEN CURBAL < 10 THEN 10
-                    WHEN CURBAL < 50 THEN 50
-                    WHEN CURBAL < 100 THEN 100
-                    WHEN CURBAL < 500 THEN 500
-                    WHEN CURBAL < 1000 THEN 1000
-                    WHEN CURBAL < 1500 THEN 1500
-                    WHEN CURBAL < 2000 THEN 2000
-                    WHEN CURBAL < 2500 THEN 2500
-                    WHEN CURBAL < 3000 THEN 3000
-                    WHEN CURBAL < 3500 THEN 3500
-                    WHEN CURBAL < 4000 THEN 4000
-                    WHEN CURBAL < 4500 THEN 4500
-                    WHEN CURBAL < 5000 THEN 5000
-                    WHEN CURBAL < 6000 THEN 6000
-                    WHEN CURBAL < 7000 THEN 7000
-                    WHEN CURBAL < 8000 THEN 8000
-                    WHEN CURBAL < 9000 THEN 9000
-                    WHEN CURBAL < 10000 THEN 10000
-                    WHEN CURBAL < 15000 THEN 15000
-                    WHEN CURBAL < 20000 THEN 20000
-                    WHEN CURBAL < 25000 THEN 25000
-                    WHEN CURBAL < 30000 THEN 30000
-                    WHEN CURBAL < 35000 THEN 35000
-                    WHEN CURBAL < 40000 THEN 40000
-                    WHEN CURBAL < 45000 THEN 45000
-                    WHEN CURBAL < 50000 THEN 50000
-                    WHEN CURBAL < 55000 THEN 55000
-                    WHEN CURBAL < 60000 THEN 60000
-                    WHEN CURBAL < 65000 THEN 65000
-                    WHEN CURBAL < 70000 THEN 70000
-                    WHEN CURBAL < 75000 THEN 75000
-                    WHEN CURBAL < 80000 THEN 80000
-                    WHEN CURBAL < 85000 THEN 85000
-                    WHEN CURBAL < 90000 THEN 90000
-                    WHEN CURBAL < 95000 THEN 95000
-                    WHEN CURBAL < 100000 THEN 100000
-                    WHEN CURBAL < 150000 THEN 150000
-                    WHEN CURBAL < 200000 THEN 200000
-                    WHEN CURBAL < 300000 THEN 300000
-                    WHEN CURBAL < 500000 THEN 500000
-                    WHEN CURBAL < 1000000 THEN 1000000
-                    WHEN CURBAL < 2000000 THEN 2000000
-                    WHEN CURBAL < 3000000 THEN 3000000
-                    WHEN CURBAL < 4000000 THEN 4000000
-                    WHEN CURBAL < 5000000 THEN 5000000
-                    WHEN CURBAL < 10000000 THEN 10000000
-                    ELSE 10000001
-                END AS RANGE,
-                CURBAL, ACCYTD
-            FROM enriched WHERE DEPTYPE = 'S' AND CURBAL >= 0
-        )
-        SELECT BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE,
-               COUNT(*) AS NOACCT, SUM(CURBAL) AS CURBAL, SUM(ACCYTD) AS ACCYTD
-        FROM savg GROUP BY BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE
-    """).pl()
-else:
-    sdrnge_pl = pl.DataFrame([])
-
-con.close()
-print(f"  ✓ Summaries computed  ({time.time()-t0:.1f}s)")
-print(f"    DDMV={len(ddmv_pl):,}  DYIBU={len(dyibu_pl):,}  DYMVNT={len(dymvnt_pl):,}  "
-      f"DYBRDP={len(dybrdp_pl):,}  DYDDCR={len(dyddcr_pl):,}  "
-      f"DYDPS={len(dydps_pl):,}  DYACE={len(dyace_pl):,}")
-
-# ============================================================================
-# PHASE 2: Save to SAS
-# ============================================================================
-
-print("\n" + "=" * 70)
-print("PHASE 2: Writing SAS datasets")
-print("=" * 70)
-
-def save_sas(df_polars, libref, table):
-    if len(df_polars) == 0:
-        print(f"  ⚠ {libref}.{table}: No data"); return
-    sas.df2sd(df_polars.to_pandas(), table=table, libref=libref, replace=True)
-    print(f"  ✓ {libref}.{table}  ({len(df_polars):,} rows)")
-
-def upsert_sas(df_new, libref, table):
-    if len(df_new) == 0:
-        print(f"  ⚠ {libref}.{table}: No data"); return
-    pdf = df_new.to_pandas()
-    if reptday == 1:
-        sas.df2sd(pdf, table=table, libref=libref, replace=True)
-        print(f"  ✓ {libref}.{table} (new)"); return
-    if not sas.exist(table, libref=libref):
-        sas.df2sd(pdf, table=table, libref=libref)
-        print(f"  ✓ {libref}.{table} (created)"); return
-    dt_str = reptdate.strftime('%d%b%Y').upper()
-    sas.submit(f"""
-        data {libref}.{table}; set {libref}.{table};
-          if REPTDATE = '{dt_str}'d then delete; run;
-    """)
-    sas.df2sd(pdf, table=table, libref=libref, replace=False)
-    print(f"  ✓ {libref}.{table} (appended)")
-
-def append_ddmv(df_new):
-    """Islamic SAS: PROC APPEND DATA=DDMV BASE=MIS.DDMV (no dedupe date)."""
-    if len(df_new) == 0:
-        print("  ⚠ MIS.DDMV: No data"); return
-    pdf = df_new.to_pandas()
-    if not sas.exist('DDMV', libref=SAS_LIB_MIS):
-        sas.df2sd(pdf, table='DDMV', libref=SAS_LIB_MIS)
-        print(f"  ✓ MIS.DDMV (created, {len(df_new):,})"); return
-    sas.df2sd(pdf, table='DDMV', libref=SAS_LIB_MIS, replace=False)
-    print(f"  ✓ MIS.DDMV (appended, {len(df_new):,})")
-
-def import_dydp_via_datastep(csv_path, libref, table):
-    print(f"  Reading {csv_path}")
-    print(f"  Size: {os.path.getsize(csv_path)/1e6:.1f} MB")
-
-    t0 = time.time()
-    rc = sas.submit(f"""
-        data {libref}.{table};
-          length REPTDATE 8 BRANCH 8 ACCTNO 8 NAME $50 DEBIT 8 CREDIT 8
-                 DEPTYPE $1 DPTYPE $1 PRODUCT 8 PRODCD $8 CURBAL 8
-                 DYDPBAL 8 APPRLIMT 8 ACCYTD 8 OPENDT 8 MOVEMENT 8
-                 MVRANGE 8;
-          infile "{csv_path}" dlm=',' dsd firstobs=2 lrecl=2000 missover truncover;
-          input REPTDATE BRANCH ACCTNO NAME $ DEBIT CREDIT DEPTYPE $
-                DPTYPE $ PRODUCT PRODCD $ CURBAL DYDPBAL APPRLIMT
-                ACCYTD OPENDT MOVEMENT MVRANGE;
-          REPTDATE = input(put(REPTDATE, 8.), yymmdd8.);
-          format REPTDATE yymmdd10.;
-        run;
-    """)
-    elapsed = time.time() - t0
-    print(f"  ✓ DATA step import: {elapsed:.1f}s")
-
-    log = rc.get('LOG', '')
-    error_count = 0
-    for line in log.splitlines():
-        if 'ERROR' in line.upper():
-            error_count += 1
-            if error_count <= 5:
-                print(f"  ⚠ {line.strip()}")
-    if error_count > 5:
-        print(f"  ⚠ ... and {error_count - 5} more ERROR lines (suppressed)")
-
-    n = sas_scalar(f"proc sql; select count(*) as N from {libref}.{table}")
-    if n is not None:
-        print(f"  ✓ {libref}.{table} has {int(n):,} rows")
-    return elapsed
-
-print(f"\nImporting DYDP from {DYDP_CSV} via DATA step...")
-sas.submit(f"proc datasets lib={SAS_LIB_TEMP} nolist; delete DYDP; run;")
-import_dydp_via_datastep(DYDP_CSV, SAS_LIB_TEMP, 'DYDP')
-
-try:
-    os.remove(DYDP_CSV)
-    print(f"  ✓ removed scratch CSV")
-except OSError as e:
-    print(f"  ⚠ {e}")
-
-# All monthly MIS files (Islamic uses MIS_PIBB)
-upsert_sas(dyposn_pl, SAS_LIB_MIS, f'DYPOSN{reptmon:02d}')
-upsert_sas(dymvnt_pl, SAS_LIB_MIS, f'DYMVNT{reptmon:02d}')
-upsert_sas(dyibu_pl,  SAS_LIB_MIS, f'DYIBU{reptmon:02d}')
-upsert_sas(dyddcr_pl, SAS_LIB_MIS, f'DYDDCR{reptmon:02d}')
-upsert_sas(dybrdp_pl, SAS_LIB_MIS, f'DYBRDP{reptmon:02d}')
-upsert_sas(dydps_pl,  SAS_LIB_MIS, f'DYDPS{reptmon:02d}')
-upsert_sas(dyace_pl,  SAS_LIB_MIS, f'DYACE{reptmon:02d}')
-
-if is_weekly_or_monthend and len(sdrnge_pl) > 0:
-    save_sas(sdrnge_pl, SAS_LIB_MIS, f'SDRNGE{reptmon:02d}')
-
-# Islamic DDMV goes to MIS.DDMV (not MISQ.DDMV), simple append
-append_ddmv(ddmv_pl)
-
-# ============================================================================
-# SUMMARY
-# ============================================================================
-
-print("\n" + "=" * 70)
-print("✓ EIIDDEPE Complete (Islamic)")
-print("=" * 70)
-print(f"Report Date : {reptdate.strftime('%d/%m/%Y')} (Week {nowk})")
-print(f"Input File  : {INPUT_FILE}")
-print(f"Output dirs : MIS_PIBB={MIS_PATH}")
-print(f"              MISQ={MISQ_PATH}")
-print(f"              TEMP={TEMP_PATH}")
-print(f"Records     : DYMVNT={len(dymvnt_pl):,}  DYIBU={len(dyibu_pl):,}  "
-      f"DYBRDP={len(dybrdp_pl):,}  DYDDCR={len(dyddcr_pl):,}  "
-      f"DYDPS={len(dydps_pl):,}  DYACE={len(dyace_pl):,}  "
-      f"DDMV={len(ddmv_pl):,}"
-      + (f"  SDRNGE={len(sdrnge_pl):,}" if is_weekly_or_monthend else ""))
-print("=" * 70)
-
-sas.endsas()
+//EIBDNLFE JOB MSGCLASS=X,MSGLEVEL=(1,1),REGION=64M,NOTIFY=&SYSUID      JOB56893
+/*JOBPARM S=S1M2
+//*
+//EIBWCR2A  EXEC SAS609
+//DEPOSIT   DD DSN=SAP.PBB.MNITB.DAILY(0),DISP=SHR
+//STOREGL   DD DSN=SAP.PBB.GL.NLF.DAILY,DISP=OLD
+//STORE     DD DSN=SAP.PBB.NLF.DAILY,DISP=OLD
+//BASE      DD DSN=SAP.PBB.NLF.DAILY.BASE,DISP=OLD
+//FINAL     DD DSN=SAP.PBB.NLF.DAILY.SA,DISP=OLD
+//SASLIST   DD DSN=SAP.PBB.NLF.BEHAVE.TEXT(+1),                         00290013
+//             DISP=(NEW,CATLG,DELETE),                                 00300013
+//             DCB=(RECFM=FBA,LRECL=250,BLKSIZE=0,DSORG=PS),            00310013
+//             SPACE=(CYL,(1,1),RLSE),UNIT=SYSDA                        00320013
+//SORTWK01  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK02  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK03  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK04  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SORTWK05  DD UNIT=SYSDA,SPACE=(CYL,(1000,500))
+//SYSIN     DD *
+OPTIONS NOCENTER;
+DATA REPTDATE;
+  SET DEPOSIT.REPTDATE;
+  LAST = PUT(DAY(INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1),Z2.);
+  REPTDAY = PUT(DAY(REPTDATE), Z2.);
+  IF REPTDAY IN ('08','15','22') THEN INSERT = 'Y';
+  ELSE IF REPTDAY = LAST & DAY(TODAY()) < 8 THEN INSERT = 'Y';
+  CALL SYMPUT('DATEX',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('DATE',REPTDATE);
+  CALL SYMPUT('WKLYDATE',REPTDATE);
+  CALL SYMPUT('INSERT',INSERT);
+  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
+  CALL SYMPUT('REPTMON',PUT(MONTH(REPTDATE),Z2.));
+  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
+  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
+  CALL SYMPUT('REPTDATE',REPTDATE);
+RUN;
+ * PROC PRINT DATA=STORE.NOTE20100930;
+DATA DEPOSIT;
+   SET STORE.NOTE&REPTYEAR&REPTMON&REPTDAY;
+   PROD = SUBSTR(BNMCODE,1,7);
+   INDNON = SUBSTR(BNMCODE,6,2);
+   IF PROD = '9531108' THEN DESC = 'INDRMFD';
+   IF PROD = '9531109' THEN DESC = 'NONRMFD';
+   IF PROD = '9531208' THEN DESC = 'INDRMSA';
+   IF PROD = '9531209' THEN DESC = 'NONRMSA';
+   IF PROD = '9531308' THEN DESC = 'INDRMDD';
+   IF PROD = '9531309' THEN DESC = 'NONRMDD';
+   IF PROD = '9631108' THEN DESC = 'INDFXFD';
+   IF PROD = '9631109' THEN DESC = 'NONFXFD';
+   IF PROD = '9631308' THEN DESC = 'INDFXCA';
+   IF PROD = '9631309' THEN DESC = 'NONFXCA';
+   AMOUNT = ROUND(AMOUNT,1000.)/1000;
+RUN;
+PROC TRANSPOSE DATA=DEPOSIT OUT=STORE.DEP
+   (RENAME=(COL1=WEEK COL2=MONTH COL3=QTR COL4=HALFYR COL5=YEAR
+            COL6=LAST));
+   BY PROD DESC;
+   VAR AMOUNT;
+RUN;
+DATA STORE.DEPRMP2
+     STORE.DEPFXP2;
+   SET STORE.DEP;
+   IF PROD = '9531108' THEN DO;
+      DESC = 'INDRMFD';
+      ITEM = 'A1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9531109' THEN DO;
+      DESC = 'NONRMFD';
+      ITEM = 'A1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9531208' THEN DO;
+      DESC = 'INDRMSA';
+      ITEM = 'A1.16';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9531209' THEN DO;
+      DESC = 'NONRMSA';
+      ITEM = 'A1.13';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9531308' THEN DO;
+      DESC = 'INDRMDD';
+      ITEM = 'A1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9531309' THEN DO;
+      DESC = 'NONRMDD';
+      ITEM = 'A1.14';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631108' THEN DO;
+      DESC = 'INDFXFD';
+      ITEM = 'B1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631109' THEN DO;
+      DESC = 'NONFXFD';
+      ITEM = 'B1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631308' THEN DO;
+      DESC = 'INDFXCA';
+      ITEM = 'B1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631309' THEN DO;
+      DESC = 'NONFXCA';
+      ITEM = 'B1.14';
+      ITEM4= '- CURRENT';
+   END;
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);
+   INDNON = SUBSTR(PROD,6,2);
+   WEEK    = WEEK    * (-1);
+   MONTH   = MONTH   * (-1);
+   QTR     = QTR     * (-1);
+   HALFYR  = HALFYR  * (-1);
+   YEAR    = YEAR    * (-1);
+   LAST    = LAST    * (-1);
+   BALANCE = BALANCE * (-1);
+   DATEX = "&DATEX";
+   DATE = &DATE;
+   IF SUBSTR(PROD,1,2) = '95' THEN OUTPUT STORE.DEPRMP2;
+   ELSE IF SUBSTR(PROD,1,2) = '96' THEN OUTPUT STORE.DEPFXP2;
+RUN;
+PROC SORT DATA=STORE.DEPFXP2; BY ITEM;
+PROC SORT DATA=STOREGL.GLRMFXP2&REPTYEAR&REPTMON&REPTDAY; BY ITEM;
+DATA STORE.DEPFXP2;
+   MERGE STOREGL.GLRMFXP2&REPTYEAR&REPTMON&REPTDAY(IN=B
+         RENAME=(WEEK=WEEK1 LAST=LAST1 BALANCE=BALANCE1))
+         STORE.DEPFXP2;
+   BY ITEM;
+   WEEK   = SUM(WEEK,WEEK1);
+   LAST   = SUM(LAST,LAST1);
+   BALANCE= SUM(BALANCE,BALANCE1);
+   DROP WEEK1 LAST1 BALANCE1;
+RUN;
+
+PROC SORT DATA=STORE.DEPRMP2;
+  BY DESCENDING INDNON;
+PROC SORT DATA=STORE.DEPFXP2;
+  BY DESCENDING INDNON;
+DATA BASE.DEPOSIT;
+   SET STORE.DEPRMP2 STORE.DEPFXP2;
+RUN;
+    /** INPUT **/
+
+%MACRO MISAPPD;
+%IF "&INSERT" EQ "Y" %THEN
+    %DO;
+      DATA &PROD;
+         SET BASE.DEPOSIT;
+         WHERE DATE = &DATE & DESC = "&PROD";
+         BALANCE = BALANCE * (-1);
+         KEEP DATEX DATE BALANCE;
+      RUN;
+      DATA BASE.&PROD;
+         SET BASE.&PROD;
+         IF DATE EQ "&DATE" THEN DELETE;
+      RUN;
+      PROC SORT; BY DATE;
+   *   PROC PRINT;
+      PROC APPEND DATA=&PROD BASE=BASE.&PROD; RUN;
+      DATA STORE.&PROD;
+         SET BASE.&PROD;
+         WHERE DATE <= &DATE;
+   *   PROC PRINT;
+    %END;
+%ELSE %DO;
+      DATA &PROD;
+         SET BASE.DEPOSIT;
+         WHERE DATE = &DATE & DESC = "&PROD";
+         BALANCE = BALANCE * (-1);
+         KEEP DATEX DATE BALANCE;
+      RUN;
+      DATA STORE.&PROD;
+         SET BASE.&PROD &PROD;
+         WHERE DATE <= &DATE;
+      PROC SORT; BY DATE;
+   *  PROC PRINT;
+      RUN;
+%END;
+%MEND MISAPPD;
+RUN;
+DATA _NULL_;
+   PROD = 'INDRMDD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+DATA _NULL_;
+   PROD = 'INDRMFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+DATA _NULL_;
+   PROD = 'INDRMSA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+RUN;
+DATA _NULL_;
+   PROD = 'INDFXCA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+RUN;
+DATA _NULL_;
+   PROD = 'INDFXFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+RUN;
+DATA _NULL_;
+   PROD = 'NONRMDD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+DATA _NULL_;
+   PROD = 'NONRMFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+DATA _NULL_;
+   PROD = 'NONRMSA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+RUN;
+DATA _NULL_;
+   PROD = 'NONFXCA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+RUN;
+DATA _NULL_;
+   PROD = 'NONFXFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%MISAPPD;
+RUN;
+   /** PART-1 **/
+
+%MACRO REPORT;
+PROC DATASETS LIB=FINAL;
+  DELETE WEEKLY&PROD MONTHLY&PROD QTRLY&PROD
+         HALFYRLY&PROD YEARLY&PROD;
+RUN;
+DATA &PROD;
+   SET STORE.&PROD;
+   REPTDATE = &REPTDATE;
+   /*
+   REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
+                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
+   */
+   QTR1X = MONTH(REPTDATE)-3;
+   QTR2X = MONTH(REPTDATE)-6;
+   QTR3X = MONTH(REPTDATE)-9;
+   IF QTR1X <=0 THEN QTR1 = 12 + QTR1X;
+   ELSE QTR1 = QTR1X;
+   IF QTR2X <=0 THEN QTR2 = 12 + QTR2X;
+   ELSE QTR2 = QTR2X;
+   IF QTR3X <=0 THEN QTR3 = 12 + QTR3X;
+   ELSE QTR3 = QTR3X;
+
+   CALL SYMPUT('QTR1',QTR1);
+   CALL SYMPUT('QTR2',QTR2);
+   CALL SYMPUT('QTR3',QTR3);
+RUN;
+DATA COUNT;
+   SET STORE.&PROD NOBS=COUNT;
+   CALL SYMPUT('COUNT',COUNT);
+   ACOUNT = COUNT - 49;
+   WKLYDAY= DAY(&WKLYDATE);
+   IF WKLYDAY <= 8      THEN WCOUNT = COUNT - 45;
+   ELSE IF WKLYDAY <=15 THEN WCOUNT = COUNT - 46;
+   ELSE WCOUNT = COUNT - 47;
+   MCOUNT = COUNT - 44;
+   QCOUNT = COUNT - 36;
+   HCOUNT = COUNT - 24;
+   YCOUNT = COUNT;
+   CALL SYMPUT('ACOUNT',ACOUNT);
+   CALL SYMPUT('WCOUNT',WCOUNT);
+   CALL SYMPUT('MCOUNT',MCOUNT);
+   CALL SYMPUT('QCOUNT',QCOUNT);
+   CALL SYMPUT('HCOUNT',HCOUNT);
+   CALL SYMPUT('YCOUNT',YCOUNT);
+RUN;
+
+DATA FINAL.BEHAVE&PROD;
+   SET STORE.&PROD END=EOF;
+      IF _N_ > &ACOUNT;
+      IF EOF THEN CALL SYMPUT('OUTSTAND',BALANCE);
+RUN;
+
+%MACRO PROCESS;
+DATA GETBAL;
+   SET STORE.&PROD;
+   WHERE &WEEKSTDT <= DATE <= &WEEKEND ;
+   STATUS = "&STATUS";
+RUN;
+DATA LAST;
+   SET STORE.&PROD;
+   IF DATE = &LASTDT THEN CALL SYMPUT('LAST',BALANCE);
+RUN;
+PROC SORT DATA=GETBAL OUT=MIN;
+   BY BALANCE;
+PROC SORT DATA=GETBAL OUT=MAX;
+   BY DESCENDING BALANCE;
+RUN;
+DATA MIN(KEEP=STATUS MIN DATEMIN);
+   SET MIN;
+   IF _N_ = 1;
+   MIN = BALANCE;
+   DATEMIN = DATE;
+RUN;
+DATA MAX (KEEP=STATUS MAX DATEMAX);
+   SET MAX;
+   IF _N_ = 1;
+   MAX = BALANCE;
+   DATEMAX = DATE;
+RUN;
+DATA TEMP;
+  MERGE MAX MIN;
+  BY STATUS;
+  IF DATEMAX > DATEMIN THEN
+     PCTAGE = ROUND((((MAX - MIN) / &LAST) * 100),.01);
+  ELSE PCTAGE = ROUND((((MIN - MAX) / &LAST) * 100),.01);
+  DATE = &WEEKEND;
+RUN;
+PROC APPEND DATA=TEMP BASE=FINAL.&STATUS&PROD;
+%MEND PROCESS;
+*;
+%MACRO WEEKLY;
+   %DO I = &WCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTH = MONTH(DATE);
+   SETYEAR = YEAR(DATE);
+   IF SETDAY <= 8      THEN WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                                           PUT(SETYEAR,4.), DDMMYY8.)-1;
+   ELSE IF SETDAY <=15 THEN WEEKSTDT=INPUT('08'||PUT(SETMTH,Z2.)||
+                                           PUT(SETYEAR,4.), DDMMYY8.);
+   ELSE IF SETDAY <=22 THEN WEEKSTDT=INPUT('15'||PUT(SETMTH,Z2.)||
+                                           PUT(SETYEAR,4.), DDMMYY8.);
+   ELSE                     WEEKSTDT=INPUT('22'||PUT(SETMTH,Z2.)||
+                                           PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','WEEKLY');
+   CALL SYMPUT('LASTDT',WEEKSTDT);
+RUN;
+%PROCESS
+   %END;
+%MEND WEEKLY;
+*;
+%WEEKLY;
+RUN;
+*;
+DATA FINAL.WEEKLY&PROD;
+   SET FINAL.WEEKLY&PROD;
+   RENAME PCTAGE= WPCTAGE;
+RUN; /*
+PROC PRINT DATA=FINAL.WEEKLY&PROD;
+  FORMAT DATE DDMMYY8.;
+RUN;
+     */
+%MACRO MONTHLY;
+   %DO I = &MCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTH = MONTH(DATE);
+   SETYEAR = YEAR(DATE);
+   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                   PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','MONTHLY');
+   CALL SYMPUT('LASTDT',LASTDT);
+RUN;
+%PROCESS
+   %END;
+%MEND MONTHLY;
+%MONTHLY
+
+PROC SORT DATA=FINAL.MONTHLY&PROD; BY DATE;
+DATA FINAL.MONTHLY&PROD;
+   SET FINAL.MONTHLY&PROD;
+   BY STATUS;
+   IF DAY(DATE) NOT IN (8,15,22) OR LAST.STATUS;
+   RENAME PCTAGE= MPCTAGE;
+RUN; /*
+PROC PRINT DATA=FINAL.MONTHLY&PROD;
+  FORMAT DATE DDMMYY8.;
+RUN;
+       */
+%MACRO QTRLY;
+   %DO I = &QCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTHX = MONTH(DATE)-2;
+   SETYEAR = YEAR(DATE);
+   IF SETMTHX <=0 THEN DO;
+      SETMTH = 12 + SETMTHX;
+      SETYEAR = SETYEAR - 1;
+   END;
+   ELSE SETMTH = SETMTHX;
+   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                  PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','QTRLY');
+   CALL SYMPUT('LASTDT',LASTDT);
+RUN;
+%PROCESS
+   %END;
+%MEND QTRLY;
+%QTRLY
+
+PROC SORT DATA=FINAL.QTRLY&PROD; BY DATE;
+
+DATA FINAL.QTRLY&PROD;
+   SET FINAL.QTRLY&PROD;
+   BY STATUS ;
+   IF LAST.STATUS OR
+      (DAY(DATE) NOT IN (8,15,22) AND
+      MONTH(DATE) IN (&QTR1,&QTR2,&QTR3));
+   RENAME PCTAGE= QPCTAGE;
+RUN;
+     /*
+PROC PRINT;
+  FORMAT DATE DATEMIN DATEMAX DDMMYY8.;
+       */
+%MACRO HALFYRLY;
+   %DO I = &HCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTHX = MONTH(DATE)-5;
+   SETYEAR = YEAR(DATE);
+   IF SETMTHX <=0 THEN DO;
+      SETMTH = 12 + SETMTHX;
+      SETYEAR = SETYEAR - 1;
+   END;
+   ELSE SETMTH = SETMTHX;
+   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                  PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','HALFYRLY');
+   CALL SYMPUT('LASTDT',LASTDT);
+%PROCESS
+   %END;
+%MEND HALFYRLY;
+%HALFYRLY
+DATA FINAL.HALFYRLY&PROD;
+   SET FINAL.HALFYRLY&PROD;
+   BY STATUS ;
+
+   IF LAST.STATUS OR
+      (DAY(DATE) NOT IN (8,15,22) AND
+      MONTH(DATE) IN (&QTR2));
+   RENAME PCTAGE= HPCTAGE;
+RUN; /*
+PROC PRINT;
+  FORMAT DATE DATEMIN DATEMAX DDMMYY8.;
+       */
+%MACRO YEARLY;
+   %DO I = &YCOUNT %TO &COUNT;
+   DATA &PROD;
+      SET STORE.&PROD;
+      IF _N_ = &I;
+   SETDAY = DAY(DATE);
+   SETMTHX = MONTH(DATE)-11;
+   SETYEAR = YEAR(DATE);
+   IF SETMTHX <=0 THEN DO;
+      SETMTH = 12 + SETMTHX;
+      SETYEAR = SETYEAR - 1;
+   END;
+   ELSE SETMTH = SETMTHX;
+   WEEKSTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                  PUT(SETYEAR,4.), DDMMYY8.);
+   LASTDT=INPUT('01'||PUT(SETMTH,Z2.)||
+                PUT(SETYEAR,4.), DDMMYY8.)-1;
+   CALL SYMPUT('WEEKSTDT',WEEKSTDT);
+   CALL SYMPUT('WEEKEND',DATE);
+   CALL SYMPUT('STATUS','YEARLY');
+   CALL SYMPUT('LASTDT',LASTDT);
+RUN;
+%PROCESS
+   %END;
+%MEND YEARLY;
+*;
+%YEARLY;
+RUN;
+*;
+DATA FINAL.YEARLY&PROD;
+   SET FINAL.YEARLY&PROD;
+   BY STATUS ;
+   IF LAST.STATUS;
+   RENAME PCTAGE= YPCTAGE;
+RUN; /*
+PROC PRINT DATA=FINAL.YEARLY&PROD;
+  FORMAT DATE DDMMYY8.;
+RUN; */
+
+PROC SORT DATA=FINAL.WEEKLY&PROD; BY DATE;
+PROC SORT DATA=FINAL.MONTHLY&PROD; BY DATE;
+PROC SORT DATA=FINAL.QTRLY&PROD; BY DATE;
+PROC SORT DATA=FINAL.HALFYRLY&PROD; BY DATE;
+PROC SORT DATA=FINAL.YEARLY&PROD; BY DATE;
+DATA FINAL.BEHAVE&PROD(KEEP=DATE WPCTAGE MPCTAGE QPCTAGE
+                       BALANCE HPCTAGE YPCTAGE);
+   MERGE FINAL.BEHAVE&PROD
+         FINAL.WEEKLY&PROD
+         FINAL.MONTHLY&PROD
+         FINAL.QTRLY&PROD
+         FINAL.HALFYRLY&PROD
+         FINAL.YEARLY&PROD
+   ;
+   BY DATE;
+RUN;
+TITLE1 &PROD 'BEHAVIORAL TABLE' &RDATE;
+PROC PRINT DATA=FINAL.BEHAVE&PROD;
+   FORMAT DATE DDMMYY8.;
+
+%MACRO HIGHLOW;
+   PROC SORT DATA=BEHAVE OUT=MIN;
+      BY PCTAGE;
+   PROC SORT DATA=BEHAVE OUT=MAX;
+      BY DESCENDING PCTAGE;
+   RUN;
+   DATA MIN(KEEP=STATUS &STATUS);
+      SET MIN;
+      IF _N_ = 1;
+      &STATUS = PCTAGE;
+      STATUS = 'LOWEST';
+   RUN;
+   DATA MAX (KEEP=STATUS &STATUS);
+      SET MAX;
+      IF _N_ = 1;
+      &STATUS = PCTAGE;
+      STATUS = 'HIGHEST';
+   RUN;
+   DATA &STATUS;
+      SET MAX MIN;
+      BY STATUS;
+   RUN;
+%MEND HIGHLOW;
+
+DATA BEHAVE;
+  SET FINAL.BEHAVE&PROD;
+  PCTAGE = WPCTAGE;
+  IF PCTAGE = . THEN DELETE;
+  CALL SYMPUT('STATUS','WEEK');
+RUN;
+%HIGHLOW
+DATA BEHAVE;
+   SET FINAL.BEHAVE&PROD;
+   PCTAGE = MPCTAGE;
+   IF PCTAGE = . THEN DELETE;
+   CALL SYMPUT('STATUS','MONTH');
+RUN;
+%HIGHLOW
+DATA BEHAVE;
+   SET FINAL.BEHAVE&PROD;
+   PCTAGE = QPCTAGE;
+   IF PCTAGE = . THEN DELETE;
+   CALL SYMPUT('STATUS','QTR');
+RUN;
+%HIGHLOW
+DATA BEHAVE;
+   SET FINAL.BEHAVE&PROD;
+   PCTAGE = HPCTAGE;
+   IF PCTAGE = . THEN DELETE;
+   CALL SYMPUT('STATUS','HALFYR');
+RUN;
+%HIGHLOW
+DATA BEHAVE;
+   SET FINAL.BEHAVE&PROD;
+   PCTAGE = YPCTAGE;
+   IF PCTAGE = . THEN DELETE;
+   CALL SYMPUT('STATUS','YEAR');
+RUN;
+%HIGHLOW
+DATA FINAL.HIGHLOW&PROD;
+   MERGE WEEK MONTH QTR HALFYR YEAR;
+   BY STATUS;
+RUN; /*
+PROC PRINT DATA=FINAL.HIGHLOW&PROD;
+    */
+DATA FINAL.HIGHLOW&PROD;
+   SET FINAL.HIGHLOW&PROD;
+   IF STATUS = 'HIGHEST' THEN DO;
+      IF WEEK  > MONTH THEN MONTH = WEEK;
+      IF MONTH > QTR THEN QTR = MONTH;
+      IF QTR > HALFYR THEN HALFYR = QTR;
+      IF HALFYR > YEAR THEN YEAR = HALFYR;
+      IF WEEK  > 100 THEN WEEK   = 100;
+      IF MONTH > 100 THEN MONTH  = 100;
+      IF QTR   > 100 THEN QTR    = 100;
+      IF HALFYR> 100 THEN HALFYR = 100;
+      IF YEAR  > 100 THEN YEAR   = 100;
+   END;
+   IF STATUS = 'LOWEST' THEN DO;
+      IF WEEK  < MONTH THEN MONTH = WEEK;
+      IF MONTH < QTR THEN QTR = MONTH;
+      IF QTR < HALFYR THEN HALFYR = QTR;
+      IF HALFYR < YEAR THEN YEAR = HALFYR;
+      IF WEEK  < -100 THEN WEEK   = -100;
+      IF MONTH < -100 THEN MONTH  = -100;
+      IF QTR   < -100 THEN QTR    = -100;
+      IF HALFYR< -100 THEN HALFYR = -100;
+      IF YEAR  < -100 THEN YEAR   = -100;
+   END;
+RUN;
+   /*
+DATA FINAL.HIGHLOW&PROD;
+   SET FINAL.HIGHLOW&PROD;
+      IF ABS(WEEK)  > ABS(MONTH) THEN MONTH = WEEK;
+      IF ABS(MONTH) > ABS(QTR) THEN QTR = MONTH;
+      IF ABS(QTR) > ABS(HALFYR) THEN HALFYR = QTR;
+      IF ABS(HALFYR) > ABS(YEAR) THEN YEAR = HALFYR;
+RUN;
+  */
+
+PROC PRINT DATA=FINAL.HIGHLOW&PROD;
+
+DATA HIGH (DROP=STATUS);
+  SET FINAL.HIGHLOW&PROD;
+  WHERE STATUS = 'HIGHEST';
+  FINALSTAT = 'FINAL';
+RUN;
+DATA LOW(DROP=STATUS);
+  SET FINAL.HIGHLOW&PROD(RENAME=(WEEK=WEEK1 MONTH=MONTH1
+                            QTR=QTR1 HALFYR=HALFYR1 YEAR=YEAR1));
+  WHERE STATUS = 'LOWEST';
+  FINALSTAT = 'FINAL';
+RUN;
+DATA FINAL.MAXMIN&PROD;
+   MERGE HIGH LOW;
+   BY FINALSTAT;
+   DESC = "&PROD";
+   IF ABS(WEEK1) > ABS(WEEK) THEN WEEK = ABS(WEEK1);
+   ELSE WEEK = ABS(WEEK);
+   IF ABS(MONTH1) > ABS(MONTH) THEN MONTH = ABS(MONTH1);
+   ELSE MONTH = ABS(MONTH);
+   IF ABS(QTR1) > ABS(QTR) THEN QTR = ABS(QTR1);
+   ELSE QTR = ABS(QTR);
+   IF ABS(HALFYR1) > ABS(HALFYR) THEN HALFYR = ABS(HALFYR1);
+   ELSE HALFYR = ABS(HALFYR);
+   IF ABS(YEAR1) > ABS(YEAR) THEN YEAR = ABS(YEAR1);
+   ELSE YEAR = ABS(YEAR);
+   WEEK   = ROUND((WEEK * &OUTSTAND / 100),1.);
+   MONTH  = ROUND(((MONTH * &OUTSTAND / 100) - WEEK),1.);
+   QTR    = ROUND(((QTR * &OUTSTAND / 100) - SUM(WEEK,MONTH)),1.);
+   HALFYR = ROUND(((HALFYR * &OUTSTAND /100) - SUM(WEEK,MONTH,QTR)),1.);
+   YEAR   = ROUND(((YEAR * &OUTSTAND /100) -
+                    SUM(WEEK,MONTH,QTR,HALFYR)),1.);
+   LAST   = ROUND((&OUTSTAND - SUM(WEEK,MONTH,QTR,HALFYR,YEAR)),1.);
+   TOTAL  = ROUND(&OUTSTAND,1.);
+   IF WEEK   < 0 THEN WEEK   = 0;
+   IF MONTH  < 0 THEN MONTH  = 0;
+   IF QTR    < 0 THEN QTR    = 0;
+   IF HALFYR < 0 THEN HALFYR = 0;
+   IF YEAR   < 0 THEN YEAR   = 0;
+   DROP WEEK1 MONTH1 QTR1 HALFYR1 YEAR1;
+RUN;
+PROC PRINT DATA=FINAL.MAXMIN&PROD;
+TITLE1 &PROD 'BEHAVIORAL FIGURE TO BE REPORTED' &RDATE ;
+RUN;
+%MEND REPORT;
+*;
+DATA _NULL_;
+   PROD = 'INDRMDD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+DATA _NULL_;
+   PROD = 'INDRMFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+DATA _NULL_;
+   PROD = 'INDRMSA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+RUN;
+DATA _NULL_;
+   PROD = 'INDFXCA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+RUN;
+DATA _NULL_;
+   PROD = 'INDFXFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+RUN;
+DATA _NULL_;
+   PROD = 'NONRMDD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+DATA _NULL_;
+   PROD = 'NONRMFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+DATA _NULL_;
+   PROD = 'NONRMSA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+RUN;
+DATA _NULL_;
+   PROD = 'NONFXCA';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+RUN;
+DATA _NULL_;
+   PROD = 'NONFXFD';
+   CALL SYMPUT('PROD',PROD);
+RUN;
+%REPORT;
+RUN;
+*;
+   /**  NLB1 **/
+DATA STORE.BEHAVENOTE;
+   SET FINAL.MAXMINNONRMFD
+       FINAL.MAXMINNONRMSA
+       FINAL.MAXMINNONRMDD
+       FINAL.MAXMININDRMFD
+       FINAL.MAXMININDRMSA
+       FINAL.MAXMININDRMDD
+       FINAL.MAXMINNONFXFD
+       FINAL.MAXMINNONFXCA
+       FINAL.MAXMININDFXFD
+       FINAL.MAXMININDFXCA;
+   IF DESC = 'INDRMFD' THEN PROD = '9331108';
+   IF DESC = 'NONRMFD' THEN PROD = '9331109';
+   IF DESC = 'INDRMSA' THEN PROD = '9331208';
+   IF DESC = 'NONRMSA' THEN PROD = '9331209';
+   IF DESC = 'INDRMDD' THEN PROD = '9331308';
+   IF DESC = 'NONRMDD' THEN PROD = '9331309';
+   IF DESC = 'INDFXFD' THEN PROD = '9631108';
+   IF DESC = 'NONFXFD' THEN PROD = '9631109';
+   IF DESC = 'INDFXCA' THEN PROD = '9631308';
+   IF DESC = 'NONFXCA' THEN PROD = '9631309';
+   INDNON = SUBSTR(BNMCODE,6,2);
+   AMOUNT = ROUND(AMOUNT,1000.)/1000;
+RUN;
+PROC SORT;
+   BY PROD DESC;
+RUN;
+DATA STORE.DEPRMP1
+     STORE.DEPFXP1;
+   SET STORE.BEHAVENOTE;
+   IF PROD = '9331108' THEN DO;
+      ITEM = 'A1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9331109' THEN DO;
+      ITEM = 'A1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9331208' THEN DO;
+      ITEM = 'A1.16';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9331209' THEN DO;
+      ITEM = 'A1.13';
+      ITEM4= '- SAVINGS';
+   END;
+   IF PROD = '9331308' THEN DO;
+      ITEM = 'A1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9331309' THEN DO;
+      ITEM = 'A1.14';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631108' THEN DO;
+      ITEM = 'B1.15';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631109' THEN DO;
+      ITEM = 'B1.12';
+      ITEM4= '- FIXED  ';
+   END;
+   IF PROD = '9631308' THEN DO;
+      ITEM = 'B1.17';
+      ITEM4= '- CURRENT';
+   END;
+   IF PROD = '9631309' THEN DO;
+      ITEM = 'B1.14';
+      ITEM4= '- CURRENT';
+   END;
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);
+   INDNON = SUBSTR(PROD,6,2);
+   WEEK    = WEEK    * (-1);
+   MONTH   = MONTH   * (-1);
+   QTR     = QTR     * (-1);
+   HALFYR  = HALFYR  * (-1);
+   YEAR    = YEAR    * (-1);
+   LAST    = LAST    * (-1);
+   BALANCE = BALANCE * (-1);
+   IF SUBSTR(PROD,1,2) = '93' THEN OUTPUT STORE.DEPRMP1;
+   ELSE IF SUBSTR(PROD,1,2) = '96' THEN OUTPUT STORE.DEPFXP1;
+RUN;
+PROC SORT DATA=STORE.DEPRMP1;
+  BY DESCENDING INDNON;
+ * PROC PRINT;
+PROC SORT DATA=STORE.DEPFXP1;
+  BY DESCENDING INDNON;
+ * PROC PRINT;
+  /**** REPORT ***/
+OPTIONS MISSING=0;
+DATA REPORT;
+   SET STORE.DEPRMP1;
+   ITEM2 = 'DEPOSIT :';
+   IF INDNON = '08' THEN      ITEM3 = 'INDIVIDUALS    ';
+   ELSE IF INDNON = '09' THEN ITEM3 = 'NON-INDIVUDUALS';
+   BALANCE = BALANCE * (-1);
+   WEEK    = WEEK    * (-1);
+   MONTH   = MONTH   * (-1);
+   QTR     = QTR     * (-1);
+   HALFYR  = HALFYR  * (-1);
+   YEAR    = YEAR    * (-1);
+   LAST    = LAST    * (-1);
+RUN;
+ * PROC PRINT;
+RUN;
+/*
+//
+*;
