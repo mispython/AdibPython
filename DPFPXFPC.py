@@ -1,94 +1,346 @@
-Report Date: 2026-11-15
-Previous Month: 10
-Next Month Start: 20261201
-Loaded BTBASE file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade/btbase10.sas7bdat
-BTBASE metadata: ['TRANSREX', 'BRANCH', 'ACCTNO', 'OUTSTAND', 'TRANSREF', 'FACILITY', 'PRODTYPE', 'DAYS']
-BTBASE rows: 119
-Loaded BTDTL file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade/btdtl261115.sas7bdat
-BTDTL metadata: ['TRANSREX', 'CREATTYP', 'BRANCH', 'APPLCODE', 'ACCTNO', 'SUBACCT', 'CREATYYMMDD', 'EXPIRDS', 'SYNDICAT', 'SPECIALF', 'PURPOSES', 'AANUMBER', 'INTRATE', 'SPREAD', 'INFUNDRT', 'DISCNTB', 'DISCNTF', 'TRANXMT', 'EXCHRTE', 'FORCURR', 'LIABCODE', 'BTREL1', 'RELFROM', 'CURRENCY', 'APPRLIMT', 'APPRLIM2', 'OFFAPIND', 'TFDESC01', 'TFCNTR01', 'TFCNTR03', 'TFCNTR04', 'TFINDR01', 'TFINDR02', 'TFINDR03', 'TFINDR04', 'TFINDR05', 'ISSDTEYYMMDD', 'SINDICAT', 'SUBPROD', 'FACLINE', 'PRODGRP', 'DIRCTIND', 'TRANSREL', 'COMMRATE', 'DISCRATE', 'CONRATE_IND', 'INTBASE', 'PLUSMINUS', 'NUMDAYS', 'BACOM', 'DISCOUNT_PROCEED', 'MTD_TAWIDH_AMT', 'MTD_GHARAMAH_AMT', 'REPAY_SOURCE', 'REPAY_TYPE_CD', 'PROP_DEVELOP_FIN_IND', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'CLIMATE_MITIGATE_GP1_FLG', 'CLIMATE_ADAPT_GP2_FLG', 'CLIMATE_ENVIRONMT_GP3_FLG', 'CLIMATE_TRANSITION_GP4_FLG', 'CLIMATE_PROHIBIT_GP5_FLG', 'SOURCE_INCOME_CURRENCY_CD', 'AADATE', 'REFERRAL_BRANCH', 'APPL_COMMERCIAL_TAG', 'COMBRATE', 'AA_APPROVED_DT', 'BTREL2', 'BTREL3', 'BTREL4', 'NOLEVEL', 'OUTSTAND', 'CERTNO', 'COLLECNO', 'PAYBKNO', 'ADDRLN3', 'ADDRLN4', 'CNTRY', 'PREBKNO', 'PRINAMT_MYRX', 'INTAMT_MYRX', 'OTH_CHARGEX', 'TRANSREF', 'MATUREDS', 'RETAILID', 'STATE', 'SCORE1', 'SCORE2', 'BUSREGN', 'SECTOR', 'SM_STATUS', 'IA_LRU', 'SM_DATE', 'ASCORE_LTST', 'ASCORE_PERM', 'APVDATE', 'INDUSTRIAL_SECTOR_CD', 'LEGAL_ACTION_CD', 'LEGAL_ACTION_DT', 'CCPT_LTST_REVIEW_DT', 'FDB_TAG', 'FDB_TAG_DT', 'FDB_SCORING_DT', 'CUSTCODE', 'DNBFISME', 'ACCTNON', 'ACCTNOX', 'PRINAMT', 'INTAMT', 'INTYTD', 'FIXFLT', 'CALBASP', 'INTAMT_MYR', 'PRINAMT_MYR', 'TENOR_INT', 'OTH_CHARGE','IRIA', 'REPTDAT1', 'RDAY1', 'ISSYY', 'ISSMM', 'ISSDTX', 'FACILITY', 'PREFIX', 'CREATDS', 'ISSDTE', 'MATDATE', 'EXPRDATE', 'DIA_PAST01_MTH', 'DIA_PAST02_MTH', 'DIA_PAST03_MTH', 'DIA_PAST04_MTH', 'DIA_PAST05_MTH', 'DIA_PAST06_MTH','DIA_PAST07_MTH', 'DIA_PAST08_MTH', 'DIA_PAST09_MTH', 'DIA_PAST10_MTH', 'DIA_PAST11_MTH', 'DIA_PAST12_MTH', 'FORATE']
-BTDTL rows: 42213
-BASE ACCTNO dtype: string
-BTDTL ACCTNO dtype: string
-BASE TRANSREF dtype: string
-BTDTL TRANSREF dtype: string
-BTDTL MATDATE dtype: double
+# EIBD2CBT_COMBINED_BASE_DTL_REPORT
 
---- BASE sample keys (first 10) ---
-  ACCTNO='2500043523' TRANSREF='Y087858'
-  ACCTNO='2500192131' TRANSREF='U091994'
-  ACCTNO='2500283025' TRANSREF='Y087951'
-  ACCTNO='2500328516' TRANSREF='Y088095'
-  ACCTNO='2500743326' TRANSREF='Y087807'
-  ACCTNO='2500743326' TRANSREF='Y087956'
-  ACCTNO='2500743326' TRANSREF='Y087957'
-  ACCTNO='2500743326' TRANSREF='Y088043'
-  ACCTNO='2500743326' TRANSREF='Y088044'
-  ACCTNO='2500968108' TRANSREF='Y086078'
+import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
+import pyreadstat
+from datetime import date, datetime, timedelta
+import os
 
---- BTDTL sample keys (first 10) ---
-  ACCTNO='2500000007' TRANSREF='B608084'
-  ACCTNO='2500000007' TRANSREF='B615153'
-  ACCTNO='2500000007' TRANSREF='B616281'
-  ACCTNO='2500000007' TRANSREF='B617034'
-  ACCTNO='2500001330' TRANSREF='G398363'
-  ACCTNO='2500001815' TRANSREF='G383547'
-  ACCTNO='2500001815' TRANSREF='G386200'
-  ACCTNO='2500001815' TRANSREF='G399320'
-  ACCTNO='2500001815' TRANSREF='G402349'
-  ACCTNO='2500003902' TRANSREF='B605631'
+# -------------------------
+# Configuration Paths
+# -------------------------
+INPUT_PATHS = {
+    'btbase': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade', 
+    'btdtl': '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade'
+}
 
---- BASE key length distribution ---
-  acct_len=10 ref_len=7 count=119
+OUTPUT_PATH = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBD2CBT'
 
---- BTDTL key length distribution ---
-  acct_len=10 ref_len=7 count=42213
+# -------------------------
+# Step 1: Prepare report dates
+# -------------------------
+today = date.today()
+reptdate = today - timedelta(days=1)  # Using yesterday's date
+prevdate = date(reptdate.year, reptdate.month, 1) - timedelta(days=1)
 
---- Exact key match count ---
-(37,)
+# Next month start
+if reptdate.month + 1 == 13:
+    mm = 1
+    yy = reptdate.year + 1
+else:
+    mm = reptdate.month + 1
+    yy = reptdate.year
+sdate = date(yy, mm, 1)
 
---- TRIM-normalized key match count ---
-(37,)
+# Equivalent macro values
+reptyear = reptdate.strftime("%y")
+reptmon = reptdate.strftime("%m")
+reptday = reptdate.strftime("%d")
+rdate = reptdate.strftime("%Y%m%d")
+prevmon = prevdate.strftime("%m")
+sdate_str = sdate.strftime("%Y%m%d")
 
---- RETAILID distribution in BTDTL (raw) ---
-  RETAILID='R' len=1 count=41194
-  RETAILID='C' len=1 count=978
-  RETAILID='' len=0 count=41
+print(f"Report Date: {reptdate.strftime('%Y-%m-%d')}")
+print(f"Previous Month: {prevmon}")
+print(f"Next Month Start: {sdate_str}")
 
---- SUBPROD sample values in BTDTL ---
-  SUBPROD='BA' count=19164
-  SUBPROD='BG' count=13919
-  SUBPROD='BGF' count=7622
-  SUBPROD='TR' count=457
-  SUBPROD='PDB' count=398
-  SUBPROD='LC BL' count=253
-  SUBPROD='BRULC' count=123
-  SUBPROD='SG' count=83
-  SUBPROD='FCTL' count=65
-  SUBPROD='SBL' count=27
-  SUBPROD='ECR PRE' count=26
-  SUBPROD='LC DO' count=24
-  SUBPROD='FBEP/AP' count=23
-  SUBPROD='TBL' count=14
-  SUBPROD='ECR POST' count=9
-  SUBPROD='SBLC' count=4
-  SUBPROD='FBEP/DOC' count=2
+# -------------------------
+# Step 2: Load BASE & BTDTL data
+# -------------------------
+con = duckdb.connect()
 
-BASE transformation complete. Rows: 119
-Using SUBPROD column for PRODTYPE (with safe TRY_CAST)
-BTDTL transformation complete. Rows: 42213
-BASE deduplicated. Rows: 119
-BTDTL deduplicated. Rows: 42185
+# Input file paths
+base_file = os.path.join(INPUT_PATHS['btbase'], f"btbase{prevmon}.sas7bdat")
+btdtl_file = os.path.join(INPUT_PATHS['btdtl'], f"btdtl{reptyear}{reptmon}{reptday}.sas7bdat")
 
---- PRODTYPE distribution after dedup ---
-  PRODTYPE=0 count=41167
-  PRODTYPE=999 count=1018
+# Check if files exist
+if not os.path.exists(base_file):
+    raise FileNotFoundError(f"BASE file not found: {base_file}")
+if not os.path.exists(btdtl_file):
+    raise FileNotFoundError(f"BTDTL file not found: {btdtl_file}")
 
-Merge complete. Combined rows: 119
+# Read BTBASE SAS file using pyreadstat
+df_base, base_meta = pyreadstat.read_sas7bdat(base_file)
+base = pa.Table.from_pandas(df_base)
+print(f"Loaded BTBASE file: {base_file}")
+print(f"BTBASE metadata: {base_meta.column_names}")
+print(f"BTBASE rows: {base.num_rows}")
 
---- PRODTYPE distribution after merge ---
-  PRODTYPE=None count=82
-  PRODTYPE=0 count=37
-Traceback (most recent call last):
-  File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIBD2CBT.py", line 313, in <module>
-    matdate = row['MATDATE']
-KeyError: 'MATDATE'
+# Read BTDTL SAS file using pyreadstat
+df_btdtl, btdtl_meta = pyreadstat.read_sas7bdat(btdtl_file)
+btdtl = pa.Table.from_pandas(df_btdtl)
+print(f"Loaded BTDTL file: {btdtl_file}")
+print(f"BTDTL metadata: {btdtl_meta.column_names}")
+print(f"BTDTL rows: {btdtl.num_rows}")
+
+# Debug: check join key dtypes
+print(f"BASE ACCTNO dtype: {base.schema.field('ACCTNO').type}")
+print(f"BTDTL ACCTNO dtype: {btdtl.schema.field('ACCTNO').type}")
+print(f"BASE TRANSREF dtype: {base.schema.field('TRANSREF').type}")
+print(f"BTDTL TRANSREF dtype: {btdtl.schema.field('TRANSREF').type}")
+print(f"BTDTL MATDATE dtype: {btdtl.schema.field('MATDATE').type}")
+
+# Register in DuckDB
+con.register("btbase", base)
+con.register("btdtl", btdtl)
+
+# -------------------------
+# Diagnostic Block: key match analysis
+# -------------------------
+print("\n--- BASE sample keys (first 10) ---")
+for r in con.execute("SELECT ACCTNO, TRANSREF FROM btbase LIMIT 10").fetchall():
+    print(f"  ACCTNO={r[0]!r} TRANSREF={r[1]!r}")
+
+print("\n--- BTDTL sample keys (first 10) ---")
+for r in con.execute("SELECT ACCTNO, TRANSREF FROM btdtl LIMIT 10").fetchall():
+    print(f"  ACCTNO={r[0]!r} TRANSREF={r[1]!r}")
+
+print("\n--- BASE key length distribution ---")
+for r in con.execute("""
+    SELECT LENGTH(ACCTNO) AS acct_len, LENGTH(TRANSREF) AS ref_len, COUNT(*) AS cnt
+    FROM btbase GROUP BY 1,2 ORDER BY cnt DESC
+""").fetchall():
+    print(f"  acct_len={r[0]} ref_len={r[1]} count={r[2]}")
+
+print("\n--- BTDTL key length distribution ---")
+for r in con.execute("""
+    SELECT LENGTH(ACCTNO) AS acct_len, LENGTH(TRANSREF) AS ref_len, COUNT(*) AS cnt
+    FROM btdtl GROUP BY 1,2 ORDER BY cnt DESC LIMIT 10
+""").fetchall():
+    print(f"  acct_len={r[0]} ref_len={r[1]} count={r[2]}")
+
+print("\n--- Exact key match count ---")
+print(con.execute("""
+    SELECT COUNT(*) FROM btbase b
+    WHERE EXISTS (SELECT 1 FROM btdtl d 
+                  WHERE d.ACCTNO = b.ACCTNO AND d.TRANSREF = b.TRANSREF)
+""").fetchone())
+
+print("\n--- TRIM-normalized key match count ---")
+print(con.execute("""
+    SELECT COUNT(*) FROM btbase b
+    WHERE EXISTS (SELECT 1 FROM btdtl d 
+                  WHERE TRIM(d.ACCTNO) = TRIM(b.ACCTNO) 
+                    AND TRIM(d.TRANSREF) = TRIM(b.TRANSREF))
+""").fetchone())
+
+print("\n--- RETAILID distribution in BTDTL (raw) ---")
+for r in con.execute("""
+    SELECT RETAILID, LENGTH(RETAILID) AS len, COUNT(*) AS cnt
+    FROM btdtl
+    GROUP BY RETAILID, LENGTH(RETAILID)
+    ORDER BY cnt DESC
+    LIMIT 20
+""").fetchall():
+    print(f"  RETAILID={r[0]!r} len={r[1]} count={r[2]}")
+
+print("\n--- SUBPROD sample values in BTDTL ---")
+for r in con.execute("""
+    SELECT SUBPROD, COUNT(*) AS cnt
+    FROM btdtl
+    GROUP BY SUBPROD
+    ORDER BY cnt DESC
+    LIMIT 20
+""").fetchall():
+    print(f"  SUBPROD={r[0]!r} count={r[1]}")
+
+# -------------------------
+# Step 3: Transform BASE (PREOUTSTD) with normalized keys
+# SAS: KEEP=ACCTNO TRANSREF OUTSTAND RENAME=(OUTSTAND=PREOUTSTD)
+# -------------------------
+base_trans = con.execute("""
+    SELECT 
+        TRIM(ACCTNO)  AS ACCTNO,
+        TRIM(TRANSREF) AS TRANSREF,
+        OUTSTAND AS PREOUTSTD
+    FROM btbase
+""").fetch_arrow_table()
+
+print(f"\nBASE transformation complete. Rows: {base_trans.num_rows}")
+
+# -------------------------
+# Step 4: Transform BTDTL (assign PRODTYPE) with normalized keys
+# SAS: KEEP BRANCH ACCTNO TRANSREF PRODTYPE OUTSTAND MATDATE FACILITY
+#      IF RETAILID = 'R' THEN PRODTYPE=000;
+#      IF RETAILID = 'C' THEN PRODTYPE=999;
+# -------------------------
+btdtl_cols = set(btdtl.column_names)
+
+if 'PRODTYPE' in btdtl_cols:
+    prodtype_expr = "COALESCE(TRY_CAST(PRODTYPE AS INT), 999)"
+    print("Using PRODTYPE column from BTDTL (with safe TRY_CAST)")
+elif 'SUBPROD' in btdtl_cols:
+    prodtype_expr = "COALESCE(TRY_CAST(SUBPROD AS INT), 999)"
+    print("Using SUBPROD column for PRODTYPE (with safe TRY_CAST)")
+elif 'PRODGRP' in btdtl_cols:
+    prodtype_expr = "COALESCE(TRY_CAST(PRODGRP AS INT), 999)"
+    print("Using PRODGRP column for PRODTYPE (with safe TRY_CAST)")
+else:
+    prodtype_expr = "999"
+    print("No product-type column found; defaulting PRODTYPE to 999")
+
+btdtl_trans = con.execute(f"""
+    SELECT 
+        BRANCH,
+        TRIM(ACCTNO)  AS ACCTNO,
+        TRIM(TRANSREF) AS TRANSREF,
+        CASE 
+            WHEN UPPER(TRIM(RETAILID)) = 'R' THEN 0
+            WHEN UPPER(TRIM(RETAILID)) = 'C' THEN 999
+            ELSE {prodtype_expr}
+        END AS PRODTYPE,
+        OUTSTAND,
+        MATDATE,
+        FACILITY,
+        UPPER(TRIM(RETAILID)) AS RETAILID_NORM
+    FROM btdtl
+""").fetch_arrow_table()
+
+print(f"BTDTL transformation complete. Rows: {btdtl_trans.num_rows}")
+
+# -------------------------
+# Step 5: Deduplicate by ACCTNO, TRANSREF
+# -------------------------
+base_dedup = con.execute("""
+    SELECT ACCTNO, TRANSREF, PREOUTSTD
+    FROM (
+        SELECT ACCTNO, TRANSREF, PREOUTSTD,
+               ROW_NUMBER() OVER (PARTITION BY ACCTNO, TRANSREF ORDER BY PREOUTSTD) AS rn
+        FROM base_trans
+    ) WHERE rn = 1
+""").fetch_arrow_table()
+
+print(f"BASE deduplicated. Rows: {base_dedup.num_rows}")
+
+con.register("btdtl_trans", btdtl_trans)
+
+btdtl_dedup = con.execute("""
+    SELECT BRANCH, ACCTNO, TRANSREF, PRODTYPE, OUTSTAND, MATDATE, FACILITY
+    FROM (
+        SELECT BRANCH, ACCTNO, TRANSREF, PRODTYPE, OUTSTAND, MATDATE, FACILITY,
+               ROW_NUMBER() OVER (
+                   PARTITION BY ACCTNO, TRANSREF
+                   ORDER BY CASE WHEN RETAILID_NORM = 'R' THEN 1 ELSE 0 END, BRANCH
+               ) AS rn
+        FROM btdtl_trans
+    ) WHERE rn = 1
+""").fetch_arrow_table()
+
+print(f"BTDTL deduplicated. Rows: {btdtl_dedup.num_rows}")
+
+print("\n--- PRODTYPE distribution after dedup ---")
+for r in con.execute("""
+    SELECT PRODTYPE, COUNT(*) AS cnt FROM btdtl_dedup GROUP BY PRODTYPE ORDER BY cnt DESC LIMIT 20
+""").fetchall():
+    print(f"  PRODTYPE={r[0]} count={r[1]}")
+
+# -------------------------
+# Step 6: Merge BASE + BTDTL (LEFT JOIN, IF A semantics)
+# Keep MATDATE and OUTSTAND in the output so Step 7 can apply MISSING=0 logic.
+# -------------------------
+con.register("base_dedup", base_dedup)
+con.register("btdtl_dedup", btdtl_dedup)
+
+combt = con.execute("""
+    SELECT 
+        b.BRANCH,
+        base.ACCTNO,
+        base.TRANSREF,
+        b.PRODTYPE,
+        base.PREOUTSTD,
+        b.OUTSTAND,
+        b.MATDATE,
+        b.FACILITY
+    FROM base_dedup base
+    LEFT JOIN btdtl_dedup b
+    ON base.ACCTNO = b.ACCTNO
+   AND base.TRANSREF = b.TRANSREF
+""").fetch_arrow_table()
+
+print(f"\nMerge complete. Combined rows: {combt.num_rows}")
+
+print("\n--- PRODTYPE distribution after merge ---")
+for r in con.execute("""
+    SELECT PRODTYPE, COUNT(*) AS cnt FROM combt GROUP BY PRODTYPE ORDER BY cnt DESC LIMIT 20
+""").fetchall():
+    print(f"  PRODTYPE={r[0]} count={r[1]}")
+
+# -------------------------
+# Step 7: Export to fixed-width style file (matching SAS PUT + MISSING=0)
+# -------------------------
+# SAS PUT positions:
+#   @001 BRANCH      5.
+#   @007 ACCTNO     10.
+#   @018 TRANSREF   10.
+#   @029 PRODTYPE   Z3.
+#   @033 PREOUTSTD  17.2
+#   @051 OUTSTAND   17.2
+#   @069 OVERDUE    10.
+#   @080 RECOVAMT   17.2
+#   @098 FACILITY   $5.
+#
+# MISSING=0 semantics:
+#   - Numeric missing -> 0
+#   - OVERDUE = SDATE - MATDATE (MATDATE missing -> 0)
+#   - RECOVAMT = PREOUTSTD - OUTSTAND (OUTSTAND missing -> 0)
+#   - Character missing -> blanks
+# -------------------------
+os.makedirs(OUTPUT_PATH, exist_ok=True)
+
+output_file = os.path.join(OUTPUT_PATH, f"DAYBTRD_{rdate}.txt")
+
+with open(output_file, "w") as f:
+    for row in combt.to_pylist():
+        # BRANCH: char, blanks if missing
+        branch = str(row['BRANCH']).rjust(5) if row['BRANCH'] is not None else "     "
+
+        # ACCTNO / TRANSREF: always present from BASE
+        acctno = str(row['ACCTNO']).rjust(10)
+        transref = str(row['TRANSREF']).rjust(10)
+
+        # PRODTYPE: None -> 000 (SAS MISSING=0 with Z3. format)
+        prodtype = str(row['PRODTYPE']).zfill(3) if row['PRODTYPE'] is not None else "000"
+
+        # PREOUTSTD: always present from BASE
+        preoutstd = f"{row['PREOUTSTD']:017.2f}" if row['PREOUTSTD'] is not None else f"{0:017.2f}"
+
+        # OUTSTAND: None -> 0 (SAS MISSING=0)
+        outstand_val = row['OUTSTAND'] if row['OUTSTAND'] is not None else 0.0
+        outstanding = f"{outstand_val:017.2f}"
+
+        # OVERDUE = SDATE - MATDATE; MATDATE missing -> 0
+        # MATDATE is double (raw SAS day number) per diagnostic output
+        matdate = row['MATDATE']
+        if matdate is None:
+            overdue_val = sdate.toordinal() - 0
+        elif isinstance(matdate, (date, datetime)):
+            overdue_val = (sdate - (matdate.date() if isinstance(matdate, datetime) else matdate)).days
+        else:
+            overdue_val = sdate.toordinal() - int(matdate)
+        overdue = str(int(overdue_val)).rjust(10)
+
+        # RECOVAMT = PREOUTSTD - OUTSTAND; OUTSTAND missing -> 0
+        preoutstd_val = row['PREOUTSTD'] if row['PREOUTSTD'] is not None else 0.0
+        recovamt_val = preoutstd_val - outstand_val
+        recovamt = f"{recovamt_val:017.2f}"
+
+        # FACILITY: char, blanks if missing
+        facility = str(row['FACILITY']).ljust(5) if row['FACILITY'] is not None else "     "
+
+        f.write(f"{branch}{acctno}{transref}{prodtype}{preoutstd}{outstanding}{overdue}{recovamt}{facility}\n")
+
+print(f"\nReport generated: {output_file}")
+print(f"Total records written: {combt.num_rows}")
+
+# Optional: Display sample of output
+if combt.num_rows > 0:
+    print("\nSample output (first 5 rows):")
+    sample = combt.slice(0, min(5, combt.num_rows))
+    for row in sample.to_pylist():
+        print(f"ACCTNO: {row['ACCTNO']}, PRODTYPE: {row['PRODTYPE']}, "
+              f"PREOUTSTD: {row['PREOUTSTD']}, OUTSTAND: {row['OUTSTAND']}, "
+              f"MATDATE: {row['MATDATE']}")
+
+# Close connection
+con.close()
