@@ -1,25 +1,25 @@
 """
-EIBDMELW - Conventional BNM EL Daily Deposit Extract (Production Ready)
+EIIDMELW - Islamic BNM EL Daily Deposit Extract (Production Ready)
 SAS reference: daily_deposit_extraction (EL computation)
 
 Input : /host_pq/dp/parquet/year={reptyear}/month={reptmon}/day={reptday}/DPTRBLGS.parquet
         (Hive-partitioned; path constructed from report date)
 
-Output: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDMELW/MELW{MM}{W}.sas7bdat
+Output: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDMELW/MELW{MM}{W}.sas7bdat
         (via SASPy df2sd into SAS library XMISOUT)
 
 Includes:
-- PBBLNFMT : Loan formats (ACE products, ODPROD, ODCUSTCD, etc.)
-- PBBDPFMT : Deposit formats (SAPROD, CAPROD, FDPRODD, SACUSTCD, DDCUSTCD, FDCUSTCD)
+- PBBLNFMT     : Loan formats (ACE products, ODPROD, ODCUSTCD, etc.)
+- PBBDPFMT_AII : Deposit formats (SAPROD, CAPROD, FDPRODD, SACUSTCD, DDCUSTCD, FDCUSTCD)
 
 Key behaviour (all align with SAS source):
-  * CONVENTIONAL only (COSTCTR NOT in 3000-3999)
+  * ISLAMIC only (COSTCTR in 3000-3999)
   * Product 318 (deptype C) dropped
   * ACE (>5000) split for {40,42,43,150,151,152,181}
   * Overdraft grouped by ODCUSTCD 02/03/11/12/13/17
-  * BNM codes (conventional):
-      MISC : 4929980000000Y
-      SPTF : 4929980000000I  at branch+3000
+  * BNM codes (Islamic):
+      MISC : 4929980000000D
+      SPTF : 4929980000000Y  at branch+3000
       INTP : 4911080000000Y
       ODFIN: 3410011000000Y
       SA   : 4212000000000Y
@@ -31,9 +31,9 @@ Key behaviour (all align with SAS source):
       ODMB : 3410012000000Y
       ODDH : 3410013000000Y
       ODCAG: 3410017000000Y
-  * Interest routing:
-      INTP : prodcd in {42110,42120,42130}
-      SPTF : prodcd in {42310,42320,42132}
+  * Interest routing (Islamic):
+      INTP : prodcd in {42110,42120,42130,42310,42320,42133}
+      SPTF : prodcd == 42132
       MISC : everything else
 """
 
@@ -51,15 +51,15 @@ import saspy
 # ------------------------------------------------------------------
 # Format libraries
 # ------------------------------------------------------------------
-import PBBDPFMT as DPF
-import PBBLNFMT as LNF
+import PBBDPFMT_AII as DPF       # Islamic deposit formats
+import PBBLNFMT     as LNF        # Loan formats (ODPROD, ODCUSTCD)
 
 
 # ------------------------------------------------------------------
 # CONFIG
 # ------------------------------------------------------------------
-PQ_BASE = '/host_pq/dp/parquet'      # Hive root: .../{year=YYYY}/{month=MM}/{day=DD}/DPTRBLGS.parquet
-BNM_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDMELW/'
+PQ_BASE = '/host_pq/dp/parquet'
+BNM_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDMELW/'
 
 SASPY_CFGNAME = 'default'
 SAS_LIBREF    = 'XMISOUT'
@@ -85,9 +85,9 @@ _missing_lnf = [n for n in _LNF_REQUIRED if not hasattr(LNF, n)]
 if _missing_dpf or _missing_lnf:
     print("FATAL: format library missing expected symbols.")
     if _missing_dpf:
-        print(f"  PBBDPFMT missing: {_missing_dpf}")
+        print(f"  PBBDPFMT_AII missing: {_missing_dpf}")
     if _missing_lnf:
-        print(f"  PBBLNFMT missing: {_missing_lnf}")
+        print(f"  PBBLNFMT     missing: {_missing_lnf}")
     sys.exit(1)
 
 
@@ -167,11 +167,9 @@ def _parse_tbdate(raw):
 # Hive partition discovery
 # ------------------------------------------------------------------
 def _hive_path(year: str, mon: str, day: str) -> str:
-    """Build the Hive-partitioned parquet path for a given date."""
     return f'{PQ_BASE}/year={year}/month={mon}/day={day}/DPTRBLGS.parquet'
 
 def _find_latest_partition(base: str):
-    """Return the latest (year, month, day) triple present under base."""
     pattern = os.path.join(base, 'year=*', 'month=*', 'day=*')
     parts = glob.glob(pattern)
     if not parts:
@@ -189,14 +187,13 @@ def _find_latest_partition(base: str):
 
 def _resolve_input_path(cli_arg_date=None) -> str:
     """
-    Determine the input parquet path.
+    Resolve the Hive-partitioned input parquet path.
 
     Resolution order:
-      1. CLI arg YYYY-MM-DD or YYYYMMDD (if provided) → use that partition
-      2. Latest partition under PQ_BASE → peek at its TBDATE, use that date
-      3. Latest partition's own path (fallback)
+      1. CLI arg YYYY-MM-DD / YYYYMMDD → use that partition (must exist)
+      2. Latest partition → peek TBDATE → prefer partition matching TBDATE
+      3. Fallback → latest partition
     """
-    # 1. Explicit CLI argument wins
     if cli_arg_date:
         s = cli_arg_date.strip()
         for fmt in ('%Y-%m-%d', '%Y%m%d'):
@@ -214,7 +211,6 @@ def _resolve_input_path(cli_arg_date=None) -> str:
         print(f"ERROR: CLI date '{cli_arg_date}' not YYYY-MM-DD or YYYYMMDD")
         sys.exit(1)
 
-    # 2. Peek latest partition's TBDATE
     latest = _find_latest_partition(PQ_BASE)
     if latest is None:
         print(f"ERROR: no partitions found under {PQ_BASE}")
@@ -234,7 +230,6 @@ def _resolve_input_path(cli_arg_date=None) -> str:
         print(f"WARN: cannot parse TBDATE from probe ({e}); using partition date {y}-{mo}-{d}")
         reptdate = datetime(int(y), int(mo), int(d)).date()
 
-    # 3. Preferred path is partition matching the parsed TBDATE
     y2, mo2, d2 = f'{reptdate.year:04d}', f'{reptdate.month:02d}', f'{reptdate.day:02d}'
     preferred = _hive_path(y2, mo2, d2)
     if os.path.exists(preferred):
@@ -282,7 +277,7 @@ def _write_df_to_sas(sas, df_pd, libref, table):
 # MAIN
 # ------------------------------------------------------------------
 def main() -> int:
-    print("EIBDMELW - Conventional BNM EL Daily Deposit Extract")
+    print("EIIDMELW - Islamic BNM EL Daily Deposit Extract")
     print("=" * 60)
 
     # ---------- resolve input path ----------
@@ -373,7 +368,7 @@ def main() -> int:
         return 1
 
     # ---------- main scan ----------
-    print("\nProcessing parquet (CONVENTIONAL, COSTCTR NOT 3000-3999)...")
+    print("\nProcessing parquet (ISLAMIC ONLY, COSTCTR 3000-3999)...")
     n_read = 0
     n_kept = 0
     n_after_common = 0
@@ -398,7 +393,7 @@ def main() -> int:
             n_after_common += 1
 
             costctr = _int(row['COSTCTR'])
-            if 3000 <= costctr <= 3999:
+            if not (3000 <= costctr <= 3999):
                 n_dropped_cctr += 1
                 continue
 
@@ -465,10 +460,11 @@ def main() -> int:
                         elif odc == '13': branch_data[branch]['ODDH']  += od_bal
                         elif odc == '17': branch_data[branch]['ODCAG'] += od_bal
 
+            # Interest routing (Islamic — differs from conventional)
             if custcd in INTEREST_CUSTCODES and deptype in ('S','D','N','C'):
-                if prodcd in ('42110','42120','42130'):
+                if prodcd in ('42110','42120','42130','42310','42320','42133'):
                     branch_data[branch]['INTP'] += intpaybl
-                elif prodcd in ('42310','42320','42132'):
+                elif prodcd == '42132':
                     branch_data[branch]['SPTF'] += intpaybl
                 else:
                     branch_data[branch]['MISC'] += intpaybl
@@ -480,7 +476,7 @@ def main() -> int:
     print(f"  Rows read       : {n_read:,}")
     print(f"  After common flt: {n_after_common:,}")
     print(f"  Dropped COSTCTR : {n_dropped_cctr:,}")
-    print(f"  Kept (Convent.) : {n_kept:,}")
+    print(f"  Kept (Islamic)  : {n_kept:,}")
 
     # ---------- emit ----------
     print("\nGenerating BNM code records...")
@@ -495,8 +491,8 @@ def main() -> int:
         d = branch_data[branch]
         _emit(melw_records, branch,        '3410011000000Y', d['ODFIN'])
         _emit(melw_records, branch,        '4911080000000Y', d['INTP'])
-        _emit(melw_records, branch,        '4929980000000Y', d['MISC'])
-        _emit(melw_records, branch + 3000, '4929980000000I', d['SPTF'])
+        _emit(melw_records, branch,        '4929980000000D', d['MISC'])   # Islamic MISC
+        _emit(melw_records, branch + 3000, '4929980000000Y', d['SPTF'])   # Islamic SPTF
         _emit(melw_records, branch, '4212000000000Y', d['SA'])
         _emit(melw_records, branch, '4230000000000Y', d['SACAI'])
         _emit(melw_records, branch, '4211000000000Y', d['CA'])
@@ -543,7 +539,7 @@ def main() -> int:
         return 1
 
     print(f"\n{'='*60}")
-    print("EIBDMELW Complete")
+    print("EIIDMELW Complete")
     print(f"{'='*60}")
     print(f"Input   : {input_path}")
     print(f"Output  : {SAS_LIBREF}.{table_name} ({BNM_DIR})")
