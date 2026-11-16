@@ -1,10 +1,19 @@
 """
-EIBDDEPE - Daily Deposit Position Extract
+EIIDDEPE - Islamic Deposit Position Extract
 DuckDB does everything; SAS gets small summaries via SASPy,
 plus DYDP via DATA step + INFILE.
 
 Input: Hive-partitioned Parquet at
        /host_pq/dp/parquet/year={YYYY}/month={MM}/day={DD}/DPTRBLGS.parquet
+
+Islamic-specific logic:
+- Only COSTCTR 3000-3999 records
+- ACE split: PRODCD=42110, product in (150,151,152,181), CURBAL>5000
+  -> 5000 stays CA (DYDPBAL=5000, DPTYPE='D'),
+     remainder becomes SA (DYDPBAL=CURBAL-5000, DPTYPE='S')
+- DDMV appended to MIS.DDMV (not MISQ)
+- SDRNGE uses SDRANGE only, no R2NGE
+- Materialized TEMP TABLE (3-branch UNION computed once)
 """
 
 import duckdb
@@ -29,8 +38,8 @@ warnings.filterwarnings("ignore", message=".*Noticed 'ERROR:'.*")
 INPUT_ROOT = '/host_pq/dp/parquet'
 
 # Output base
-BASE_OUT  = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBDDEPE'
-MIS_PATH  = f'{BASE_OUT}/MIS'
+BASE_OUT  = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDDEPE'
+MIS_PATH  = f'{BASE_OUT}/MIS_PIBB'
 MISQ_PATH = f'{BASE_OUT}/MISQ'
 TEMP_PATH = f'{BASE_OUT}/TEMP'
 
@@ -44,6 +53,7 @@ SAS_LIB_MISQ = 'MISQ'
 SAS_LIB_TEMP = 'TEMP'
 
 ACE_PRODUCTS = sorted(PBBDPFMT.ACE)
+ISLAMIC_COSTCTR_MIN, ISLAMIC_COSTCTR_MAX = 3000, 3999
 EXCL_PROD, EXCL_OPEN = [297, 298], ['B', 'C', 'P']
 AGELIMIT, MAXAGE, AGEBELOW = 12, 18, 11
 
@@ -109,6 +119,23 @@ def build_input_path(reptdate):
             f"/day={reptdate.day:02d}"
             f"/DPTRBLGS.parquet")
 
+def find_latest_partition(root):
+    """Find the most recent year/month/day partition that has DPTRBLGS.parquet."""
+    if not os.path.isdir(root):
+        return None
+    years = sorted([d for d in os.listdir(root) if d.startswith('year=')], reverse=True)
+    for y in years:
+        ydir = os.path.join(root, y)
+        months = sorted([d for d in os.listdir(ydir) if d.startswith('month=')], reverse=True)
+        for m in months:
+            mdir = os.path.join(ydir, m)
+            days = sorted([d for d in os.listdir(mdir) if d.startswith('day=')], reverse=True)
+            for d in days:
+                fpath = os.path.join(mdir, d, 'DPTRBLGS.parquet')
+                if os.path.isfile(fpath):
+                    return fpath
+    return None
+
 # ============================================================================
 # LOOKUP TABLES
 # ============================================================================
@@ -131,30 +158,8 @@ ODPROD_DF  = pl.DataFrame(_rules_to_pairs('ODPROD',  PBBLNFMT),
 # DETERMINE REPORT DATE
 # ============================================================================
 
-# We need the report date BEFORE we can build the input path.
-# Try reading the latest partition first, or fall back to today.
-
-def find_latest_partition(root):
-    """Find the most recent year/month/day partition that has DPTRBLGS.parquet."""
-    if not os.path.isdir(root):
-        return None
-    years = sorted([d for d in os.listdir(root) if d.startswith('year=')], reverse=True)
-    for y in years:
-        ydir = os.path.join(root, y)
-        months = sorted([d for d in os.listdir(ydir) if d.startswith('month=')], reverse=True)
-        for m in months:
-            mdir = os.path.join(ydir, m)
-            days = sorted([d for d in os.listdir(mdir) if d.startswith('day=')], reverse=True)
-            for d in days:
-                fpath = os.path.join(mdir, d, 'DPTRBLGS.parquet')
-                if os.path.isfile(fpath):
-                    return fpath
-    return None
-
-# Read report date from the TBDATE column in the most recent partition
 probe_path = find_latest_partition(INPUT_ROOT)
 if probe_path is None:
-    # Fallback: today's partition
     probe_path = build_input_path(datetime.now().date())
     if not os.path.isfile(probe_path):
         raise FileNotFoundError(f"No DPTRBLGS.parquet found under {INPUT_ROOT}")
@@ -169,7 +174,6 @@ if 'TBDATE' in _rd.columns and len(_rd) > 0:
     reptdate = parse_date(_rd.select('TBDATE').row(0)[0])
 
 if not reptdate:
-    # Fallback: infer from the partition path itself
     m = re.search(r'year=(\d+)/month=(\d+)/day=(\d+)', probe_path)
     if m:
         reptdate = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
@@ -190,14 +194,13 @@ mth = days_in_month(reptyear, reptmon)
 is_weekly_or_monthend = (reptday in [8, 15, 22]) or (reptday == mth)
 
 print(f"  Week: {nowk}  Weekly/Month-end: {is_weekly_or_monthend}")
-print(f"  DDMV dedupe target (REPTDATE - 31): {reptdat3.strftime('%d/%m/%Y')}")
 
 # ============================================================================
 # PHASE 1: DuckDB
 # ============================================================================
 
 print("\n" + "=" * 70)
-print("PHASE 1: DuckDB reads and enriches")
+print("PHASE 1: DuckDB reads and enriches (Islamic only)")
 print("=" * 70)
 
 t0 = time.time()
@@ -223,6 +226,7 @@ WITH base AS (
         CASE WHEN BRANCH = 132 THEN 168 ELSE BRANCH END AS BRANCH2
     FROM read_parquet('{INPUT_FILE}')
     WHERE BANKNO = 33 AND REPTNO = 1001 AND FMTCODE = 1
+      AND COSTCTR BETWEEN {ISLAMIC_COSTCTR_MIN} AND {ISLAMIC_COSTCTR_MAX}
       AND OPENIND NOT IN ('B','C','P')
       AND PRODUCT NOT IN (297, 298)
 ),
@@ -255,9 +259,18 @@ with_prodcd AS (
             WHEN DEPTYPE IN ('D','N') AND CURBAL <  0 THEN COALESCE(ODPROD, '34180')
             WHEN DEPTYPE = 'C' THEN COALESCE(FDPRODD, '42130')
             ELSE ''
-        END AS PRODCD,
-        CASE WHEN DEPTYPE = 'S' THEN 'S' ELSE 'D' END AS DPTYPE
+        END AS PRODCD
     FROM with_prod
+),
+with_split_flag AS (
+    SELECT *,
+        CASE
+            WHEN PRODCD = '42110'
+             AND PRODUCT IN ({ACE_LIST})
+             AND CURBAL > 5000
+            THEN 1 ELSE 0
+        END AS IS_ACE_SPLIT
+    FROM with_prodcd
 ),
 with_mvrange AS (
     SELECT *,
@@ -282,14 +295,45 @@ with_mvrange AS (
                     ELSE 80000
                 END
         END AS MVRANGE
-    FROM with_prodcd
+    FROM with_split_flag
+),
+normal_rows AS (
+    SELECT
+        REPTDATE, BRANCH2 AS BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
+        CASE WHEN DEPTYPE = 'S' THEN 'S' ELSE 'D' END AS DPTYPE,
+        PRODUCT, PRODCD, CAPROD, ODPROD,
+        CURBAL, DYDPBAL, APPRLIMT, ACCYTD, OPENDT,
+        MOVEMENT, MVRANGE, CUSTCODE, SECOND, COSTCTR, IS_ACE_SPLIT
+    FROM with_mvrange
+    WHERE IS_ACE_SPLIT = 0
+),
+split_sa AS (
+    SELECT
+        REPTDATE, BRANCH2 AS BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
+        'S' AS DPTYPE,
+        PRODUCT, PRODCD, CAPROD, ODPROD,
+        CURBAL, CAST(CURBAL - 5000 AS DOUBLE) AS DYDPBAL,
+        APPRLIMT, ACCYTD, OPENDT, MOVEMENT, MVRANGE, CUSTCODE, SECOND,
+        COSTCTR, IS_ACE_SPLIT
+    FROM with_mvrange
+    WHERE IS_ACE_SPLIT = 1
+),
+split_ca AS (
+    SELECT
+        REPTDATE, BRANCH2 AS BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
+        'D' AS DPTYPE,
+        PRODUCT, PRODCD, CAPROD, ODPROD,
+        CURBAL, CAST(5000 AS DOUBLE) AS DYDPBAL,
+        APPRLIMT, ACCYTD, OPENDT, MOVEMENT, MVRANGE, CUSTCODE, SECOND,
+        COSTCTR, IS_ACE_SPLIT
+    FROM with_mvrange
+    WHERE IS_ACE_SPLIT = 1
 )
-SELECT
-    REPTDATE, BRANCH2 AS BRANCH, ACCTNO, NAME, DEBIT, CREDIT, DEPTYPE,
-    DPTYPE, PRODUCT, PRODCD, CAPROD, ODPROD,
-    CURBAL, DYDPBAL, APPRLIMT, ACCYTD, OPENDT,
-    MOVEMENT, MVRANGE, CUSTCODE, SECOND
-FROM with_mvrange
+SELECT * FROM normal_rows
+UNION ALL
+SELECT * FROM split_sa
+UNION ALL
+SELECT * FROM split_ca
 """
 con.execute(enrich_sql)
 print(f"  Enriched table created  ({time.time()-t0:.1f}s)")
@@ -315,7 +359,7 @@ COPY (
                    1, 6
                ) AS BIGINT
            ) AS OPENDT,
-           MOVEMENT, MVRANGE, CUSTCODE, SECOND
+           MOVEMENT, MVRANGE
     FROM enriched
     WHERE (DEPTYPE = 'S' AND CURBAL >= 0 AND PRODCD IN ('42120','42320'))
        OR (DEPTYPE IN ('D','N') AND CURBAL >= 0 AND PRODCD IN ('42110','42180','42310'))
@@ -348,7 +392,7 @@ dyposn_pl = con.execute(f"""
         COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL>=0 AND PRODUCT=104 THEN CURBAL END), 0) AS TOTVOSC,
         COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND PRODUCT=105 THEN CURBAL END), 0) AS OVDVOSF,
         COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND PRODUCT=104 THEN CURBAL END), 0) AS OVDVOSC,
-        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND ODPROD IN ('34180','34240','34380') THEN ABS(CURBAL) END), 0) AS TOTOVFT,
+        COALESCE(SUM(CASE WHEN DEPTYPE IN ('D','N') AND CURBAL<0 AND ODPROD IN ('34180','34380') THEN ABS(CURBAL) END), 0) AS TOTOVFT,
         COALESCE(SUM(CASE WHEN DEPTYPE='C' AND PRODCD='42130' THEN CURBAL END), 0) AS TOTFD,
         COALESCE(SUM(CASE WHEN DEPTYPE='C' AND PRODCD='42132' THEN CURBAL END), 0) AS TOTFDI,
         COALESCE(SUM(CASE WHEN DEPTYPE='S' AND CURBAL>=0 AND PRODUCT IN ({ACE_LIST}) THEN CURBAL END), 0) AS ACESA,
@@ -380,7 +424,7 @@ dymvnt_pl = con.execute(f"""
     SELECT REPTDATE, BRANCH, ACCTNO,
            REPLACE(REPLACE(COALESCE(NAME, ''), ',', ' '), '"', ' ') AS NAME,
            DEBIT, CREDIT, DEPTYPE,
-           PRODUCT, CURBAL, APPRLIMT, CUSTCODE, SECOND
+           PRODUCT, CURBAL, APPRLIMT
     FROM enriched
     WHERE (DEPTYPE = 'S' AND ABS(MOVEMENT) >= 50000)
        OR (DEPTYPE IN ('D','N') AND DPTYPE = 'D' AND (
@@ -448,23 +492,61 @@ if is_weekly_or_monthend:
                         {reptyear} - CAST(SUBSTR(REGEXP_REPLACE(CAST(BDATE AS VARCHAR), '[^0-9]', '', 'g'), 1, 4) AS BIGINT)))
                 END AS AGE,
                 CASE
-                    WHEN CURBAL < 500 THEN 500 WHEN CURBAL < 1000 THEN 1000
-                    WHEN CURBAL < 5000 THEN 5000 WHEN CURBAL < 10000 THEN 10000
-                    WHEN CURBAL < 20000 THEN 20000 WHEN CURBAL < 50000 THEN 50000
-                    WHEN CURBAL < 100000 THEN 100000 WHEN CURBAL < 200000 THEN 200000
-                    ELSE 200001
+                    WHEN CURBAL < 5 THEN 5
+                    WHEN CURBAL < 10 THEN 10
+                    WHEN CURBAL < 50 THEN 50
+                    WHEN CURBAL < 100 THEN 100
+                    WHEN CURBAL < 500 THEN 500
+                    WHEN CURBAL < 1000 THEN 1000
+                    WHEN CURBAL < 1500 THEN 1500
+                    WHEN CURBAL < 2000 THEN 2000
+                    WHEN CURBAL < 2500 THEN 2500
+                    WHEN CURBAL < 3000 THEN 3000
+                    WHEN CURBAL < 3500 THEN 3500
+                    WHEN CURBAL < 4000 THEN 4000
+                    WHEN CURBAL < 4500 THEN 4500
+                    WHEN CURBAL < 5000 THEN 5000
+                    WHEN CURBAL < 6000 THEN 6000
+                    WHEN CURBAL < 7000 THEN 7000
+                    WHEN CURBAL < 8000 THEN 8000
+                    WHEN CURBAL < 9000 THEN 9000
+                    WHEN CURBAL < 10000 THEN 10000
+                    WHEN CURBAL < 15000 THEN 15000
+                    WHEN CURBAL < 20000 THEN 20000
+                    WHEN CURBAL < 25000 THEN 25000
+                    WHEN CURBAL < 30000 THEN 30000
+                    WHEN CURBAL < 35000 THEN 35000
+                    WHEN CURBAL < 40000 THEN 40000
+                    WHEN CURBAL < 45000 THEN 45000
+                    WHEN CURBAL < 50000 THEN 50000
+                    WHEN CURBAL < 55000 THEN 55000
+                    WHEN CURBAL < 60000 THEN 60000
+                    WHEN CURBAL < 65000 THEN 65000
+                    WHEN CURBAL < 70000 THEN 70000
+                    WHEN CURBAL < 75000 THEN 75000
+                    WHEN CURBAL < 80000 THEN 80000
+                    WHEN CURBAL < 85000 THEN 85000
+                    WHEN CURBAL < 90000 THEN 90000
+                    WHEN CURBAL < 95000 THEN 95000
+                    WHEN CURBAL < 100000 THEN 100000
+                    WHEN CURBAL < 150000 THEN 150000
+                    WHEN CURBAL < 200000 THEN 200000
+                    WHEN CURBAL < 300000 THEN 300000
+                    WHEN CURBAL < 500000 THEN 500000
+                    WHEN CURBAL < 1000000 THEN 1000000
+                    WHEN CURBAL < 2000000 THEN 2000000
+                    WHEN CURBAL < 3000000 THEN 3000000
+                    WHEN CURBAL < 4000000 THEN 4000000
+                    WHEN CURBAL < 5000000 THEN 5000000
+                    WHEN CURBAL < 10000000 THEN 10000000
+                    ELSE 10000001
                 END AS RANGE,
-                CASE
-                    WHEN CURBAL < 1000 THEN 1000 WHEN CURBAL < 5000 THEN 5000
-                    WHEN CURBAL < 10000 THEN 10000 WHEN CURBAL < 50000 THEN 50000
-                    WHEN CURBAL < 100000 THEN 100000 ELSE 100001
-                END AS R2NGE,
                 CURBAL, ACCYTD
             FROM enriched WHERE DEPTYPE = 'S' AND CURBAL >= 0
         )
-        SELECT BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE, R2NGE,
+        SELECT BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE,
                COUNT(*) AS NOACCT, SUM(CURBAL) AS CURBAL, SUM(ACCYTD) AS ACCYTD
-        FROM savg GROUP BY BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE, R2NGE
+        FROM savg GROUP BY BRANCH, RACE, PRODCD, PRODUCT, RANGE, AGE
     """).pl()
 else:
     sdrnge_pl = pl.DataFrame([])
@@ -508,20 +590,15 @@ def upsert_sas(df_new, libref, table):
     print(f"  ✓ {libref}.{table} (appended)")
 
 def append_ddmv(df_new):
-    """SAS MISQ.DDMV: delete REPTDATE = REPTDATE-31, then append."""
+    """Islamic SAS: PROC APPEND DATA=DDMV BASE=MIS.DDMV (no dedupe date)."""
     if len(df_new) == 0:
-        print("  ⚠ MISQ.DDMV: No data"); return
+        print("  ⚠ MIS.DDMV: No data"); return
     pdf = df_new.to_pandas()
-    if not sas.exist('DDMV', libref=SAS_LIB_MISQ):
-        sas.df2sd(pdf, table='DDMV', libref=SAS_LIB_MISQ)
-        print(f"  ✓ MISQ.DDMV (created, {len(df_new):,})"); return
-    dt_str = reptdat3.strftime('%d%b%Y').upper()
-    sas.submit(f"""
-        data {SAS_LIB_MISQ}.DDMV; set {SAS_LIB_MISQ}.DDMV;
-          if REPTDATE = '{dt_str}'d then delete; run;
-    """)
-    sas.df2sd(pdf, table='DDMV', libref=SAS_LIB_MISQ, replace=False)
-    print(f"  ✓ MISQ.DDMV (appended, {len(df_new):,})")
+    if not sas.exist('DDMV', libref=SAS_LIB_MIS):
+        sas.df2sd(pdf, table='DDMV', libref=SAS_LIB_MIS)
+        print(f"  ✓ MIS.DDMV (created, {len(df_new):,})"); return
+    sas.df2sd(pdf, table='DDMV', libref=SAS_LIB_MIS, replace=False)
+    print(f"  ✓ MIS.DDMV (appended, {len(df_new):,})")
 
 def import_dydp_via_datastep(csv_path, libref, table):
     print(f"  Reading {csv_path}")
@@ -533,11 +610,11 @@ def import_dydp_via_datastep(csv_path, libref, table):
           length REPTDATE 8 BRANCH 8 ACCTNO 8 NAME $50 DEBIT 8 CREDIT 8
                  DEPTYPE $1 DPTYPE $1 PRODUCT 8 PRODCD $8 CURBAL 8
                  DYDPBAL 8 APPRLIMT 8 ACCYTD 8 OPENDT 8 MOVEMENT 8
-                 MVRANGE 8 CUSTCODE 8 SECOND 8;
+                 MVRANGE 8;
           infile "{csv_path}" dlm=',' dsd firstobs=2 lrecl=2000 missover truncover;
           input REPTDATE BRANCH ACCTNO NAME $ DEBIT CREDIT DEPTYPE $
                 DPTYPE $ PRODUCT PRODCD $ CURBAL DYDPBAL APPRLIMT
-                ACCYTD OPENDT MOVEMENT MVRANGE CUSTCODE SECOND;
+                ACCYTD OPENDT MOVEMENT MVRANGE;
           REPTDATE = input(put(REPTDATE, 8.), yymmdd8.);
           format REPTDATE yymmdd10.;
         run;
@@ -570,8 +647,8 @@ try:
 except OSError as e:
     print(f"  ⚠ {e}")
 
-# All monthly MIS files
-save_sas(dyposn_pl, SAS_LIB_MIS, f'DYPOSN{reptmon:02d}')
+# All monthly MIS files (Islamic uses MIS_PIBB)
+upsert_sas(dyposn_pl, SAS_LIB_MIS, f'DYPOSN{reptmon:02d}')
 upsert_sas(dymvnt_pl, SAS_LIB_MIS, f'DYMVNT{reptmon:02d}')
 upsert_sas(dyibu_pl,  SAS_LIB_MIS, f'DYIBU{reptmon:02d}')
 upsert_sas(dyddcr_pl, SAS_LIB_MIS, f'DYDDCR{reptmon:02d}')
@@ -582,7 +659,7 @@ upsert_sas(dyace_pl,  SAS_LIB_MIS, f'DYACE{reptmon:02d}')
 if is_weekly_or_monthend and len(sdrnge_pl) > 0:
     save_sas(sdrnge_pl, SAS_LIB_MIS, f'SDRNGE{reptmon:02d}')
 
-# DDMV rolling 31-day
+# Islamic DDMV goes to MIS.DDMV (not MISQ.DDMV), simple append
 append_ddmv(ddmv_pl)
 
 # ============================================================================
@@ -590,12 +667,11 @@ append_ddmv(ddmv_pl)
 # ============================================================================
 
 print("\n" + "=" * 70)
-print("✓ EIBDDEPE Complete")
+print("✓ EIIDDEPE Complete (Islamic)")
 print("=" * 70)
 print(f"Report Date : {reptdate.strftime('%d/%m/%Y')} (Week {nowk})")
 print(f"Input File  : {INPUT_FILE}")
-print(f"DDMV dedupe : {reptdat3.strftime('%d/%m/%Y')} (REPTDATE - 31)")
-print(f"Output dirs : MIS={MIS_PATH}")
+print(f"Output dirs : MIS_PIBB={MIS_PATH}")
 print(f"              MISQ={MISQ_PATH}")
 print(f"              TEMP={TEMP_PATH}")
 print(f"Records     : DYMVNT={len(dymvnt_pl):,}  DYIBU={len(dyibu_pl):,}  "
