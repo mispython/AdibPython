@@ -1,61 +1,43 @@
-Reading DATEFILE: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/DATEFILE
-Islamic Daily Loan Movement - 16/11/2026
-  EXTDATE  : 11162026255
-  REPTDATE : 2026-11-16  (num: 261116)
-  PREVDATE : 2026-11-15
-  DLETDATE : 2026-11-13
-  REPTMON  : 11
-  REPTDAY  : 16
-  LNDLY_PREVYEAR : /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly15.sas7bdat
-  *** TESTING MODE: row cap = 500,000 per SAS7BDAT input ***
-Using SAS Config named: default
-SAS Connection established. Subprocess id is 531249
+Report Date: 2026-11-16
+Previous Month: 10
+Next Month Start: 20261201
+SDATE (SAS day number): 24441
+Loaded BTBASE file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade/btbase10.sas7bdat
+BTBASE metadata: ['TRANSREX', 'BRANCH', 'ACCTNO', 'OUTSTAND', 'TRANSREF', 'FACILITY', 'PRODTYPE', 'DAYS']
+BTBASE rows: 119
+Loaded BTDTL file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade/btdtl261116.sas7bdat
+BTDTL metadata: ['TRANSREX', 'CREATTYP', 'BRANCH', 'APPLCODE', 'ACCTNO', 'SUBACCT', 'CREATYYMMDD', 'EXPIRDS', 'SYNDICAT', 'SPECIALF', 'PURPOSES', 'AANUMBER', 'INTRATE', 'SPREAD', 'INFUNDRT', 'DISCNTB', 'DISCNTF', 'TRANXMT', 'EXCHRTE', 'FORCURR', 'LIABCODE', 'BTREL1', 'RELFROM', 'CURRENCY', 'APPRLIMT', 'APPRLIM2', 'OFFAPIND', 'TFDESC01', 'TFCNTR01', 'TFCNTR03', 'TFCNTR04', 'TFINDR01', 'TFINDR02', 'TFINDR03', 'TFINDR04', 'TFINDR05', 'ISSDTEYYMMDD', 'SINDICAT', 'SUBPROD', 'FACLINE', 'PRODGRP', 'DIRCTIND', 'TRANSREL', 'COMMRATE', 'DISCRATE', 'CONRATE_IND', 'INTBASE', 'PLUSMINUS', 'NUMDAYS', 'BACOM', 'DISCOUNT_PROCEED', 'MTD_TAWIDH_AMT', 'MTD_GHARAMAH_AMT', 'REPAY_SOURCE', 'REPAY_TYPE_CD', 'PROP_DEVELOP_FIN_IND', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'CLIMATE_MITIGATE_GP1_FLG', 'CLIMATE_ADAPT_GP2_FLG', 'CLIMATE_ENVIRONMT_GP3_FLG', 'CLIMATE_TRANSITION_GP4_FLG', 'CLIMATE_PROHIBIT_GP5_FLG', 'SOURCE_INCOME_CURRENCY_CD', 'AADATE', 'REFERRAL_BRANCH', 'APPL_COMMERCIAL_TAG', 'COMBRATE', 'AA_APPROVED_DT', 'BTREL2', 'BTREL3', 'BTREL4', 'NOLEVEL', 'OUTSTAND', 'CERTNO', 'COLLECNO', 'PAYBKNO', 'ADDRLN3', 'ADDRLN4', 'CNTRY', 'PREBKNO', 'PRINAMT_MYRX', 'INTAMT_MYRX', 'OTH_CHARGEX', 'TRANSREF', 'MATUREDS', 'RETAILID', 'STATE', 'SCORE1', 'SCORE2', 'BUSREGN', 'SECTOR', 'SM_STATUS', 'IA_LRU', 'SM_DATE', 'ASCORE_LTST', 'ASCORE_PERM', 'APVDATE', 'INDUSTRIAL_SECTOR_CD', 'LEGAL_ACTION_CD', 'LEGAL_ACTION_DT', 'CCPT_LTST_REVIEW_DT', 'FDB_TAG', 'FDB_TAG_DT', 'FDB_SCORING_DT', 'CUSTCODE', 'DNBFISME', 'ACCTNON', 'ACCTNOX', 'PRINAMT', 'INTAMT', 'INTYTD', 'FIXFLT', 'CALBASP', 'INTAMT_MYR', 'PRINAMT_MYR', 'TENOR_INT', 'OTH_CHARGE', 'IRIA', 'REPTDAT1', 'RDAY1', 'ISSYY', 'ISSMM', 'ISSDTX', 'FACILITY', 'PREFIX', 'CREATDS', 'ISSDTE', 'MATDATE', 'EXPRDATE', 'DIA_PAST01_MTH', 'DIA_PAST02_MTH', 'DIA_PAST03_MTH', 'DIA_PAST04_MTH', 'DIA_PAST05_MTH', 'DIA_PAST06_MTH', 'DIA_PAST07_MTH', 'DIA_PAST08_MTH', 'DIA_PAST09_MTH', 'DIA_PAST10_MTH', 'DIA_PAST11_MTH', 'DIA_PAST12_MTH', 'FORATE']
+BTDTL rows: 42213
+BASE ACCTNO dtype: string
+BTDTL ACCTNO dtype: string
+BASE TRANSREF dtype: string
+BTDTL TRANSREF dtype: string
+BTDTL MATDATE dtype: double
 
-SAS libref probe OK for /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN
-Reading LNNOTE (chunked): /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote/enrh_ln_note_d16.sas7bdat
-  Ingesting enrh_ln_note_d16.sas7bdat: 8,125,473 rows available (TESTING cap -> reading 500,000); branch col = PENDBRH
-    chunk 1: rows 500,000 / 500,000
-  Finished loan_raw: 500,000 rows (cap 500,000)
-  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/lndly16.sas7bdat (500,000 rows)
-Reading previous day (SAS7BDAT): /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly15.sas7bdat
-  Ingesting lndly15.sas7bdat: 1,744,761 rows available (TESTING cap -> reading 500,000); branch col = BRANCH
-    chunk 1: rows 500,000 / 500,000
-  Finished prev_loan: 500,000 rows (cap 500,000)
-  Using previous-day source: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly15.sas7bdat
-Reading LKP_BRANCH: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/LKP_BRANCH
-  Loaded 376 branch records
-  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/mloan_16-11-2026.sas7bdat (317 rows)
-  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/mcred_16-11-2026.sas7bdat (47 rows)
-  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/mhp_16-11-2026.sas7bdat (81 rows)
-  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/dmloan_16-11-2026.sas7bdat (1,923 rows)
-  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/dmcred_16-11-2026.sas7bdat (13 rows)
-  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/dmhp_16-11-2026.sas7bdat (0 rows)
+BASE transformation complete. Rows: 119
+Reconstructing PRODTYPE from SUBPROD mapping
+BTDTL transformation complete. Rows: 42213
+BASE deduplicated. Rows: 119
+BTDTL deduplicated. Rows: 42185
 
-Islamic Daily Loan Movement Report Complete
-Date: 16/11/2026
+--- PRODTYPE distribution after dedup ---
+  PRODTYPE=0 count=41167
+  PRODTYPE=999 count=977
+  PRODTYPE=109 count=27
+  PRODTYPE=113 count=14
 
-Previous-day source used: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly15.sas7bdat
+Merge complete. Combined rows: 119
 
-Branch Summaries:
-  1. MLOAN - Term Loan Outstanding by Branch
-  2. MCRED - Revolving Credit Outstanding by Branch
-  3. MHP   - HP Outstanding by Branch
+--- PRODTYPE distribution after merge ---
+  PRODTYPE=None count=82
+  PRODTYPE=0 count=37
 
-Customer Movements (>= RM 500K):
-  - Term Loans       : 1923 accounts
-  - Revolving Credit : 13 accounts
-  - HP Loans         : 0 accounts
+Report generated: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIBD2CBT/DAYBTRD_20261116.txt
+Total records written: 119
 
-Output Files (SAS7BDAT):
-  - mloan_16-11-2026.sas7bdat
-  - mcred_16-11-2026.sas7bdat
-  - mhp_16-11-2026.sas7bdat
-  - dmloan_16-11-2026.sas7bdat   (emitted only if previous-day source present)
-  - dmcred_16-11-2026.sas7bdat   (emitted only if previous-day source present)
-  - dmhp_16-11-2026.sas7bdat     (emitted only if previous-day source present)
-  - lndly16.sas7bdat
-
-Testing mode: ON (MAX_ROWS = 500000)
-
-SAS Connection terminated. Subprocess id was 531249
-Completed: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN
+Sample output (first 5 rows):
+ACCTNO: 2501466705, PRODTYPE: 0, PREOUTSTD: 68199.49, OUTSTAND: 74280.97, MATDATE: 23182.0
+ACCTNO: 2505217220, PRODTYPE: 0, PREOUTSTD: 55179.68, OUTSTAND: 60099.96, MATDATE: 23876.0
+ACCTNO: 2505707731, PRODTYPE: 0, PREOUTSTD: 62935.33, OUTSTAND: 68547.98, MATDATE: 23128.0
+ACCTNO: 2508153221, PRODTYPE: 0, PREOUTSTD: 313105.46, OUTSTAND: 341027.11, MATDATE: 23896.0
+ACCTNO: 2501466705, PRODTYPE: 0, PREOUTSTD: 67574.94, OUTSTAND: 73601.10, MATDATE: 23215.0
