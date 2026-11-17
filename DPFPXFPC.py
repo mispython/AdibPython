@@ -2,37 +2,39 @@ Report Date: 2026-11-16
 Previous Month: 10
 Next Month Start: 2026-12-01
 SDATE (SAS day number): 24441
-Loaded Islamic BTBASE file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade/ibtbase10.sas7bdat
-Islamic BTBASE metadata: ['TRANSREX', 'BRANCH', 'ACCTNO', 'OUTSTAND', 'TRANSREF', 'FACILITY', 'PRODTYPE', 'DAYS']
-Islamic BTBASE rows: 119
-Loaded Islamic BTDTL file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/btrade/ibtdtl261116.sas7bdat
+Loaded Islamic BTBASE file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote/ibtbase10.sas7bdat
+Islamic BTBASE metadata: ['TRANSREX', 'BRANCH', 'ACCTNO', 'OUTSTAND', 'TRANSREF', 'PRODTYPE', 'DAYS']
+Islamic BTBASE rows: 14
+Loaded Islamic BTDTL file: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote/ibtdtl261116.sas7bdat
 Islamic BTDTL metadata: ['TRANSREX', 'CREATTYP', 'BRANCH', 'APPLCODE', 'ACCTNO', 'SUBACCT', 'CREATYYMMDD', 'EXPIRDS', 'SYNDICAT', 'SPECIALF', 'PURPOSES', 'AANUMBER', 'INTRATE', 'SPREAD', 'INFUNDRT', 'DISCNTB', 'DISCNTF', 'TRANXMT', 'EXCHRTE', 'FORCURR', 'LIABCODE', 'BTREL1', 'RELFROM', 'CURRENCY', 'APPRLIMT', 'APPRLIM2', 'OFFAPIND', 'TFDESC01', 'TFCNTR01', 'TFCNTR03', 'TFCNTR04', 'TFINDR01', 'TFINDR02', 'TFINDR03', 'TFINDR04', 'TFINDR05', 'ISSDTEYYMMDD', 'SINDICAT', 'SUBPROD', 'FACLINE', 'PRODGRP', 'DIRCTIND', 'TRANSREL', 'COMMRATE', 'DISCRATE', 'CONRATE_IND', 'INTBASE', 'PLUSMINUS', 'NUMDAYS', 'BACOM', 'DISCOUNT_PROCEED', 'MTD_TAWIDH_AMT', 'MTD_GHARAMAH_AMT', 'REPAY_SOURCE', 'REPAY_TYPE_CD', 'PROP_DEVELOP_FIN_IND', 'CLIMATE_PRIN_TAXONOMY_CLASS', 'CLIMATE_MITIGATE_GP1_FLG', 'CLIMATE_ADAPT_GP2_FLG', 'CLIMATE_ENVIRONMT_GP3_FLG', 'CLIMATE_TRANSITION_GP4_FLG', 'CLIMATE_PROHIBIT_GP5_FLG', 'SOURCE_INCOME_CURRENCY_CD', 'AADATE', 'REFERRAL_BRANCH', 'APPL_COMMERCIAL_TAG', 'COMBRATE', 'AA_APPROVED_DT', 'BTREL2', 'BTREL3', 'BTREL4', 'NOLEVEL', 'OUTSTAND', 'CERTNO', 'COLLECNO', 'PAYBKNO', 'ADDRLN3', 'ADDRLN4', 'CNTRY', 'PREBKNO', 'PRINAMT_MYRX', 'INTAMT_MYRX', 'OTH_CHARGEX', 'TRANSREF', 'MATUREDS', 'RETAILID', 'STATE', 'SCORE1', 'SCORE2', 'BUSREGN', 'SECTOR', 'SM_STATUS', 'IA_LRU', 'SM_DATE', 'ASCORE_LTST', 'ASCORE_PERM', 'APVDATE', 'INDUSTRIAL_SECTOR_CD', 'LEGAL_ACTION_CD', 'LEGAL_ACTION_DT', 'CCPT_LTST_REVIEW_DT', 'FDB_TAG', 'FDB_TAG_DT', 'FDB_SCORING_DT', 'CUSTCODE', 'DNBFISME', 'ACCTNON', 'ACCTNOX', 'PRINAMT', 'INTAMT', 'INTYTD', 'FIXFLT', 'CALBASP', 'INTAMT_MYR', 'PRINAMT_MYR', 'TENOR_INT', 'OTH_CHARGE', 'REPTDAT1', 'RDAY1', 'ISSYY', 'ISSMM', 'ISSDTX', 'IRIA', 'FACILITY', 'PREFIX', 'CREATDS', 'ISSDTE', 'MATDATE', 'EXPRDATE', 'DIA_PAST01_MTH', 'DIA_PAST02_MTH', 'DIA_PAST03_MTH', 'DIA_PAST04_MTH', 'DIA_PAST05_MTH', 'DIA_PAST06_MTH', 'DIA_PAST07_MTH', 'DIA_PAST08_MTH', 'DIA_PAST09_MTH', 'DIA_PAST10_MTH', 'DIA_PAST11_MTH', 'DIA_PAST12_MTH']
-Islamic BTDTL rows: 3613
+Islamic BTDTL rows: 3418
 BASE ACCTNO dtype: string
 BTDTL ACCTNO dtype: string
 BASE TRANSREF dtype: string
 BTDTL TRANSREF dtype: string
 BTDTL MATDATE dtype: double
 
-Islamic BASE transformation complete. Rows: 119
+Islamic BASE transformation complete. Rows: 14
 Reconstructing PRODTYPE from SUBPROD mapping (Islamic)
-Islamic BTDTL transformation complete. Rows: 3613
-Islamic BASE deduplicated. Rows: 119
-Islamic BTDTL deduplicated. Rows: 3611
+Islamic BTDTL transformation complete. Rows: 3418
+Islamic BASE deduplicated. Rows: 14
+Islamic BTDTL deduplicated. Rows: 3417
 
 --- PRODTYPE distribution after dedup ---
-  PRODTYPE=0 count=3559
+  PRODTYPE=0 count=3365
   PRODTYPE=999 count=52
 
-Islamic merge complete. Combined rows: 119
+Islamic merge complete. Combined rows: 14
 
 --- PRODTYPE distribution after merge ---
-  PRODTYPE=None count=119
+  PRODTYPE=None count=13
+  PRODTYPE=0 count=1
 
 Islamic BT Report generated: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/BTRADE/EIID2CBT/DAYBTRD_20261116.txt
-Total records written: 119
+Total records written: 14
 
 Sample output (first 5 rows):
+ACCTNO: 2850755315, PRODTYPE: 0, PREOUTSTD: 203581.79, OUTSTAND: 209339.59, MATDATE: 23737.0
 Traceback (most recent call last):
   File "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/EIID2CBT.py", line 324, in <module>
     print(f"ACCTNO: {row['ACCTNO']}, PRODTYPE: {row['PRODTYPE']}, "
