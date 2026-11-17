@@ -1,163 +1,61 @@
-OPTIONS SORTDEV=3390 YEARCUTOFF=1950 NOCENTER;
+Reading DATEFILE: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/DATEFILE
+Islamic Daily Loan Movement - 16/11/2026
+  EXTDATE  : 11162026255
+  REPTDATE : 2026-11-16  (num: 261116)
+  PREVDATE : 2026-11-15
+  DLETDATE : 2026-11-13
+  REPTMON  : 11
+  REPTDAY  : 16
+  LNDLY_PREVYEAR : /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly15.sas7bdat
+  *** TESTING MODE: row cap = 500,000 per SAS7BDAT input ***
+Using SAS Config named: default
+SAS Connection established. Subprocess id is 531249
 
-DATA REPTDATE;
-  REPTDATE=INPUT('01'||PUT(MONTH(TODAY()), Z2.)||
-                 PUT(YEAR(TODAY()), 4.), DDMMYY8.)-1;
-  SELECT(DAY(REPTDATE));
-    WHEN (8)  DO; SDD = 1;  WK = '1'; WK1 = '4'; END;
-    WHEN(15)  DO; SDD = 9;  WK = '2'; WK1 = '1'; END;
-    WHEN(22)  DO; SDD = 16; WK = '3'; WK1 = '2'; END;
-    OTHERWISE DO; SDD = 23; WK = '4'; WK1 = '3';
-                            WK2= '2'; WK3 = '1'; END;
-  END;
-  MM = MONTH(REPTDATE);
-  IF WK = '1' THEN DO;
-     MM1 = MM - 1;
-     IF MM1 = 0 THEN MM1 = 12;
-  END;
-  ELSE MM1 = MM;
-  MM2 = MM - 1;
-  IF MM2 = 0 THEN MM2 = 12;
-  SDATE = MDY(MM,SDD,YEAR(REPTDATE));
-  SDESC = 'PUBLIC BANK BERHAD';
-  CALL SYMPUT('NOWK',PUT(WK,$1.));
-  CALL SYMPUT('NOWK1',PUT(WK1,$1.));
-  CALL SYMPUT('NOWK2',PUT(WK2,$1.));
-  CALL SYMPUT('NOWK3',PUT(WK3,$1.));
-  CALL SYMPUT('REPTMON',PUT(MM,Z2.));
-  CALL SYMPUT('REPTMON1',PUT(MM1,Z2.));
-  CALL SYMPUT('REPTMON2',PUT(MM2,Z2.));
-  CALL SYMPUT('REPTYEAR',PUT(REPTDATE,YEAR4.));
-  CALL SYMPUT('REPTDAY',PUT(DAY(REPTDATE),Z2.));
-  CALL SYMPUT('RDATE',PUT(REPTDATE,DDMMYY8.));
-  CALL SYMPUT('SDATE',PUT(SDATE,DDMMYY8.));
-  CALL SYMPUT('SDESC',PUT(SDESC,$26.));
-RUN;
+SAS libref probe OK for /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN
+Reading LNNOTE (chunked): /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote/enrh_ln_note_d16.sas7bdat
+  Ingesting enrh_ln_note_d16.sas7bdat: 8,125,473 rows available (TESTING cap -> reading 500,000); branch col = PENDBRH
+    chunk 1: rows 500,000 / 500,000
+  Finished loan_raw: 500,000 rows (cap 500,000)
+  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/lndly16.sas7bdat (500,000 rows)
+Reading previous day (SAS7BDAT): /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly15.sas7bdat
+  Ingesting lndly15.sas7bdat: 1,744,761 rows available (TESTING cap -> reading 500,000); branch col = BRANCH
+    chunk 1: rows 500,000 / 500,000
+  Finished prev_loan: 500,000 rows (cap 500,000)
+  Using previous-day source: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly15.sas7bdat
+Reading LKP_BRANCH: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/LKP_BRANCH
+  Loaded 376 branch records
+  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/mloan_16-11-2026.sas7bdat (317 rows)
+  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/mcred_16-11-2026.sas7bdat (47 rows)
+  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/mhp_16-11-2026.sas7bdat (81 rows)
+  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/dmloan_16-11-2026.sas7bdat (1,923 rows)
+  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/dmcred_16-11-2026.sas7bdat (13 rows)
+  Wrote /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN/dmhp_16-11-2026.sas7bdat (0 rows)
 
- PROC COPY IN=DEPOBACK OUT=BNM;
-   SELECT FDWKLY
-          FDMTHLY;
- RUN;
+Islamic Daily Loan Movement Report Complete
+Date: 16/11/2026
 
-PROC FORMAT;
-  VALUE KREMMTH
-    LOW - 0   = '51'
-      0 - 1   = '52'
-      1 - 2   = '53'
-      2 - 3   = '54'
-      3 - 4   = '81'
-      4 - 5   = '82'
-      5 - 6   = '83'
-      6 - 7   = '84'
-      7 - 8   = '85'
-      8 - 9   = '86'
-      9 - 10  = '87'
-     10 - 11  = '88'
-     11 - 12  = '89'
-     12 - HIGH = '60';
-RUN;
-%MACRO DCLVAR;
-   RETAIN RD1-RD12 FD1-FD12 31 RD2 FD2 28 RD4 RD6 RD9 RD11
-          FD4 FD6 FD9 FD11 30 RPYR RPMTH RPDAY;
-   ARRAY RPDAYS RD1-RD12;
-   ARRAY FDDAYS FD1-FD12;
-%MEND DCLVAR;
-*;
-%MACRO REMMTH;
-   FDYR  = YEAR(FDDATE);
-   FDMTH = MONTH(FDDATE);
-   FDDAY = DAY(FDDATE);
-   IF FDMTH = 2 THEN
-      IF MOD(FDYR,4) = 0 THEN FD2 = 29;
-      ELSE FD2 = 28;
-   IF FDDAY = FDDAYS(FDMTH) THEN FDDAY=RPDAYS(RPMTH);
-   REMY = FDYR - RPYR;
-   REMM = FDMTH - RPMTH;
-   REMD = FDDAY - RPDAY;
-   REMMTH = REMY*12 + REMM + REMD/RPDAYS(RPMTH);
-%MEND REMMTH;
+Previous-day source used: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIDLOAN/lndly15.sas7bdat
 
-DATA ALM (KEEP=BIC CUSTCODE REMMTH CURBAL);
-   %DCLVAR;
-   SET BNM.FDMTHLY;
+Branch Summaries:
+  1. MLOAN - Term Loan Outstanding by Branch
+  2. MCRED - Revolving Credit Outstanding by Branch
+  3. MHP   - HP Outstanding by Branch
 
-   IF _N_ = 1 THEN DO;
-      REPTDATE = INPUT("&RDATE",DDMMYY8.);
-      RPYR  = YEAR(REPTDATE);
-      RPMTH = MONTH(REPTDATE);
-      RPDAY = DAY(REPTDATE);
-      IF RPMTH = 2 THEN
-         IF MOD(RPYR,4) = 0 THEN RD2 = 29;
-         ELSE RD2 = 28;
-   END;
-   IF OPENIND='O' THEN DO;
-      FDDATE = INPUT(PUT(MATDATE,Z8.),YYMMDD8.);
-      %REMMTH;
-   END;
-   ELSE IF OPENIND='D' THEN REMMTH=-1;
-RUN;
+Customer Movements (>= RM 500K):
+  - Term Loans       : 1923 accounts
+  - Revolving Credit : 13 accounts
+  - HP Loans         : 0 accounts
 
-PROC SUMMARY DATA=ALM NWAY;
-   CLASS BIC CUSTCODE REMMTH;
-   VAR   CURBAL;
-   OUTPUT OUT=ALM SUM=AMOUNT;
-RUN;
+Output Files (SAS7BDAT):
+  - mloan_16-11-2026.sas7bdat
+  - mcred_16-11-2026.sas7bdat
+  - mhp_16-11-2026.sas7bdat
+  - dmloan_16-11-2026.sas7bdat   (emitted only if previous-day source present)
+  - dmcred_16-11-2026.sas7bdat   (emitted only if previous-day source present)
+  - dmhp_16-11-2026.sas7bdat     (emitted only if previous-day source present)
+  - lndly16.sas7bdat
 
-DATA ALMDEPT (KEEP=BNMCODE AMOUNT CUSTCODE REMMTH);
-   LENGTH BNMCODE $14.;
-   SET ALM;
+Testing mode: ON (MAX_ROWS = 500000)
 
-   RM=PUT(REMMTH,KREMMTH.);
-   SELECT(CUSTCODE);
-     WHEN('81','82','83','84') DO;
-        BNMCODE = BIC||CUSTCODE||RM||'0000Y'; OUTPUT;
-     END;
-     WHEN('85','86','87','88','89','90','91','92','95','96','98',
-          '99') DO;
-        BNMCODE = BIC||'85'||RM||'0000Y'; OUTPUT;
-     END;
-     OTHERWISE;
-   END;
-RUN;
-*;
-PROC SUMMARY DATA=ALMDEPT NWAY;
-   WHERE SUBSTR(BNMCODE,1,5) = '42130';
-   CLASS BNMCODE;
-   VAR   AMOUNT;
-   OUTPUT OUT=ALMDEPT1 (DROP=_TYPE_ _FREQ_) SUM=AMOUNT;
-RUN;
-*;
-TITLE1 'SPECIAL PURPOSE ITEMS (QUARTERLY): EXTERNAL LIABILITIES';
-TITLE2 'AS AT ' &RDATE;
-TITLE3 'CODE 81 & 85 FOR 42130-80-XX-0000Y';
-PROC PRINT DATA=ALMDEPT1;
-SUM AMOUNT;
-RUN;
-*;
-PROC SUMMARY DATA=ALMDEPT NWAY;
-   WHERE SUBSTR(BNMCODE,1,5) = '42132';
-   CLASS BNMCODE;
-   VAR   AMOUNT;
-   OUTPUT OUT=ALMDEPT1 (DROP=_TYPE_ _FREQ_) SUM=AMOUNT;
-RUN;
-*;
-TITLE1 'SPECIAL PURPOSE ITEMS (QUARTERLY): EXTERNAL LIABILITIES';
-TITLE2 'AS AT ' &RDATE;
-TITLE3 'CODE 81 & 85 FOR 42132-80-XX-0000Y';
-PROC PRINT DATA=ALMDEPT1;
-SUM AMOUNT;
-RUN;
-*;
-PROC SUMMARY DATA=ALMDEPT NWAY;
-   WHERE SUBSTR(BNMCODE,1,5) = '42630';
-   CLASS BNMCODE;
-   VAR   AMOUNT;
-   OUTPUT OUT=ALMDEPT1 (DROP=_TYPE_ _FREQ_) SUM=AMOUNT;
-RUN;
-*;
-TITLE1 'REPORT ON EXTERNAL LIABILITIES FOR FCY FD FROM FNBE (85)';
-TITLE2 'AS AT ' &RDATE;
-PROC PRINT DATA=ALMDEPT1;
-SUM AMOUNT;
-RUN;
-*;
+SAS Connection terminated. Subprocess id was 531249
+Completed: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIDLOAN
