@@ -41,16 +41,33 @@ except ImportError:
     def format_mmddyy10(date_obj):
         return date_obj.strftime('%m/%d/%Y') if date_obj else ''
 
-LOAN_DIR = ('LOAN', '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/')
-NPL_DIR = ('NPL6', '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/')
-SASLN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
-CISNAME_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
-CCRIS_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
-BKCTRL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
+# ============================================================================
+# PATH CONFIGURATION
+# ============================================================================
+BASE_INPUT  = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
+BASE_OUTPUT = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/'
 
-OUTPUT_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/'
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, 'wofftext.txt')
+LOAN_DIR    = BASE_INPUT
+NPL_DIR     = BASE_INPUT
+SASLN_DIR   = BASE_INPUT
+CISNAME_DIR = BASE_INPUT
+CCRIS_DIR   = BASE_INPUT
+BKCTRL_DIR  = BASE_INPUT
+
+OUTPUT_DIR   = BASE_OUTPUT
+OUTPUT_FILE  = os.path.join(OUTPUT_DIR, 'wofftext.txt')
 OUTPUT_FILE1 = os.path.join(OUTPUT_DIR, 'wofftex1.txt')
+
+# Input dataset filenames (single source of truth)
+INPUT_FILES = {
+    'ln_note' : os.path.join(LOAN_DIR,    'enrh_ln_note.sas7bdat'),
+    'iis'     : os.path.join(NPL_DIR,     'iis.sas7bdat'),
+    'sp2'     : os.path.join(NPL_DIR,     'sp2.sas7bdat'),
+    'cname'   : os.path.join(CISNAME_DIR, 'loan.sas7bdat'),          # CISNAME.LOAN
+    'liab'    : os.path.join(LOAN_DIR,    'lnliab07226.sas7bdat'),   # LOAN.LIAB
+    'ccris'   : None,  # built dynamically below
+    'sasln'   : None,  # built dynamically below
+}
 
 # Create output directory if it doesn't exist
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -81,14 +98,13 @@ def read_sas7bdat_fast(filepath, columns=None, row_limit=None):
         if not os.path.exists(filepath):
             print(f"Warning: File not found: {filepath}")
             return None
-        
+
         start_time = time.time()
         print(f"  Reading: {os.path.basename(filepath)}", end="", flush=True)
-        
-        # Use row_limit parameter to only read needed rows
+
         if row_limit and row_limit > 0:
             df, meta = pyreadstat.read_sas7bdat(
-                filepath, 
+                filepath,
                 row_limit=row_limit,
                 usecols=columns if columns else None
             )
@@ -97,13 +113,13 @@ def read_sas7bdat_fast(filepath, columns=None, row_limit=None):
                 filepath,
                 usecols=columns if columns else None
             )
-        
+
         elapsed = time.time() - start_time
         print(f" - {len(df)} rows, {elapsed:.1f}s")
-        
+
         if len(df) == 0:
             return None
-            
+
         return pl.from_pandas(df)
     except Exception as e:
         print(f"\nError reading {filepath}: {e}")
@@ -131,7 +147,7 @@ def standardize_schema(df, schema_dict):
     """Standardize column types to match expected schema"""
     if df is None or df.height == 0:
         return df
-    
+
     for col, dtype in schema_dict.items():
         if col in df.columns:
             try:
@@ -143,7 +159,7 @@ def standardize_schema(df, schema_dict):
                     df = df.with_columns(pl.col(col).cast(pl.Utf8))
             except Exception as e:
                 print(f"  Warning: Could not cast column {col} to {dtype}: {e}")
-    
+
     return df
 
 def create_empty_dataframe_with_schema(schema):
@@ -155,10 +171,11 @@ def calc_mthpdue(days):
     if days is None or days <= 0:
         return 0
     result = format_mthpass(days)
-    # format_mthpass returns a string, convert to int
     return int(result) if result else 0
 
-# Set report date to yesterday
+# ============================================================================
+# Report date & week logic
+# ============================================================================
 reptdate = datetime.now().date() - timedelta(days=1)
 print(f"\n{'='*60}")
 print(f"Bad Debt Write-Off List Generation")
@@ -183,34 +200,39 @@ reptmon, reptmon1 = f'{mm:02d}', f'{mm1:02d}'
 reptyear = f'{reptdate.year % 100:02d}'
 rdate = reptdate.strftime('%d/%m/%y')
 
+# Dynamic filenames depending on report date
+INPUT_FILES['ccris'] = os.path.join(CCRIS_DIR, f'icredmsubac{reptmon}{reptyear}.sas7bdat')
+INPUT_FILES['sasln'] = os.path.join(SASLN_DIR, f'loan{reptmon1}{nowks}.sas7bdat')
+
 print(f"Week: {nowk}, Previous Month: {reptmon1}")
 if TEST_MODE:
     print(f"*** TEST MODE: Limiting to {TEST_LIMIT} rows ***")
 print(f"{'='*60}\n")
 
 # ============================================================================
-# STEP 1: DEBUG - Check BORSTAT values
+# STEP 1: DEBUG - Check BORSTAT values (filtered to ENTITY_CD='PIBB')
 # ============================================================================
-print("STEP 1: DEBUG - Checking BORSTAT values...")
+print("STEP 1: DEBUG - Checking BORSTAT values (ENTITY_CD='PIBB')...")
 
-# Read a small sample to check BORSTAT values
 df_sample = read_sas7bdat_fast(
-    f'{LOAN_DIR}enrh_ln_note.sas7bdat',
-    columns=['BORSTAT', 'LOANTYPE'],
+    INPUT_FILES['ln_note'],
+    columns=['ENTITY_CD', 'BORSTAT', 'LOANTYPE'],
     row_limit=500000
 )
 
 if df_sample is not None:
+    df_sample = df_sample.with_columns(
+        pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars().alias('ENTITY_CD')
+    ).filter(pl.col('ENTITY_CD') == 'PIBB')
+
     print(f"\n  BORSTAT column info:")
     print(f"  Data type: {df_sample['BORSTAT'].dtype}")
-    
-    # Get unique values and their counts - use pl.len() instead of pl.count()
+
     unique_vals = df_sample.group_by('BORSTAT').agg(pl.len())
-    print(f"  Unique values (first 1000 rows):")
+    print(f"  Unique values (PIBB sample):")
     for row in unique_vals.iter_rows(named=True):
         print(f"    '{row['BORSTAT']}' : {row['len']} rows")
-    
-    # Check if there are any rows with BORSTAT that might be 'A'
+
     if 'A' in df_sample['BORSTAT'].to_list():
         print("  Found 'A' values in sample")
     else:
@@ -220,106 +242,113 @@ else:
     sys.exit(1)
 
 # ============================================================================
-# STEP 2: Read NPLA data - Active accounts with borrower status 'A'
+# STEP 2: Read NPLA data - Active accounts (filtered to ENTITY_CD='PIBB')
 # ============================================================================
-print("\nSTEP 2: Reading NPLA data...")
+print("\nSTEP 2: Reading NPLA data (ENTITY_CD='PIBB')...")
 start_total = time.time()
 
-# Read only needed columns from enrh_ln_note
-loan_columns = ['BORSTAT', 'LOANTYPE', 'NAME', 'ACCTNO', 'NOTENO', 
-                'FEEDUE', 'FEEDUEMS', 'FEEAMT16', 'MARKETVL', 'NTBRCH']
+# Read ALL columns needed by Step 2 and Step 8 in one pass, so we only
+# touch enrh_ln_note once.
+loan_columns = [
+    # Step 2 needs
+    'ENTITY_CD', 'BORSTAT', 'LOANTYPE', 'NAME', 'ACCTNO', 'NOTENO',
+    'FEEDUE', 'FEEDUEMS', 'FEEAMT16', 'MARKETVL', 'NTBRCH',
+    # Step 8 extras
+    'FEETOTAL', 'NFEEAMT5', 'FEEAMT3', 'FEETOT2', 'FEEAMTA', 'FEEAMT5',
+    'ECSRRSRV', 'MATUREDT', 'LASTTRAN', 'SCORE2', 'CONTRTYPE', 'NETPROC',
+    'APPVALUE', 'BIRTHDT', 'ORGBAL', 'CURBAL', 'PAYAMT', 'NACOSPADT',
+    'BALANCE', 'GUAREND', 'ISSXDTE', 'COLLDESC', 'COLLYEAR', 'DELQCD',
+    'CP', 'MODELDES', 'AKPK_STATUS', 'PAIDIND', 'POSTNTRN', 'INTAMT',
+    'INTEARN4', 'CUSTCODE', 'LSTTRNCD'
+]
+
 df_npla_raw = read_sas7bdat_fast(
-    f'{LOAN_DIR}enrh_ln_note.sas7bdat',
+    INPUT_FILES['ln_note'],
     columns=loan_columns,
     row_limit=TEST_LIMIT if TEST_MODE else None
 )
 
-if df_npla_raw is not None:
-    # Standardize column types
-    df_npla_raw = standardize_schema(df_npla_raw, {
-        'ACCTNO': pl.Float64,
-        'NOTENO': pl.Float64,
-        'FEEDUE': pl.Float64,
-        'FEEDUEMS': pl.Float64,
-        'FEEAMT16': pl.Float64,
-        'MARKETVL': pl.Float64,
-        'NTBRCH': pl.Float64
-    })
-    
-    # Debug: Check BORSTAT values in full dataset
-    print(f"\n  Checking BORSTAT values in full dataset...")
-    borstat_counts = df_npla_raw.group_by('BORSTAT').agg(pl.len())
-    print("  BORSTAT distribution:")
-    for row in borstat_counts.iter_rows(named=True):
-        print(f"    '{row['BORSTAT']}' : {row['len']} rows")
-    
-    # Try different ways to filter for active accounts
-    # 1. Exact match
-    df_active_exact = df_npla_raw.filter(pl.col('BORSTAT') == 'A')
-    print(f"\n  Exact match 'A': {df_active_exact.height} rows")
-    
-    # 2. Strip whitespace
-    df_npla_raw = df_npla_raw.with_columns([
-        pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars().alias('BORSTAT_CLEAN')
-    ])
-    df_active_clean = df_npla_raw.filter(pl.col('BORSTAT_CLEAN') == 'A')
-    print(f"  After strip 'A': {df_active_clean.height} rows")
-    
-    # Use the most successful method
-    if df_active_clean.height > 0:
-        print("\n  Using stripped 'A' filtering...")
-        df_npla = df_active_clean.with_columns([
-            pl.lit(0.0).alias('IIS'),
-            (pl.col('FEEDUE').fill_null(0) - pl.col('FEEDUEMS').fill_null(0)).alias('OI'),
-            (pl.lit(0.0) + (pl.col('FEEDUE').fill_null(0) - pl.col('FEEDUEMS').fill_null(0))).alias('TOTIIS'),
-            (pl.col('FEEDUEMS').fill_null(0) + pl.col('FEEAMT16').fill_null(0)).alias('SP')
-        ])
-    elif df_active_exact.height > 0:
-        print("\n  Using exact 'A' filtering...")
-        df_npla = df_active_exact.with_columns([
-            pl.lit(0.0).alias('IIS'),
-            (pl.col('FEEDUE').fill_null(0) - pl.col('FEEDUEMS').fill_null(0)).alias('OI'),
-            (pl.lit(0.0) + (pl.col('FEEDUE').fill_null(0) - pl.col('FEEDUEMS').fill_null(0))).alias('TOTIIS'),
-            (pl.col('FEEDUEMS').fill_null(0) + pl.col('FEEAMT16').fill_null(0)).alias('SP')
-        ])
-    else:
-        print("\n  WARNING: No active accounts found (BORSTAT='A'). Exiting.")
-        sys.exit(1)
+if df_npla_raw is None:
+    raise Exception(f"Failed to read {INPUT_FILES['ln_note']}")
 
-    # Apply branch codes
-    branch_list = []
-    for ntbrch in df_npla['NTBRCH'].to_list():
-        if ntbrch is not None:
-            try:
-                branch_abbr = get_branch_name(int(ntbrch) if isinstance(ntbrch, float) else ntbrch)
-                branch_list.append(f"{branch_abbr} {int(ntbrch):03d}")
-            except:
-                branch_list.append("BR 000")
-        else:
+# --- ENTITY_CD = 'PIBB' filter ------------------------------------------
+df_npla_raw = df_npla_raw.with_columns(
+    pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars().alias('ENTITY_CD')
+)
+before = df_npla_raw.height
+df_npla_raw = df_npla_raw.filter(pl.col('ENTITY_CD') == 'PIBB')
+print(f"  ENTITY_CD='PIBB' filter: {before} -> {df_npla_raw.height} rows")
+
+if df_npla_raw.height == 0:
+    print("WARNING: No rows with ENTITY_CD='PIBB'. Exiting.")
+    sys.exit(0)
+
+# Standardize numeric column types
+df_npla_raw = standardize_schema(df_npla_raw, {
+    'ACCTNO': pl.Float64,
+    'NOTENO': pl.Float64,
+    'FEEDUE': pl.Float64,
+    'FEEDUEMS': pl.Float64,
+    'FEEAMT16': pl.Float64,
+    'MARKETVL': pl.Float64,
+    'NTBRCH': pl.Float64,
+    'LOANTYPE': pl.Float64
+})
+
+# Debug: BORSTAT distribution within PIBB
+print(f"\n  Checking BORSTAT values in PIBB dataset...")
+borstat_counts = df_npla_raw.group_by('BORSTAT').agg(pl.len())
+print("  BORSTAT distribution:")
+for row in borstat_counts.iter_rows(named=True):
+    print(f"    '{row['BORSTAT']}' : {row['len']} rows")
+
+# Filter active accounts (BORSTAT='A'), handling whitespace
+df_active_clean = df_npla_raw.filter(
+    pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars() == 'A'
+)
+print(f"\n  Active 'A' (PIBB, stripped): {df_active_clean.height} rows")
+
+if df_active_clean.height == 0:
+    print("WARNING: No active accounts (BORSTAT='A') for PIBB. Exiting.")
+    sys.exit(1)
+
+df_npla = df_active_clean.with_columns([
+    pl.lit(0.0).alias('IIS'),
+    (pl.col('FEEDUE').fill_null(0) - pl.col('FEEDUEMS').fill_null(0)).alias('OI'),
+    (pl.lit(0.0) + (pl.col('FEEDUE').fill_null(0) - pl.col('FEEDUEMS').fill_null(0))).alias('TOTIIS'),
+    (pl.col('FEEDUEMS').fill_null(0) + pl.col('FEEAMT16').fill_null(0)).alias('SP')
+])
+
+# Apply branch codes
+branch_list = []
+for ntbrch in df_npla['NTBRCH'].to_list():
+    if ntbrch is not None:
+        try:
+            branch_abbr = get_branch_name(int(ntbrch) if isinstance(ntbrch, float) else ntbrch)
+            branch_list.append(f"{branch_abbr} {int(ntbrch):03d}")
+        except:
             branch_list.append("BR 000")
+    else:
+        branch_list.append("BR 000")
 
-    df_npla = df_npla.with_columns([
-        pl.Series('BRANCH', branch_list)
-    ]).select(['NAME', 'ACCTNO', 'NOTENO', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'])
-    
-    # Standardize final NPLA schema
-    df_npla = standardize_schema(df_npla, {
-        'ACCTNO': pl.Float64,
-        'NOTENO': pl.Float64,
-        'IIS': pl.Float64,
-        'OI': pl.Float64,
-        'TOTIIS': pl.Float64,
-        'SP': pl.Float64,
-        'MARKETVL': pl.Float64
-    })
-else:
-    raise Exception("Failed to read LOAN.enrh_ln_note")
+df_npla = df_npla.with_columns([
+    pl.Series('BRANCH', branch_list)
+]).select(['NAME', 'ACCTNO', 'NOTENO', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'])
 
-print(f"\n  NPLA rows: {df_npla.height}\n")
+df_npla = standardize_schema(df_npla, {
+    'ACCTNO': pl.Float64,
+    'NOTENO': pl.Float64,
+    'IIS': pl.Float64,
+    'OI': pl.Float64,
+    'TOTIIS': pl.Float64,
+    'SP': pl.Float64,
+    'MARKETVL': pl.Float64
+})
 
-# Check if NPLA has data
+print(f"\n  NPLA rows (PIBB active): {df_npla.height}\n")
+
 if df_npla.height == 0:
-    print("WARNING: No active accounts found (BORSTAT='A'). Exiting.")
+    print("WARNING: No active accounts found. Exiting.")
     sys.exit(0)
 
 # ============================================================================
@@ -327,35 +356,27 @@ if df_npla.height == 0:
 # ============================================================================
 print("STEP 3: Reading IIS and SP data...")
 df_iis = read_sas7bdat_fast(
-    f'{NPL_DIR}iis.sas7bdat',
+    INPUT_FILES['iis'],
     columns=['ACCTNO', 'NOTENO', 'NAME', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'],
     row_limit=TEST_LIMIT if TEST_MODE else None
 )
 if df_iis is not None:
     df_iis = standardize_schema(df_iis, {
-        'ACCTNO': pl.Float64,
-        'NOTENO': pl.Float64,
-        'IIS': pl.Float64,
-        'OI': pl.Float64,
-        'TOTIIS': pl.Float64,
-        'SP': pl.Float64,
+        'ACCTNO': pl.Float64, 'NOTENO': pl.Float64, 'IIS': pl.Float64,
+        'OI': pl.Float64, 'TOTIIS': pl.Float64, 'SP': pl.Float64,
         'MARKETVL': pl.Float64
     })
     df_iis = df_iis.unique(subset=['ACCTNO', 'NOTENO'])
 
 df_sp = read_sas7bdat_fast(
-    f'{NPL_DIR}sp2.sas7bdat',
+    INPUT_FILES['sp2'],
     columns=['ACCTNO', 'NOTENO', 'NAME', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'],
     row_limit=TEST_LIMIT if TEST_MODE else None
 )
 if df_sp is not None:
     df_sp = standardize_schema(df_sp, {
-        'ACCTNO': pl.Float64,
-        'NOTENO': pl.Float64,
-        'IIS': pl.Float64,
-        'OI': pl.Float64,
-        'TOTIIS': pl.Float64,
-        'SP': pl.Float64,
+        'ACCTNO': pl.Float64, 'NOTENO': pl.Float64, 'IIS': pl.Float64,
+        'OI': pl.Float64, 'TOTIIS': pl.Float64, 'SP': pl.Float64,
         'MARKETVL': pl.Float64
     })
     df_sp = df_sp.unique(subset=['ACCTNO', 'NOTENO'])
@@ -363,9 +384,7 @@ if df_sp is not None:
 print(f"  IIS rows: {df_iis.height if df_iis is not None else 0}")
 print(f"  SP rows: {df_sp.height if df_sp is not None else 0}")
 
-# Merge IIS and SP
 if df_iis is not None and df_sp is not None and df_iis.height > 0 and df_sp.height > 0:
-    # Use 'full' instead of 'outer' (deprecated)
     df_npl_data = df_sp.join(df_iis, on=['ACCTNO', 'NOTENO'], how='full').select([
         'NAME', 'ACCTNO', 'NOTENO', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH'
     ])
@@ -383,32 +402,22 @@ print(f"\n")
 # ============================================================================
 print("STEP 4: Combining NPL data...")
 
-# Ensure both dataframes have consistent schemas before concatenation
 if df_npl_data.height > 0:
-    # Standardize NPL data schema
     df_npl_data = standardize_schema(df_npl_data, {
-        'ACCTNO': pl.Float64,
-        'NOTENO': pl.Float64,
-        'IIS': pl.Float64,
-        'OI': pl.Float64,
-        'TOTIIS': pl.Float64,
-        'SP': pl.Float64,
+        'ACCTNO': pl.Float64, 'NOTENO': pl.Float64, 'IIS': pl.Float64,
+        'OI': pl.Float64, 'TOTIIS': pl.Float64, 'SP': pl.Float64,
         'MARKETVL': pl.Float64
     })
-    
-    # Concatenate
     try:
         df_npl = pl.concat([df_npla, df_npl_data])
     except Exception as e:
         print(f"  Error in concat: {e}")
         print(f"  df_npla schema: {df_npla.schema}")
         print(f"  df_npl_data schema: {df_npl_data.schema}")
-        # If concat fails, use just the NPLA data
         df_npl = df_npla.clone()
 else:
     df_npl = df_npla.clone()
 
-# Continue with processing
 if df_npl.height > 0:
     df_npl = df_npl.with_columns([
         pl.col('MARKETVL').fill_null(0).round(2),
@@ -424,59 +433,48 @@ print(f"  NPL combined rows: {df_npl.height}\n")
 # STEP 5: Read CCRIS credit submission data
 # ============================================================================
 print("STEP 5: Reading CCRIS data...")
-ccris_file = f'{CCRIS_DIR}icredmsubac{reptmon}{reptyear}.sas7bdat'
-print(f"  Looking for: {ccris_file}")
+print(f"  Looking for: {INPUT_FILES['ccris']}")
 
-# Try different naming patterns for CCRIS file
 ccris_file_patterns = [
-    f'{CCRIS_DIR}icredmsubac{reptmon}{reptyear}.sas7bdat',
-    f'{CCRIS_DIR}ICREDMSUBAC{reptmon}{reptyear}.sas7bdat',
-    f'{CCRIS_DIR}icredmsubac{reptmon}0{reptyear}.sas7bdat',
-    f'{CCRIS_DIR}ICREDMSUBAC{reptmon}0{reptyear}.sas7bdat',
+    INPUT_FILES['ccris'],
+    os.path.join(CCRIS_DIR, f'ICREDMSUBAC{reptmon}{reptyear}.sas7bdat'),
+    os.path.join(CCRIS_DIR, f'icredmsubac{reptmon}0{reptyear}.sas7bdat'),
+    os.path.join(CCRIS_DIR, f'ICREDMSUBAC{reptmon}0{reptyear}.sas7bdat'),
 ]
 
 df_credsub = None
 for pattern in ccris_file_patterns:
     df_credsub = read_sas7bdat_fast(
         pattern,
-        columns=None,  # Read all columns first to see what's available
+        columns=None,
         row_limit=TEST_LIMIT if TEST_MODE else None
     )
     if df_credsub is not None:
         print(f"  Found CCRIS file: {os.path.basename(pattern)}")
-        print(f"  Columns in CCRIS file: {df_credsub.columns[:20]}...")  # Show first 20 columns
+        print(f"  Columns in CCRIS file: {df_credsub.columns[:20]}...")
         break
 
 if df_credsub is not None and df_credsub.height > 0:
-    # Check for the correct column names (case-insensitive)
-    cred_cols_lower = [col.lower() for col in df_credsub.columns]
-    
-    # Find the account number column - try different possible names (case-insensitive)
     acct_col = None
     for col in df_credsub.columns:
-        col_lower = col.lower()
-        if col_lower in ['acctnum', 'acctno', 'acct_num', 'account', 'accountno']:
+        if col.lower() in ['acctnum', 'acctno', 'acct_num', 'account', 'accountno']:
             acct_col = col
             break
-    
-    # Find the days arrears column (case-insensitive)
+
     days_col = None
     for col in df_credsub.columns:
-        col_lower = col.lower()
-        if col_lower in ['daysarr', 'days', 'days_arr', 'daysarrears']:
+        if col.lower() in ['daysarr', 'days', 'days_arr', 'daysarrears']:
             days_col = col
             break
-    
-    # Find the facility column (case-insensitive)
+
     facility_col = None
     for col in df_credsub.columns:
-        col_lower = col.lower()
-        if col_lower in ['facility', 'facility_cd', 'facilitycd', 'fac']:
+        if col.lower() in ['facility', 'facility_cd', 'facilitycd', 'fac']:
             facility_col = col
             break
-    
+
     print(f"  Found columns - ACCT: {acct_col}, DAYS: {days_col}, FACILITY: {facility_col}")
-    
+
     if acct_col is None:
         print(f"  Warning: Could not find account number column in CCRIS data")
         print(f"  Available columns (first 20): {df_credsub.columns[:20]}")
@@ -485,7 +483,6 @@ if df_credsub is not None and df_credsub.height > 0:
             'DAYS': pl.Float64, 'FACILITY': pl.Utf8
         })
     else:
-        # Rename columns to standard names
         rename_map = {}
         if acct_col and acct_col != 'ACCTNO':
             rename_map[acct_col] = 'ACCTNO'
@@ -493,30 +490,26 @@ if df_credsub is not None and df_credsub.height > 0:
             rename_map[days_col] = 'DAYS'
         if facility_col and facility_col != 'FACILITY':
             rename_map[facility_col] = 'FACILITY'
-        
+
         if rename_map:
             df_credsub = df_credsub.rename(rename_map)
-        
-        # Filter for specific facilities
+
         if 'FACILITY' in df_credsub.columns:
             df_credsub = df_credsub.filter(
                 pl.col('FACILITY').is_in(['34331', '34332'])
             )
-        
-        # Select only needed columns
+
         select_cols = ['ACCTNO', 'NOTENO', 'DAYS', 'FACILITY']
         available_cols = [col for col in select_cols if col in df_credsub.columns]
         if available_cols:
             df_credsub = df_credsub.select(available_cols)
-        
-        # Sort and deduplicate
+
         if 'ACCTNO' in df_credsub.columns and 'NOTENO' in df_credsub.columns:
             df_credsub = df_credsub.sort(
-                ['ACCTNO', 'NOTENO', 'DAYS'], 
+                ['ACCTNO', 'NOTENO', 'DAYS'],
                 descending=[False, False, True]
             ).unique(subset=['ACCTNO', 'NOTENO'])
-        
-        # Standardize schema
+
         df_credsub = standardize_schema(df_credsub, {
             'ACCTNO': pl.Float64,
             'NOTENO': pl.Float64,
@@ -532,23 +525,16 @@ else:
 print(f"  CCRIS rows: {df_credsub.height}\n")
 
 # ============================================================================
-# STEP 6: Read loan data for HPD types
+# STEP 6: HPD loan types - reuse cached, filtered lnnote
 # ============================================================================
-print("STEP 6: Reading HPD loan data...")
-df_loan_raw = read_sas7bdat_fast(
-    f'{LOAN_DIR}enrh_ln_note.sas7bdat',
-    columns=['ACCTNO', 'NOTENO', 'LOANTYPE'],
-    row_limit=TEST_LIMIT if TEST_MODE else None
-)
-if df_loan_raw is not None:
-    df_loan_raw = standardize_schema(df_loan_raw, {
-        'ACCTNO': pl.Float64,
-        'NOTENO': pl.Float64,
-        'LOANTYPE': pl.Float64
-    })
-    df_loan_raw = df_loan_raw.filter(
-        pl.col('LOANTYPE').is_in(HPD)
-    ).unique(subset=['ACCTNO', 'NOTENO'])
+print("STEP 6: Filtering HPD loan types from cached lnnote...")
+if df_npla_raw is not None and 'LOANTYPE' in df_npla_raw.columns:
+    df_loan_raw = (
+        df_npla_raw
+        .select(['ACCTNO', 'NOTENO', 'LOANTYPE'])
+        .unique(subset=['ACCTNO', 'NOTENO'])
+        .filter(pl.col('LOANTYPE').is_in(HPD))
+    )
 else:
     df_loan_raw = create_empty_dataframe_with_schema({
         'ACCTNO': pl.Float64, 'NOTENO': pl.Float64, 'LOANTYPE': pl.Float64
@@ -561,26 +547,23 @@ print(f"  HPD loan rows: {df_loan_raw.height}\n")
 # ============================================================================
 print("STEP 7: Merging data...")
 if df_npl.height > 0:
-    # Only join if we have data in the join DataFrames
     df_loan = df_npl.clone()
-    
+
     if df_credsub.height > 0:
         df_loan = df_loan.join(df_credsub, on=['ACCTNO', 'NOTENO'], how='left')
     else:
-        # Add empty DAYS column if no CCRIS data
         df_loan = df_loan.with_columns([
             pl.lit(None).cast(pl.Float64).alias('DAYS'),
             pl.lit(None).cast(pl.Utf8).alias('FACILITY')
         ])
-    
+
     if df_loan_raw.height > 0:
         df_loan = df_loan.join(df_loan_raw, on=['ACCTNO', 'NOTENO'], how='left', suffix='_loan')
     else:
-        # Add empty LOANTYPE column if no HPD data
         df_loan = df_loan.with_columns([
             pl.lit(None).cast(pl.Float64).alias('LOANTYPE')
         ])
-    
+
     df_loan = df_loan.filter(pl.col('ACCTNO').is_not_null())
 else:
     df_loan = df_npl.clone()
@@ -588,52 +571,48 @@ else:
 print(f"  Merged loan rows: {df_loan.height}\n")
 
 # ============================================================================
-# STEP 8: Calculate derived fields (using polars for speed)
+# STEP 8: Calculate derived fields - reuse cached, filtered lnnote
 # ============================================================================
 print("STEP 8: Calculating derived fields...")
 start_time = time.time()
 
 if df_loan.height > 0:
-    # Read additional columns needed for calculations
     extra_columns = ['ACCTNO', 'NOTENO', 'FEETOTAL', 'NFEEAMT5', 'FEEAMT3', 'FEETOT2',
-                     'FEEAMTA', 'FEEAMT5', 'ECSRRSRV', 'MATUREDT', 'LASTTRAN', 
+                     'FEEAMTA', 'FEEAMT5', 'ECSRRSRV', 'MATUREDT', 'LASTTRAN',
                      'SCORE2', 'CONTRTYPE', 'NETPROC', 'APPVALUE', 'BIRTHDT', 'ORGBAL',
                      'CURBAL', 'PAYAMT', 'NACOSPADT', 'BALANCE', 'GUAREND', 'ISSXDTE',
                      'COLLDESC', 'COLLYEAR', 'DELQCD', 'CP', 'MODELDES', 'AKPK_STATUS',
                      'BORSTAT', 'PAIDIND', 'POSTNTRN', 'INTAMT', 'INTEARN4',
                      'CUSTCODE', 'LSTTRNCD']
-    
-    df_extra = read_sas7bdat_fast(
-        f'{LOAN_DIR}enrh_ln_note.sas7bdat',
-        columns=extra_columns,
-        row_limit=TEST_LIMIT if TEST_MODE else None
-    )
-    
-    if df_extra is not None:
-        # Standardize numeric columns
+
+    # Reuse cached, filtered lnnote (no re-read)
+    if df_npla_raw is not None:
+        available = [c for c in extra_columns if c in df_npla_raw.columns]
+        df_extra = (
+            df_npla_raw
+            .select(available)
+            .unique(subset=['ACCTNO', 'NOTENO'])
+        )
+
         numeric_cols = ['ACCTNO', 'NOTENO', 'FEETOTAL', 'NFEEAMT5', 'FEEAMT3', 'FEETOT2',
-                        'FEEAMTA', 'FEEAMT5', 'ECSRRSRV', 'NETPROC', 'APPVALUE', 
+                        'FEEAMTA', 'FEEAMT5', 'ECSRRSRV', 'NETPROC', 'APPVALUE',
                         'ORGBAL', 'CURBAL', 'PAYAMT', 'BALANCE', 'INTAMT', 'INTEARN4',
                         'CUSTCODE', 'LSTTRNCD']
         for col in numeric_cols:
             if col in df_extra.columns:
                 df_extra = df_extra.with_columns(pl.col(col).cast(pl.Float64))
-        
-        # Join with loan data
+
         df_loan = df_loan.join(df_extra, on=['ACCTNO', 'NOTENO'], how='left')
-    
-    # Now safely add calculated columns
-    # Check which columns exist before using them
+
     existing_cols = df_loan.columns
-    
-    # Initialize missing columns with null values
+
     for col in ['FEETOTAL', 'NFEEAMT5', 'FEEAMT3', 'FEETOT2', 'FEEAMTA', 'FEEAMT5',
                 'ECSRRSRV', 'ORGBAL', 'CURBAL', 'PAYAMT', 'NACOSPADT', 'SCORE2',
                 'CONTRTYPE', 'NETPROC', 'APPVALUE']:
         if col not in existing_cols:
             df_loan = df_loan.with_columns(pl.lit(None).cast(pl.Float64).alias(col))
-    
-    # Now calculate derived fields - one at a time to avoid column reference issues
+
+    # POSTAMT
     try:
         df_loan = df_loan.with_columns([
             (pl.col('FEETOTAL').fill_null(0) + pl.col('NFEEAMT5').fill_null(0)).alias('POSTAMT')
@@ -641,7 +620,8 @@ if df_loan.height > 0:
     except Exception as e:
         print(f"  Warning: Could not calculate POSTAMT: {e}")
         df_loan = df_loan.with_columns([pl.lit(0.0).alias('POSTAMT')])
-    
+
+    # OTHERAMT
     try:
         df_loan = df_loan.with_columns([
             (pl.col('FEEAMT3').fill_null(0) - pl.col('POSTAMT')).alias('OTHERAMT')
@@ -649,7 +629,8 @@ if df_loan.height > 0:
     except Exception as e:
         print(f"  Warning: Could not calculate OTHERAMT: {e}")
         df_loan = df_loan.with_columns([pl.lit(0.0).alias('OTHERAMT')])
-    
+
+    # OIFEEAMT
     try:
         df_loan = df_loan.with_columns([
             (pl.col('FEETOT2').fill_null(0) - pl.col('FEEAMTA').fill_null(0) + pl.col('FEEAMT5').fill_null(0)).alias('OIFEEAMT')
@@ -657,67 +638,67 @@ if df_loan.height > 0:
     except Exception as e:
         print(f"  Warning: Could not calculate OIFEEAMT: {e}")
         df_loan = df_loan.with_columns([pl.lit(0.0).alias('OIFEEAMT')])
-    
-    # ECSRRSRV - using map_elements with a function
+
+    # ECSRRSRV
     try:
         def calc_ecsrrsrv(val):
             if val is None or val <= 0:
                 return 0.0
             return float(val)
-        
+
         df_loan = df_loan.with_columns([
             pl.col('ECSRRSRV').map_elements(calc_ecsrrsrv, return_dtype=pl.Float64).alias('ECSRRSRV')
         ])
     except Exception as e:
         print(f"  Warning: Could not calculate ECSRRSRV: {e}")
         df_loan = df_loan.with_columns([pl.lit(0.0).alias('ECSRRSRV')])
-    
-    # ECSRIND - simple if/else using map_elements
+
+    # ECSRIND
     try:
         def calc_ecsrind(val):
             if val is not None and val > 0:
                 return 'Y'
             return 'N'
-        
+
         df_loan = df_loan.with_columns([
             pl.col('ECSRRSRV').map_elements(calc_ecsrind, return_dtype=pl.Utf8).alias('ECSRIND')
         ])
     except Exception as e:
         print(f"  Warning: Could not calculate ECSRIND: {e}")
         df_loan = df_loan.with_columns([pl.lit('N').alias('ECSRIND')])
-    
-    # BILPAID - using map_elements
+
+    # BILPAID
     try:
         def calc_bilpaid(orgbal, curbal, payamt):
             if payamt and payamt > 0:
                 return int((orgbal - curbal) / payamt)
             return 0
-        
+
         df_loan = df_loan.with_columns([
             pl.struct(['ORGBAL', 'CURBAL', 'PAYAMT'])
-            .map_elements(lambda x: calc_bilpaid(x['ORGBAL'] or 0, x['CURBAL'] or 0, x['PAYAMT'] or 0), 
+            .map_elements(lambda x: calc_bilpaid(x['ORGBAL'] or 0, x['CURBAL'] or 0, x['PAYAMT'] or 0),
                          return_dtype=pl.Int64)
             .alias('BILPAID')
         ])
     except Exception as e:
         print(f"  Warning: Could not calculate BILPAID: {e}")
         df_loan = df_loan.with_columns([pl.lit(0).alias('BILPAID')])
-    
-    # PAY75PCT - using map_elements
+
+    # PAY75PCT
     try:
         def calc_pay75pct(val):
             if val and val > 0:
                 return 'Y'
             return 'N'
-        
+
         df_loan = df_loan.with_columns([
             pl.col('NACOSPADT').map_elements(calc_pay75pct, return_dtype=pl.Utf8).alias('PAY75PCT')
         ])
     except Exception as e:
         print(f"  Warning: Could not calculate PAY75PCT: {e}")
         df_loan = df_loan.with_columns([pl.lit('N').alias('PAY75PCT')])
-    
-    # MTHPDUE using format_mthpass - FIXED: convert string to int
+
+    # MTHPDUE
     if 'DAYS' in df_loan.columns:
         try:
             df_loan = df_loan.with_columns([
@@ -728,12 +709,12 @@ if df_loan.height > 0:
             df_loan = df_loan.with_columns([pl.lit(0).alias('MTHPDUE')])
     else:
         df_loan = df_loan.with_columns([pl.lit(0).alias('MTHPDUE')])
-    
+
     # CRRGRADE
     try:
         def calc_crrgrade(score, contrtype):
             return (score or '') + (contrtype or '')
-        
+
         df_loan = df_loan.with_columns([
             pl.struct(['SCORE2', 'CONTRTYPE'])
             .map_elements(lambda x: calc_crrgrade(x['SCORE2'], x['CONTRTYPE']), return_dtype=pl.Utf8)
@@ -742,14 +723,14 @@ if df_loan.height > 0:
     except Exception as e:
         print(f"  Warning: Could not calculate CRRGRADE: {e}")
         df_loan = df_loan.with_columns([pl.lit('').alias('CRRGRADE')])
-    
+
     # MARGINFI
     try:
         def calc_marginfi(netproc, appvalue):
             if appvalue and appvalue > 0:
                 return round(netproc / appvalue, 2)
             return 0.0
-        
+
         df_loan = df_loan.with_columns([
             pl.struct(['NETPROC', 'APPVALUE'])
             .map_elements(lambda x: calc_marginfi(x['NETPROC'] or 0, x['APPVALUE'] or 0), return_dtype=pl.Float64)
@@ -758,8 +739,8 @@ if df_loan.height > 0:
     except Exception as e:
         print(f"  Warning: Could not calculate MARGINFI: {e}")
         df_loan = df_loan.with_columns([pl.lit(0.0).alias('MARGINFI')])
-    
-    # Add placeholder columns for MATDATE and LASTTRA1
+
+    # Placeholder columns
     if 'MATDATE' not in df_loan.columns:
         df_loan = df_loan.with_columns([pl.lit('').alias('MATDATE')])
     if 'LASTTRA1' not in df_loan.columns:
@@ -778,7 +759,7 @@ print(f"  Loan records: {df_loan.height}\n")
 # ============================================================================
 print("STEP 9: Reading customer names...")
 df_cname = read_sas7bdat_fast(
-    f'{CISNAME_DIR}loan.sas7bdat',
+    INPUT_FILES['cname'],
     columns=['ACCTNO', 'CUSTNAM1', 'OCCUPAT', 'BGC', 'SECCUST'],
     row_limit=TEST_LIMIT if TEST_MODE else None
 )
@@ -801,7 +782,7 @@ print(f"  Customer names: {df_cname.height}\n")
 print("STEP 10: Reading guarantor information...")
 guarantor_data = {}
 df_liab = read_sas7bdat_fast(
-    f'{LOAN_DIR}lnliab07226.sas7bdat',
+    INPUT_FILES['liab'],
     columns=['ACCTNO', 'NOTENO', 'LIABACCT', 'LIABNAME'],
     row_limit=TEST_LIMIT if TEST_MODE else None
 )
@@ -813,7 +794,7 @@ if df_liab is not None and df_cname.height > 0:
         'LIABACCT': pl.Float64
     })
     df_liab = df_liab.sort('LIABACCT')
-    
+
     df_liab = df_liab.join(
         df_cname.rename({'ACCTNO': 'LIABACCT', 'CUSTNAM1': 'GNAME'}),
         on='LIABACCT',
@@ -824,8 +805,7 @@ if df_liab is not None and df_cname.height > 0:
         .otherwise(pl.col('GNAME'))
         .alias('GNAME')
     ]).sort(['ACCTNO', 'NOTENO'])
-    
-    # Transpose guarantor names - limit to first 2 guarantors
+
     for (acctno, noteno), group in df_liab.group_by(['ACCTNO', 'NOTENO']):
         gnames = group['GNAME'].to_list()
         guarantor_data[(acctno, noteno)] = {
@@ -835,7 +815,6 @@ if df_liab is not None and df_cname.height > 0:
 
 print(f"  Guarantor entries: {len(guarantor_data)}\n")
 
-# Add guarantor names to loan data
 guarnam1_list = []
 guarnam2_list = []
 if df_loan.height > 0:
@@ -844,7 +823,7 @@ if df_loan.height > 0:
         gdata = guarantor_data.get(key, {'GUARNAM1': '', 'GUARNAM2': ''})
         guarnam1_list.append(gdata['GUARNAM1'])
         guarnam2_list.append(gdata['GUARNAM2'])
-    
+
     df_loan = df_loan.with_columns([
         pl.Series('GUARNAM1', guarnam1_list),
         pl.Series('GUARNAM2', guarnam2_list)
@@ -854,9 +833,8 @@ if df_loan.height > 0:
 # STEP 11: Get previous balance from SASLN
 # ============================================================================
 print("STEP 11: Reading previous balance...")
-sasln_file = f'{SASLN_DIR}loan{reptmon1}{nowks}.sas7bdat'
 df_sasln = read_sas7bdat_fast(
-    sasln_file,
+    INPUT_FILES['sasln'],
     columns=['ACCTNO', 'NOTENO', 'CURBAL'],
     row_limit=TEST_LIMIT if TEST_MODE else None
 )
@@ -881,14 +859,13 @@ print(f"  SASLN rows: {df_sasln.height}\n")
 # ============================================================================
 print("STEP 12: Final merge and filtering...")
 if df_sasln.height > 0 and df_loan.height > 0:
-    # Ensure consistent schema before joining
     df_sasln = standardize_schema(df_sasln, {'ACCTNO': pl.Float64, 'NOTENO': pl.Float64})
     df_loan = standardize_schema(df_loan, {'ACCTNO': pl.Float64, 'NOTENO': pl.Float64})
-    
+
     df_woff = df_sasln.join(df_loan, on=['ACCTNO', 'NOTENO'], how='full')
     if 'BRANCH' not in df_woff.columns:
         df_woff = df_woff.join(df_npl.select(['ACCTNO', 'BRANCH', 'MARKETVL']), on='ACCTNO', how='left')
-    
+
     df_woff = df_woff.with_columns([
         (pl.col('CURBAL').fill_null(0) - pl.col('PREVBAL').fill_null(0)).alias('PAYMENT'),
         (pl.col('TOTIIS').fill_null(0) + pl.col('SP').fill_null(0)).alias('TOTAL'),
@@ -911,14 +888,12 @@ print("\n  " + "="*50)
 print("  DEBUG - Checking filter conditions...")
 print("  " + "="*50)
 
-# Check BORSTAT distribution
 if 'BORSTAT' in df_woff.columns:
     print(f"\n  BORSTAT values in WOFF:")
     borstat_counts = df_woff.group_by('BORSTAT').agg(pl.len())
     for row in borstat_counts.iter_rows(named=True):
         print(f"    '{row['BORSTAT']}' : {row['len']} rows")
 
-# Check DAYS distribution
 if 'DAYS' in df_woff.columns:
     print(f"\n  DAYS statistics:")
     days_min = df_woff['DAYS'].min()
@@ -932,7 +907,6 @@ if 'DAYS' in df_woff.columns:
     print(f"    Non-null rows: {days_non_null}")
     print(f"    Rows with DAYS >= 334: {days_ge_334}")
 
-# Check LOANTYPE distribution for active accounts
 if 'BORSTAT' in df_woff.columns:
     active_df = df_woff.filter(pl.col('BORSTAT') == 'A')
     print(f"\n  Active accounts (BORSTAT='A'): {active_df.height}")
@@ -941,18 +915,15 @@ if 'BORSTAT' in df_woff.columns:
         print("  LOANTYPE distribution for active accounts:")
         for row in loantype_counts.iter_rows(named=True):
             print(f"    {row['LOANTYPE']} : {row['len']} rows")
-        
-        # Check which active accounts have PAIDIND != 'P'
+
         if 'PAIDIND' in active_df.columns:
             active_paid = active_df.filter(pl.col('PAIDIND') != 'P')
             print(f"  Active with PAIDIND != 'P': {active_paid.height}")
-        
-        # Check excluded loan types
+
         excluded_loans = [983, 993, 678, 679, 698, 699]
         active_excluded = active_df.filter(pl.col('LOANTYPE').is_in(excluded_loans))
         print(f"  Active with excluded LOANTYPE: {active_excluded.height}")
 
-# Check TOTAL
 if 'TOTAL' in df_woff.columns:
     print(f"\n  TOTAL statistics:")
     print(f"    Min: {df_woff['TOTAL'].min()}")
@@ -960,7 +931,6 @@ if 'TOTAL' in df_woff.columns:
     print(f"    Mean: {df_woff['TOTAL'].mean():.2f}")
     print(f"    Rows with TOTAL != 0: {df_woff.filter(pl.col('TOTAL') != 0).height}")
 
-# Check each condition individually
 print("\n  Individual filter conditions:")
 if 'BORSTAT' in df_woff.columns and 'DAYS' in df_woff.columns:
     condition1 = df_woff.filter((pl.col('BORSTAT').is_in(['F', 'I'])) & (pl.col('DAYS') >= 334))
@@ -973,8 +943,8 @@ if 'DAYS' in df_woff.columns:
 if 'BORSTAT' in df_woff.columns and 'LOANTYPE' in df_woff.columns and 'PAIDIND' in df_woff.columns:
     excluded_loans = [983, 993, 678, 679, 698, 699]
     condition3 = df_woff.filter(
-        (pl.col('BORSTAT') == 'A') & 
-        ~pl.col('LOANTYPE').is_in(excluded_loans) & 
+        (pl.col('BORSTAT') == 'A') &
+        ~pl.col('LOANTYPE').is_in(excluded_loans) &
         (pl.col('PAIDIND') != 'P')
     )
     print(f"    3. (BORSTAT='A' & LOANTYPE not in excluded & PAIDIND != 'P'): {condition3.height}")
@@ -990,7 +960,6 @@ print("\n  " + "="*50)
 print("  DEBUG - Detailed analysis of candidate rows...")
 print("  " + "="*50)
 
-# Show the row with DAYS >= 334
 if 'DAYS' in df_woff.columns:
     days_ge_334 = df_woff.filter(pl.col('DAYS') >= 334)
     print(f"\n  Rows with DAYS >= 334: {days_ge_334.height}")
@@ -1002,7 +971,6 @@ if 'DAYS' in df_woff.columns:
     else:
         print("  No rows with DAYS >= 334 found!")
 
-# Show active accounts details
 if 'BORSTAT' in df_woff.columns:
     active = df_woff.filter(pl.col('BORSTAT') == 'A')
     if active.height > 0:
@@ -1011,12 +979,10 @@ if 'BORSTAT' in df_woff.columns:
         available_cols = [col for col in display_cols if col in active.columns]
         print(active.select(available_cols))
 
-# Check if there are any accounts that might qualify if we relax conditions
 print(f"\n  Accounts with DAYS >= 334 and TOTAL != 0: {df_woff.filter((pl.col('DAYS') >= 334) & (pl.col('TOTAL') != 0)).height}")
 print(f"  Accounts with BORSTAT in ['F','I'] and TOTAL != 0: {df_woff.filter((pl.col('BORSTAT').is_in(['F','I'])) & (pl.col('TOTAL') != 0)).height}")
 print(f"  Active accounts with TOTAL != 0: {df_woff.filter((pl.col('BORSTAT') == 'A') & (pl.col('TOTAL') != 0)).height}")
 
-# Check if there are any accounts with BORSTAT in ['F', 'I'] at all
 if 'BORSTAT' in df_woff.columns:
     f_i_count = df_woff.filter(pl.col('BORSTAT').is_in(['F', 'I'])).height
     print(f"  Accounts with BORSTAT in ['F','I'] (any DAYS): {f_i_count}")
@@ -1027,21 +993,18 @@ print("  " + "="*50 + "\n")
 # Apply write-off criteria
 # ============================================================================
 if df_woff.height > 0:
-    # Ensure required columns exist
     for col in ['BORSTAT', 'DAYS', 'LOANTYPE', 'PAIDIND', 'TOTAL']:
         if col not in df_woff.columns:
             df_woff = df_woff.with_columns(pl.lit(None).alias(col))
-    
-    # Convert types
+
     for col in ['BORSTAT', 'PAIDIND']:
         if col in df_woff.columns:
             df_woff = df_woff.with_columns(pl.col(col).cast(pl.Utf8))
-    
+
     for col in ['DAYS', 'LOANTYPE', 'TOTAL']:
         if col in df_woff.columns:
             df_woff = df_woff.with_columns(pl.col(col).cast(pl.Float64))
-    
-    # Build filter condition safely
+
     borstat_condition = (pl.col('BORSTAT').is_in(['F', 'I'])) & (pl.col('DAYS') >= 334)
     days_condition = pl.col('DAYS') >= 334
     active_condition = (
@@ -1049,16 +1012,14 @@ if df_woff.height > 0:
         ~pl.col('LOANTYPE').is_in([983, 993, 678, 679, 698, 699]) &
         (pl.col('PAIDIND') != 'P')
     )
-    
-    # Apply the filter with TOTAL != 0 (original SAS logic)
+
     df_woff = df_woff.filter(
         (borstat_condition | days_condition | active_condition) &
         (pl.col('TOTAL') != 0)
     ).with_columns([
         pl.lit('Y').alias('CONFIRM')
     ]).sort('ACCTNO')
-    
-    # Add customer names
+
     if 'NAME' not in df_woff.columns and df_cname.height > 0:
         df_woff = df_woff.join(
             df_cname.rename({'CUSTNAM1': 'NAME'}),
@@ -1073,27 +1034,24 @@ print(f"  WOFF after filter: {df_woff.height}\n")
 # ============================================================================
 print("STEP 13: Saving output files...")
 
-# Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 print(f"  Output directory: {OUTPUT_DIR}")
 
 if df_woff.height > 0:
-    # Save to NPL.LIST
-    write_sas7bdat(df_woff, f'{NPL_DIR}LIST.sas7bdat')
-    
+    write_sas7bdat(df_woff, os.path.join(NPL_DIR, 'LIST.sas7bdat'))
+
     print(f"\n{'='*60}")
     print(f"SUMMARY")
     print(f"{'='*60}")
     print(f"Accounts identified for write-off: {len(df_woff)}")
     print(f"Total exposure: RM {df_woff['TOTAL'].sum():,.2f}")
-    
-    # Write fixed-width output file
+
     print(f"\nWriting output files...")
     with open(OUTPUT_FILE1, 'w') as f:
         for idx, row in enumerate(df_woff.iter_rows(named=True)):
             if idx % 100 == 0 and idx > 0:
                 print(f"  Writing record {idx}/{len(df_woff)}", end="\r", flush=True)
-            
+
             branch = (row.get('BRANCH', '') or '')[:7]
             name = (row.get('NAME', '') or '')[:40]
             acctno = row.get('ACCTNO', 0) or 0
@@ -1126,7 +1084,7 @@ if df_woff.height > 0:
             guarend = (row.get('GUAREND', '') or '')[:20]
             guarnam1 = (row.get('GUARNAM1', '') or '')[:40]
             guarnam2 = (row.get('GUARNAM2', '') or '')[:40]
-            
+
             issxdte = row.get('ISSXDTE', '')
             if issxdte:
                 try:
@@ -1135,7 +1093,7 @@ if df_woff.height > 0:
                     issxdte_str = ' ' * 10
             else:
                 issxdte_str = ' ' * 10
-            
+
             netproc = row.get('NETPROC', 0) or 0
             colldesc = (row.get('COLLDESC', '') or '')[:70]
             collyear = row.get('COLLYEAR', 0) or 0
@@ -1144,7 +1102,7 @@ if df_woff.height > 0:
             marginfi = row.get('MARGINFI', 0) or 0
             noteterm = row.get('NOTETERM', 0) or 0
             payamt = row.get('PAYAMT', 0) or 0
-            
+
             dobmni = row.get('DOBMNI', '')
             if dobmni:
                 try:
@@ -1153,7 +1111,7 @@ if df_woff.height > 0:
                     dobmni_str = ' ' * 10
             else:
                 dobmni_str = ' ' * 10
-            
+
             ecsrind = (row.get('ECSRIND', '') or '')[:1]
             delqcd = (row.get('DELQCD', '') or '')[:2]
             occupat = (row.get('OCCUPAT', '') or '')[:3]
@@ -1163,7 +1121,7 @@ if df_woff.height > 0:
             cp = (row.get('CP', '') or '')[:1]
             modeldes = (row.get('MODELDES', '') or '')[:6]
             akpk_status = (row.get('AKPK_STATUS', '') or '')[:9]
-            
+
             f.write(f"{branch:<7}{name:<40}{acctno:>10.0f}{noteno:>5.0f}{borstat:1}")
             f.write(f"{iis:>16.2f}{oi:>16.2f}{totiis:>16.2f}{sp:>16.2f}")
             f.write(f"{curbal:>16.2f}{prevbal:>16.2f}{payment:>16.2f}")
@@ -1177,11 +1135,10 @@ if df_woff.height > 0:
             f.write(f"{payamt:>16.2f}{dobmni_str:10}{ecsrind:1}{delqcd:2}")
             f.write(f"{occupat:3}{bgc:2}{pay75pct:1}{nacodate:10}{cp:1}")
             f.write(f"{modeldes:6}{akpk_status:9}\n")
-    
+
     print(f"\n  {OUTPUT_FILE1} written with {df_woff.height} rows")
     print(f"  File size: {os.path.getsize(OUTPUT_FILE1):,} bytes")
-    
-    # Create final formatted output
+
     print("\nCreating final formatted output...")
     text_records = []
     with open(OUTPUT_FILE1, 'r') as f:
@@ -1204,7 +1161,7 @@ if df_woff.height > 0:
                 record['TOTAL'] = record['TOTIIS'] + record['SP']
                 record['_LINE'] = line
                 text_records.append(record)
-    
+
     if text_records:
         df_text = pl.DataFrame(text_records)
         with open(OUTPUT_FILE, 'w') as f:
@@ -1220,7 +1177,7 @@ if df_woff.height > 0:
                 bgcdes = get_bgc_desc(bgc)
                 biztype, cap, latechg = 'I', 0.0, row['OI']
                 sp_calc, total_calc = row['SP'], row['TOTAL']
-                
+
                 if len(line) >= 116:
                     f.write(line[:116])
                     f.write(f"{sp_calc:>16.2f}")
@@ -1238,21 +1195,20 @@ if df_woff.height > 0:
                         f.write(f"{bgcdes:20}")
                         f.write(line[766:] if len(line) > 766 else '')
                         f.write('\n')
-        
-        write_sas7bdat(df_text, f'{NPL_DIR}WOFFTXT.sas7bdat')
+
+        write_sas7bdat(df_text, os.path.join(NPL_DIR, 'WOFFTXT.sas7bdat'))
         print(f"\n  {OUTPUT_FILE} written with {len(text_records)} rows")
         print(f"  File size: {os.path.getsize(OUTPUT_FILE):,} bytes")
-        print(f"  {NPL_DIR}WOFFTXT.sas7bdat written")
+        print(f"  {os.path.join(NPL_DIR, 'WOFFTXT.sas7bdat')} written")
 
 else:
     print("\nNo accounts identified for write-off")
     print("Creating empty output files...")
-    
-    # Create empty files even if no accounts found
+
     with open(OUTPUT_FILE1, 'w') as f:
         f.write("")
     print(f"  Created empty file: {OUTPUT_FILE1}")
-    
+
     with open(OUTPUT_FILE, 'w') as f:
         f.write("")
     print(f"  Created empty file: {OUTPUT_FILE}")
@@ -1268,7 +1224,7 @@ print(f"\nOutput files generated:")
 print(f"  {OUTPUT_FILE} (Final formatted output)")
 print(f"  {OUTPUT_FILE1} (Intermediate output)")
 if df_woff.height > 0:
-    print(f"  {NPL_DIR}LIST.sas7bdat (Data file)")
-    print(f"  {NPL_DIR}WOFFTXT.sas7bdat (Final dataset)")
+    print(f"  {os.path.join(NPL_DIR, 'LIST.sas7bdat')} (Data file)")
+    print(f"  {os.path.join(NPL_DIR, 'WOFFTXT.sas7bdat')} (Final dataset)")
 print(f"\nTo view output files:")
 print(f"  ls -la {OUTPUT_DIR}")
