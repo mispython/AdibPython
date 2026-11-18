@@ -39,23 +39,20 @@ HPD = HP_ACTIVE
 EXCLUDED_LOANTYPES = [983, 993, 678, 679, 698, 699]
 
 # ============================================================================
-# PATH CONFIG — each input is its own Path (no BASE_INPUT)
+# PATH CONFIG — define each input/output path explicitly with Path()
 # ============================================================================
-ROOT = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS')
+PATH_LN_NOTE = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/enrh_ln_note.sas7bdat')  # LOAN.REPTDATE / LNNOTE / LIAB
+PATH_IIS     = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/iis.sas7bdat')            # NPL.IIS
+PATH_SP2     = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/sp2.sas7bdat')            # NPL.SP2
+PATH_CNAME   = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/loan.sas7bdat')           # CISNAME.LOAN
+PATH_LIAB    = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/lnliab07226.sas7bdat')    # LOAN.LIAB
+PATH_BKCTRL  = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/cisfmt.sas7bdat')         # BKCTRL.CISFMT (optional)
 
-# Each input points to its own source (adjust per actual upstream)
-PATH_LN_NOTE  = ROOT / 'input/prod/EIIFTXT1/enrh_ln_note.sas7bdat'   # LOAN.REPTDATE / LNNOTE / LIAB
-PATH_IIS      = ROOT / 'input/prod/EIIFTXT1/iis.sas7bdat'            # NPL.IIS
-PATH_SP2      = ROOT / 'input/prod/EIIFTXT1/sp2.sas7bdat'            # NPL.SP2
-PATH_CNAME    = ROOT / 'input/prod/EIIFTXT1/loan.sas7bdat'           # CISNAME.LOAN
-PATH_LIAB     = ROOT / 'input/prod/EIIFTXT1/lnliab07226.sas7bdat'    # LOAN.LIAB
-PATH_BKCTRL   = ROOT / 'input/prod/EIIFTXT1/cisfmt.sas7bdat'         # BKCTRL.CISFMT (optional)
-
-OUTPUT_DIR    = ROOT / 'output/EIIFTXT1'
-OUTPUT_FILE   = OUTPUT_DIR / 'wofftext.txt'
-OUTPUT_FILE1  = OUTPUT_DIR / 'wofftex1.txt'
-OUT_LIST      = ROOT / 'output/EIIFTXT1/LIST.sas7bdat'               # NPL.LIST
-OUT_WOFFTXT   = ROOT / 'output/EIIFTXT1/WOFFTXT.sas7bdat'            # NPL.WOFFTXT
+OUTPUT_DIR   = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1')
+OUTPUT_FILE  = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftext.txt')
+OUTPUT_FILE1 = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftex1.txt')
+OUT_LIST     = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/LIST.sas7bdat')    # NPL.LIST
+OUT_WOFFTXT  = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/WOFFTXT.sas7bdat') # NPL.WOFFTXT
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -81,8 +78,8 @@ reptyear = f'{reptdate.year % 100:02d}'
 rdate    = reptdate.strftime('%d/%m/%y')
 
 # Dynamic paths (month/week dependent)
-PATH_CCRIS = ROOT / f'input/prod/EIIFTXT1/icredmsubac{reptmon}{reptyear}.sas7bdat'
-PATH_SASLN = ROOT / f'input/prod/EIIFTXT1/loan{reptmon1}{nowks}.sas7bdat'
+PATH_CCRIS = Path(f'/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/icredmsubac{reptmon}{reptyear}.sas7bdat')
+PATH_SASLN = Path(f'/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/loan{reptmon1}{nowks}.sas7bdat')
 
 print(f"Week: {nowk}, Previous Month: {reptmon1}")
 if TEST_MODE:
