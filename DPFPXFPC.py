@@ -28,21 +28,28 @@ RDATE    = REPTDATE.strftime("%d%m%Y")
 print(f"Report Date: {REPTDATE.strftime('%d-%b-%Y')}")
 
 # ============================================================
-# 2. INPUT SAS DATASET PATHS
+# 2. INPUT SAS DATASET PATHS (SEPARATE PBB AND PIBB)
 # ============================================================
 
-INPUT_BASE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR" #/host_pq/mis/input/mfrs
+# PBB input directory
+PBB_INPUT_BASE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pbb"
 
-PBB_ALM_CR_PATH   = f"{INPUT_BASE}/pbb_alm_cr.sas7bdat"
-PBB_MAST_BR_PATH  = f"{INPUT_BASE}/pbb_mast_br.sas7bdat"
-PIBB_ALM_CR_PATH  = f"{INPUT_BASE}/pibb_alm_cr.sas7bdat"
-PIBB_MAST_BR_PATH = f"{INPUT_BASE}/pibb_mast_br.sas7bdat"
+# PIBB input directory
+PIBB_INPUT_BASE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIBNMMFR/pibb"
+
+# PBB input files
+PBB_ALM_CR_PATH   = f"{PBB_INPUT_BASE}/pbb_alm_cr.sas7bdat"
+PBB_MAST_BR_PATH  = f"{PBB_INPUT_BASE}/pbb_mast_br.sas7bdat"
+
+# PIBB input files
+PIBB_ALM_CR_PATH  = f"{PIBB_INPUT_BASE}/pibb_alm_cr.sas7bdat"
+PIBB_MAST_BR_PATH = f"{PIBB_INPUT_BASE}/pibb_mast_br.sas7bdat"
 
 # ============================================================
 # 3. OUTPUT PATHS
 # ============================================================
 
-OUTPUT_BASE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBNMMFR" #/host_pq/mis/output/report/mfrs
+OUTPUT_BASE = "/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIBNMMFR"
 
 # Create output directory if it doesn't exist
 os.makedirs(OUTPUT_BASE, exist_ok=True)
@@ -66,6 +73,9 @@ def load_sas_dataset(path, dataset_name):
         raise
 
 print("\nLoading SAS datasets...")
+print(f"  PBB input path  : {PBB_INPUT_BASE}")
+print(f"  PIBB input path : {PIBB_INPUT_BASE}")
+
 pbb_alm_cr   = load_sas_dataset(PBB_ALM_CR_PATH, "PBB_ALM_CR")
 pbb_mast_br  = load_sas_dataset(PBB_MAST_BR_PATH, "PBB_MAST_BR")
 pibb_alm_cr  = load_sas_dataset(PIBB_ALM_CR_PATH, "PIBB_ALM_CR")
@@ -159,7 +169,6 @@ def write_sas_with_saspy(df, output_path):
         df_sas['REPTDATE'] = (REPTDATE - date(1960, 1, 1)).days
         
         # Define SAS library for output
-        # Use the actual output directory as a SAS library
         sas.submit(f'''
             libname outlib "{OUTPUT_BASE}";
         ''')
@@ -169,7 +178,7 @@ def write_sas_with_saspy(df, output_path):
         sas.dataframe2sasdata(
             df_sas,
             table='MFRS',
-            libref='outlib'  # Write directly to the output library
+            libref='outlib'
         )
         
         # Add formats and labels
@@ -200,12 +209,10 @@ def write_sas_with_saspy(df, output_path):
             return True
         else:
             print(f"  ✗ SAS dataset not found at: {output_path}")
-            # Check if it was created with a different name
             print("  Checking for alternative filenames...")
             for file in os.listdir(OUTPUT_BASE):
                 if file.endswith('.sas7bdat'):
                     print(f"    Found: {file}")
-                    # Rename if needed
                     if file != os.path.basename(output_path):
                         alt_path = os.path.join(OUTPUT_BASE, file)
                         print(f"    Renaming {file} to MFRS.sas7bdat...")
@@ -214,7 +221,6 @@ def write_sas_with_saspy(df, output_path):
                         sas.endsas()
                         return True
             
-            # If we get here, check SAS log for errors
             print("  Checking SAS log for errors...")
             log = sas.lastLOG()
             if log:
@@ -326,6 +332,10 @@ print("="*70)
 print(f"Report Date    : {REPTDATE.strftime('%d-%b-%Y')}")
 print(f"Total records  : {len(crl):,}")
 print(f"Columns        : {', '.join(crl.columns)}")
+print("-"*70)
+print("Input paths:")
+print(f"  PBB  : {PBB_INPUT_BASE}")
+print(f"  PIBB : {PIBB_INPUT_BASE}")
 print("-"*70)
 print("Output files:")
 
