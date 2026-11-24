@@ -1,168 +1,131 @@
-"""
-Diagnose ENTITY_CD / BORSTAT in enrh_ln_note.sas7bdat
-Run this BEFORE the main EIIFTXT1 script.
-"""
-import polars as pl
-import pyreadstat
-from pathlib import Path
-import time
+File: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote/enrh_ln_note.sas7bdat
+Exists: True
+Size: 10,059,644,928 bytes
 
-PATH_LN_NOTE = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/enrh_ln_note.sas7bdat')
+============================================================
+1. METADATA
+============================================================
+Total rows (from metadata): 8,149,154
+Total columns: 499
+  ENTITY_CD: type=NULL, label=None
+  BORSTAT: type=NULL, label=None
+  LOANTYPE: type=NULL, label=None
+  ACCTNO: type=NULL, label=None
+  NOTENO: type=NULL, label=None
 
-print(f"File: {PATH_LN_NOTE}")
-print(f"Exists: {PATH_LN_NOTE.exists()}")
-print(f"Size: {PATH_LN_NOTE.stat().st_size:,} bytes\n")
+============================================================
+2. ENTITY_CD DISTRIBUTION (full file)
+============================================================
+Read 8,149,154 rows in 188.6s
 
-# ---------------------------------------------------------------------------
-# 1. Metadata: column names, types, row count (no data loaded)
-# ---------------------------------------------------------------------------
-print("=" * 60)
-print("1. METADATA")
-print("=" * 60)
+Raw ENTITY_CD value counts (top 30):
+                    '' :    6,327,413
+                'PIBB' :    1,821,741
 
-_, meta = pyreadstat.read_sas7bdat(str(PATH_LN_NOTE), metadataonly=True)
-print(f"Total rows (from metadata): {meta.number_rows:,}")
-print(f"Total columns: {meta.number_columns}")
+Stripped ENTITY_CLEAN value counts (top 30):
+                    '' :    6,327,413
+                'PIBB' :    1,821,741
 
-for col in ('ENTITY_CD', 'BORSTAT', 'LOANTYPE', 'ACCTNO', 'NOTENO'):
-    if col in meta.column_names_to_labels:
-        idx = meta.column_names_to_labels  # dict col->label
-    if col in meta.column_names:
-        i = meta.column_names.index(col)
-        print(f"  {col}: type={meta.original_variable_types.get(col)}, "
-              f"label={meta.column_names_to_labels.get(col, '')!r}")
+PIBB matches:
+  exact 'PIBB'          : 1,821,741
+  stripped == 'PIBB'    : 1,821,741
+  contains 'PIBB'       : 1,821,741
 
-# ---------------------------------------------------------------------------
-# 2. ENTITY_CD distribution — read ONLY that column (fast)
-# ---------------------------------------------------------------------------
-print("\n" + "=" * 60)
-print("2. ENTITY_CD DISTRIBUTION (full file)")
-print("=" * 60)
+============================================================
+3. BORSTAT DISTRIBUTION
+============================================================
+Read 8,149,154 rows in 203.5s
 
-t0 = time.time()
-df_ent, _ = pyreadstat.read_sas7bdat(str(PATH_LN_NOTE), usecols=['ENTITY_CD'])
-df_ent = pl.from_pandas(df_ent)
-print(f"Read {df_ent.height:,} rows in {time.time()-t0:.1f}s")
+BORSTAT across WHOLE file (stripped):
+          '' :    7,988,790
+         'F' :       81,106
+         'W' :       19,768
+         'C' :       17,052
+         'A' :       10,917
+         'R' :       10,653
+         'E' :        4,624
+         'B' :        4,149
+         'M' :        3,720
+         'X' :        2,407
+         'Z' :        1,980
+         'S' :        1,752
+         'G' :          474
+         'Y' :          364
+         'P' :          341
+         'N' :          258
+         'D' :          221
+         'K' :          214
+         'I' :          170
+         'T' :          158
+         'Q' :           30
+         '0' :            6
 
-df_ent = df_ent.with_columns(
-    pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars().alias('ENTITY_CLEAN')
-)
+Rows with ENTITY_CD='PIBB': 1,821,741
+  BORSTAT distribution within PIBB:
+            '' :    1,779,787
+           'F' :       23,280
+           'W' :        7,070
+           'R' :        2,811
+           'C' :        2,735
+           'A' :        2,182
+           'B' :        1,486
+           'M' :        1,241
+           'P' :          251
+           'X' :          242
+           'E' :          238
+           'G' :          141
+           'N' :           76
+           'K' :           52
+           'T' :           42
+           'D' :           35
+           'I' :           29
+           'S' :           20
+           'Z' :           17
+           'Y' :            5
+           '0' :            1
 
-print("\nRaw ENTITY_CD value counts (top 30):")
-for r in (df_ent.group_by('ENTITY_CD').agg(pl.len())
-          .sort('len', descending=True).head(30).iter_rows(named=True)):
-    print(f"  {repr(r['ENTITY_CD']):>20} : {r['len']:>12,}")
+  LOANTYPE distribution within PIBB (top 20):
+    128.0 :    1,183,890
+    135.0 :      241,803
+    152.0 :      120,635
+    983.0 :       41,862
+    131.0 :       26,104
+    142.0 :       25,788
+    154.0 :       22,674
+    175.0 :       20,731
+    151.0 :       13,679
+    113.0 :       13,113
+    112.0 :       12,670
+    136.0 :        9,243
+    652.0 :        7,886
+    422.0 :        5,891
+    409.0 :        5,654
+    413.0 :        4,962
+    464.0 :        4,578
+    195.0 :        4,433
+    176.0 :        4,381
+    194.0 :        4,180
 
-print("\nStripped ENTITY_CLEAN value counts (top 30):")
-for r in (df_ent.group_by('ENTITY_CLEAN').agg(pl.len())
-          .sort('len', descending=True).head(30).iter_rows(named=True)):
-    print(f"  {repr(r['ENTITY_CLEAN']):>20} : {r['len']:>12,}")
+  PIBB & BORSTAT='A': 2,182
+  PIBB & BORSTAT='A' & LOANTYPE not excluded: 297
 
-# Explicit PIBB check
-pibb_exact   = df_ent.filter(pl.col('ENTITY_CD') == 'PIBB').height
-pibb_strip   = df_ent.filter(pl.col('ENTITY_CLEAN') == 'PIBB').height
-pibb_contains = df_ent.filter(
-    pl.col('ENTITY_CD').cast(pl.Utf8).str.contains('PIBB', literal=True)
-).height
-print(f"\nPIBB matches:")
-print(f"  exact 'PIBB'          : {pibb_exact:,}")
-print(f"  stripped == 'PIBB'    : {pibb_strip:,}")
-print(f"  contains 'PIBB'       : {pibb_contains:,}")
+============================================================
+4. FIRST 500K ROWS vs FULL FILE
+============================================================
+PIBB in first 500k rows : 27
+PIBB in whole file      : 1,821,741
+Test-mode captures      : 0.001% of all PIBB rows
 
-# ---------------------------------------------------------------------------
-# 3. BORSTAT distribution — full file and within PIBB
-# ---------------------------------------------------------------------------
-print("\n" + "=" * 60)
-print("3. BORSTAT DISTRIBUTION")
-print("=" * 60)
+ENTITY_CD in first 500k (top 10):
+                    '' :      499,973
+                'PIBB' :           27
 
-t0 = time.time()
-df_bs, _ = pyreadstat.read_sas7bdat(str(PATH_LN_NOTE),
-                                    usecols=['ENTITY_CD', 'BORSTAT', 'LOANTYPE'])
-df_bs = pl.from_pandas(df_bs)
-print(f"Read {df_bs.height:,} rows in {time.time()-t0:.1f}s")
-
-df_bs = df_bs.with_columns([
-    pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars().alias('ENTITY_CLEAN'),
-    pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars().alias('BORSTAT_CLEAN'),
-])
-
-print("\nBORSTAT across WHOLE file (stripped):")
-for r in (df_bs.group_by('BORSTAT_CLEAN').agg(pl.len())
-          .sort('len', descending=True).iter_rows(named=True)):
-    print(f"  {repr(r['BORSTAT_CLEAN']):>10} : {r['len']:>12,}")
-
-df_pibb = df_bs.filter(pl.col('ENTITY_CLEAN') == 'PIBB')
-print(f"\nRows with ENTITY_CD='PIBB': {df_pibb.height:,}")
-print("  BORSTAT distribution within PIBB:")
-for r in (df_pibb.group_by('BORSTAT_CLEAN').agg(pl.len())
-          .sort('len', descending=True).iter_rows(named=True)):
-    print(f"    {repr(r['BORSTAT_CLEAN']):>10} : {r['len']:>12,}")
-
-print("\n  LOANTYPE distribution within PIBB (top 20):")
-for r in (df_pibb.group_by('LOANTYPE').agg(pl.len())
-          .sort('len', descending=True).head(20).iter_rows(named=True)):
-    print(f"    {r['LOANTYPE']} : {r['len']:>12,}")
-
-# PIBB + BORSTAT='A'
-pibb_a = df_pibb.filter(pl.col('BORSTAT_CLEAN') == 'A').height
-print(f"\n  PIBB & BORSTAT='A': {pibb_a:,}")
-
-# PIBB + BORSTAT='A' + LOANTYPE not in excluded
-excluded = [983, 993, 678, 679, 698, 699]
-pibb_a_valid = df_pibb.filter(
-    (pl.col('BORSTAT_CLEAN') == 'A') &
-    (~pl.col('LOANTYPE').is_in(excluded))
-).height
-print(f"  PIBB & BORSTAT='A' & LOANTYPE not excluded: {pibb_a_valid:,}")
-
-# ---------------------------------------------------------------------------
-# 4. Is the first 500k rows representative? (TEST_MODE sanity check)
-# ---------------------------------------------------------------------------
-print("\n" + "=" * 60)
-print("4. FIRST 500K ROWS vs FULL FILE")
-print("=" * 60)
-
-df_head, _ = pyreadstat.read_sas7bdat(
-    str(PATH_LN_NOTE), usecols=['ENTITY_CD', 'BORSTAT'], row_limit=500_000)
-df_head = pl.from_pandas(df_head).with_columns([
-    pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars().alias('ENTITY_CLEAN'),
-    pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars().alias('BORSTAT_CLEAN'),
-])
-
-head_pibb  = df_head.filter(pl.col('ENTITY_CLEAN') == 'PIBB').height
-total_pibb = df_ent.filter(pl.col('ENTITY_CLEAN') == 'PIBB').height
-print(f"PIBB in first 500k rows : {head_pibb:,}")
-print(f"PIBB in whole file      : {total_pibb:,}")
-if total_pibb > 0:
-    pct = 100.0 * head_pibb / total_pibb
-    print(f"Test-mode captures      : {pct:.3f}% of all PIBB rows")
-
-print("\nENTITY_CD in first 500k (top 10):")
-for r in (df_head.group_by('ENTITY_CLEAN').agg(pl.len())
-          .sort('len', descending=True).head(10).iter_rows(named=True)):
-    print(f"  {repr(r['ENTITY_CLEAN']):>20} : {r['len']:>12,}")
-
-# ---------------------------------------------------------------------------
-# 5. Are PIBB rows physically clustered at the end of the file?
-# ---------------------------------------------------------------------------
-print("\n" + "=" * 60)
-print("5. PHYSICAL POSITION OF PIBB ROWS")
-print("=" * 60)
-
-# Read ENTITY_CD again with an index to find where PIBB sits physically
-df_idx, _ = pyreadstat.read_sas7bdat(str(PATH_LN_NOTE), usecols=['ENTITY_CD'])
-df_idx = pl.from_pandas(df_idx)
-df_idx = df_idx.with_row_index('_row').with_columns(
-    pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars().alias('ENTITY_CLEAN'))
-
-pibb_rows = df_idx.filter(pl.col('ENTITY_CLEAN') == 'PIBB')['_row']
-if pibb_rows.len() > 0:
-    print(f"PIBB row positions (physical):")
-    print(f"  min : {pibb_rows.min():,}")
-    print(f"  max : {pibb_rows.max():,}")
-    print(f"  mean: {pibb_rows.mean():,.0f}")
-    print(f"  total file rows: {df_idx.height:,}")
-    print(f"  PIBB rows in first 500k: {pibb_rows.filter(pl.Series(pibb_rows) < 500_000).len() if pibb_rows.len() else 0:,}")
-else:
-    print("No PIBB rows found — check the ENTITY_CD constant.")
+============================================================
+5. PHYSICAL POSITION OF PIBB ROWS
+============================================================
+PIBB row positions (physical):
+  min : 814
+  max : 8,149,153
+  mean: 5,899,877
+  total file rows: 8,149,154
+  PIBB rows in first 500k: 27
