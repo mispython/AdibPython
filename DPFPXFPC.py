@@ -3,17 +3,13 @@
 EIIFTXT4 - ESMR 2013-705 (SEND FILE TO LNS) - 2ND EXTRACTION CAP
 Merge WOFFTXT with ICAP data, write fixed-width WOFFTEXT + PROC PRINT listing.
 
-Differences from EIIFTXT1/2/3:
-  - No SAS7BDAT output (text only)
-  - Small inputs (WOFFTXT, ICAP, REPTDATE) - no RSS guard
-  - ICAP merge: DROP CAP from WOFFTXT, then IF BORSTAT='A' THEN CAP=TOTAL
-  - PROC PRINT with SUM row
+Text-only output. REPTDATE from system clock - 1 day.
 """
 
 import os
 import sys
 import time
-from datetime import date
+from datetime import datetime, timedelta, date
 from pathlib import Path
 
 import polars as pl
@@ -25,7 +21,6 @@ import pyreadstat
 EXPECTED_LEN = 797           # @789 AKPK_STATUS $9. -> positions 789..797
 
 # --- Input paths (each from its own source, no shared ROOT) -----------------
-PATH_REPTDATE = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT4/REPTDATE.sas7bdat')
 PATH_WOFFTXT  = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT4/WOFFTXT.sas7bdat')
 
 # --- Output paths ----------------------------------------------------------
@@ -36,19 +31,9 @@ REPORT_PATH   = OUTPUT_DIR / 'EIIFTXT4_report.txt'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# Report date & week logic (read REPTDATE from table)
+# Report date & week logic (system clock - 1 day)
 # ============================================================================
-def read_reptdate(path):
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-    df, _ = pyreadstat.read_sas7bdat(str(path), usecols=['REPTDATE'])
-    v = df['REPTDATE'].iloc[0]
-    if isinstance(v, (int, float)):
-        v = date.fromordinal(int(v))
-    return v
-
-reptdate = read_reptdate(PATH_REPTDATE)
+reptdate = datetime.now().date() - timedelta(days=1)
 
 day = reptdate.day
 if   day == 8:  wk, wk1 = '1', '4'
@@ -100,14 +85,6 @@ def standardize_schema(df, schema):
     exprs = [pl.col(c).cast(dt) for c, dt in schema.items() if c in df.columns]
     return df.with_columns(exprs) if exprs else df
 
-def _safe_float(s, default=0.0):
-    import re
-    try:
-        return float(s.strip()) if s and s.strip() else default
-    except (ValueError, TypeError):
-        m = re.match(r'^\s*([+-]?\d+(?:\.\d+)?)', s or '')
-        return float(m.group(1)) if m else default
-
 # ============================================================================
 # STEP 1: Load WOFFTXT (sorted by ACCTNO NOTENO)
 # ============================================================================
@@ -117,7 +94,6 @@ if df_wofftxt is None or df_wofftxt.height == 0:
     print("WARNING: WOFFTXT empty or missing. Exiting.")
     sys.exit(0)
 
-# SAS: PROC SORT DATA=NPL.WOFFTXT OUT=WOFFTXT; BY ACCTNO NOTENO
 if {'ACCTNO','NOTENO'} <= set(df_wofftxt.columns):
     df_wofftxt = df_wofftxt.sort(['ACCTNO','NOTENO'])
 df_wofftxt = standardize_schema(df_wofftxt, {
@@ -160,8 +136,6 @@ if 'CAP' in df_wofftxt.columns:
 
 df_text = df_wofftxt.join(df_icap, on=['ACCTNO','NOTENO'], how='left')
 
-# SAS: IF BORSTAT='A' THEN CAP = TOTAL
-# (otherwise CAP comes from ICAP, may be null -> rendered as spaces)
 df_text = df_text.with_columns(
     pl.when(pl.col('BORSTAT') == 'A')
       .then(pl.col('TOTAL'))
@@ -205,7 +179,6 @@ def _fd(v):
     if isinstance(v, str):
         return v[:10].ljust(10)
     try:
-        # ordinal → date
         d = date.fromordinal(int(v))
         return d.strftime('%m/%d/%Y')
     except Exception:
@@ -287,7 +260,7 @@ def build_woff_record(r):
     return ''.join(buf)
 
 # ============================================================================
-# STEP 5: Write WOFFTEXT (delete stale first — SAS DELETE step)
+# STEP 5: Write WOFFTEXT (delete stale first)
 # ============================================================================
 print("STEP 5: Writing WOFFTEXT...")
 if WOFFTEXT_PATH.exists():
@@ -298,7 +271,6 @@ with open(WOFFTEXT_PATH, 'w', encoding='utf-8') as fout:
         fout.write(build_woff_record(r) + '\n')
 print(f"  {WOFFTEXT_PATH.name}: {WOFFTEXT_PATH.stat().st_size:,} bytes")
 
-# Line-length diagnostic
 with open(WOFFTEXT_PATH) as f:
     lengths = [len(line.rstrip('\n')) for line in f]
 if lengths:
@@ -308,12 +280,6 @@ if lengths:
 
 # ============================================================================
 # STEP 6: PROC PRINT listing
-#   VAR BRANCH NAME ACCTNO NOTENO BORSTAT IIS OI TOTIIS SP TOTAL CURBAL
-#       PREVBAL PAYMENT MATDATE LOANTYPE INTAMT POSTNTRN
-#       MARKETVL INTEARN4 DAYS LASTTRA1 LSTTRNCD MTHPDUE BALANCE
-#   SUM IIS OI TOTIIS SP TOTAL CURBAL PREVBAL PAYMENT BALANCE
-#   TITLE1 'LISTING OF ACCOUNTS FOR BAD DEBT WRITING-OFF EXERCISE'
-#   TITLE2 'AS AT ' "&RDATE"
 # ============================================================================
 print("STEP 6: PROC PRINT listing...")
 
@@ -348,8 +314,6 @@ def fmt_report_val(val, col):
             return str(val)[:w].rjust(w)
     return str(val)[:w].ljust(w)
 
-# ASA carriage control:
-#   '1' = new page,  ' ' = single space,  '0' = double space,  '+' = no advance
 PAGE_LEN = 60
 output_lines = []
 line_count = [0]
