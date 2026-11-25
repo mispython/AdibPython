@@ -1,77 +1,95 @@
-EXPECTED_LEN = 797
 
-def _line_wofftex1(r):
-    buf = [' '] * EXPECTED_LEN
+============================================================
+Bad Debt Write-Off List Generation
+============================================================
+Report Date: 24/11/2026  Week: 4  Prev Month: 10
+============================================================
 
-    def put(pos, s, n):
-        s = ('' if s is None else str(s)).replace('\n', ' ').replace('\r', ' ')[:n].ljust(n)
-        start = pos - 1
-        buf[start:start+n] = list(s)
+STEP 1+2: Reading enrh_ln_note (ENTITY_CD='PIBB', BORSTAT='A')...
+  Reading FULL enrh_ln_note.sas7bdat (44 cols)...
+  Loaded 8,149,154 rows in 227.6s  RSS 5263MB
+  Converted to Polars, RSS 4357MB
+  Filtered to 297 rows, RSS 4620MB
+  NPLA survivors: 297
+  NPLA ready: 297 rows
 
-    def put_num(pos, v, n, d=2):
-        try: v = 0.0 if v is None else float(v)
-        except Exception: v = 0.0
-        s = f"{v:.{d}f}".rjust(n)
-        if len(s) > n: s = s[:n]
-        put(pos, s, n)
+STEP 3: IIS / SP2...
+  Reading: iis.sas7bdat - 135,725 rows, 0.7s
+  Reading: sp2.sas7bdat - 135,725 rows, 0.8s
+  IIS: 135,725  SP2: 135,725
+  WARNING: IIS and SP2 have identical row counts (135,725). Verify: iis.sas7bdat vs sp2.sas7bdat
 
-    def put_int(pos, v, n):
-        try: v = 0 if v is None else int(float(v))
-        except Exception: v = 0
-        put(pos, str(v).rjust(n), n)
+STEP 4: Combine NPL...
+  NPL combined: 135,924
 
-    put(1,   r.get('BRANCH'), 7)
-    put(9,   r.get('NAME'), 40)
-    put_num(50, r.get('ACCTNO'), 10, 0)
-    put_num(61, r.get('NOTENO'), 5, 0)
-    put(67,  r.get('BORSTAT'), 1)
-    put_num(69,  r.get('IIS'), 16)
-    put_num(85,  r.get('OI'), 16)
-    put_num(101, r.get('TOTIIS'), 16)
-    put_num(117, r.get('SP'), 16)
-    put_num(149, r.get('CURBAL'), 16)
-    put_num(165, r.get('PREVBAL'), 16)
-    put_num(181, r.get('PAYMENT'), 16)
-    put_num(197, r.get('ECSRRSRV'), 16)
-    put_num(213, r.get('POSTAMT'), 16)
-    put_num(229, r.get('OTHERAMT'), 16)
-    put(245, r.get('MATDATE'), 10)
-    put_int(255, r.get('LOANTYPE'), 3)
-    put_num(258, r.get('INTAMT'), 16)
-    put(274, r.get('POSTNTRN'), 1)
-    put_num(278, r.get('MARKETVL'), 16)
-    put_num(294, r.get('INTEARN4'), 16)
-    put_int(310, r.get('DAYS'), 6)
-    put_int(317, r.get('CUSTCODE'), 3)
-    put(321, r.get('RIND'), 1)
-    put_num(322, r.get('OIFEEAMT'), 16)
-    put(339, r.get('LASTTRA1'), 10)
-    put_int(350, r.get('LSTTRNCD'), 3)
-    put_int(354, r.get('MTHPDUE'), 3)
-    put_num(357, r.get('BALANCE'), 16)
-    put(408, r.get('GUAREND'), 20)
-    put(429, r.get('GUARNAM1'), 40)
-    put(470, r.get('GUARNAM2'), 40)
-    iss = r.get('ISSXDTE')
-    iss_s = fmt_mmddyy10(iss) if isinstance(iss, date) else (iss or '')
-    put(511, iss_s, 10)
-    put_num(522, r.get('NETPROC'), 16)
-    put(539, r.get('COLLDESC'), 70)
-    put_int(610, r.get('COLLYEAR'), 4)
-    put_int(615, r.get('BILPAID'), 3)
-    put(619, r.get('CRRGRADE'), 5)
-    put_num(625, r.get('MARGINFI'), 16)
-    put_int(642, r.get('NOTETERM'), 3)
-    put_num(646, r.get('PAYAMT'), 16)
-    put(663, r.get('DOBMNI'), 10)
-    put(674, r.get('ECSRIND'), 1)
-    put(677, r.get('DELQCD'), 2)
-    put(713, r.get('OCCUPAT'), 3)
-    put(743, r.get('BGC'), 2)
-    put(767, r.get('PAY75PCT'), 1)
-    put(769, r.get('NACODATE'), 10)
-    put(780, r.get('CP'), 1)
-    put(782, r.get('MODELDES'), 6)
-    put(789, r.get('AKPK_STATUS'), 9)
+STEP 5: CCRIS...
+  Reading: icredmsubac1126.sas7bdat - 1,737,385 rows, 107.7s
+  Found: icredmsubac1126.sas7bdat
+  cols -> ACCT:acctnum DAYS:DAYSARR FAC:FACILITY
+  CCRIS: 1,100,791
 
-    return ''.join(buf)
+STEP 6+7: MERGE NPL/CREDSUB/LOAN + derived fields...
+  LOAN ready: 135,924
+
+STEP 9: Customer names...
+  Reading: loan.sas7bdat - 13,557,834 rows, 201.1s
+  CNAME: 12,580,070
+
+STEP 10: Guarantors...
+  Reading: stg_ln_liabfile.sas7bdat - 2,504,468 rows, 4.3s
+  Guarantor keys: 2,180,257
+
+STEP 11: Previous balance...
+  Reading: loan104.sas7bdat - 623,910 rows, 17.5s
+  SASLN: 20,995
+
+STEP 12: Final merge + filter...
+  WOFF pre-filter: 20,995
+  WOFF after filter: 691
+
+STEP 13: Writing outputs...
+SAS Connection established. Subprocess id is 3103380
+
+  SAS session ready: Access Method         = STDIO
+SAS Config name       = default
+SAS Config file       = /sas/python/virt_edw_dev/lib64/python3.9/site-packages/saspy/sascfg.py
+WORK Path             = /sas/saswork/SAS_work299C002F5A94_svdwh004/
+SAS Version           = 9.04.01M9P06052025
+SASPy Version         = 5.102.0
+Teach me SAS          = False
+Batch                 = False
+Results               = Pandas
+SAS Session Encoding  = latin1
+Python Encoding value = latin_1
+SAS process Pid value = 3103380
+SASsession started    = Wed Nov 25 12:34:33 2026
+
+
+
+21   
+22   libname NPLOUT    '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1'  ;
+NOTE: Libref NPLOUT was successfully assigned as follows: 
+      Engine:        V9 
+      Physical Name: /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1
+23   
+  libref NPLOUT -> /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1
+  NPLOUT.LIST written via SASPy
+
+============================================================
+SUMMARY
+============================================================
+Accounts: 691
+Total exposure: RM 10,489,215.82
+  wofftex1.txt: 551,418 bytes
+  wofftex1 line lengths: min=797 max=797 expected=789
+  wofftext.txt: 545,890 bytes
+  NPLOUT.WOFFTXT written via SASPy
+
+============================================================
+COMPLETED IN 861.5s
+============================================================
+  /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftext.txt
+  /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftex1.txt
+  NPLOUT.LIST
+  NPLOUT.WOFFTXT
+SAS Connection terminated. Subprocess id was 3103380
