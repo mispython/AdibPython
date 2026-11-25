@@ -1,58 +1,150 @@
+OPTIONS NOCENTER;
+DATA HARDCODE;
+    INFILE HARDCODE FIRSTOBS=2;
+    INPUT @007 BNMCODE    $14.
+          @026 AMOUNT     10.;
+   PROD = SUBSTR(BNMCODE,1,5);
+   INDNON = SUBSTR(BNMCODE,9,1);
+   IF INDNON = '0' THEN DELETE;
+   IF PROD IN ('93329','93421','93423','93424','93425','93429',
+               '93419','94419',
+               '94329','94421','94423','94424','94425','94429',
+               '95329','95421','95423','95424','95425','95429',
+               '96329','96421','96423','96424','96425','96429') THEN
+      AMOUNT = AMOUNT * (-1);
+RUN;
+PROC TRANSPOSE DATA=HARDCODE OUT=HARDCODE
+   (RENAME=(COL1=WEEK COL2=MONTH COL3=QTR COL4=HALFYR COL5=YEAR
+            COL6=LAST));
+   BY PROD;
+   VAR AMOUNT;
+RUN;
 
-============================================================
-Bad Debt Write-Off List Generation
-============================================================
-Report Date: 23/11/2026  Week: 4  Prev Month: 10
-============================================================
-
-STEP 1+2: Reading enrh_ln_note (ENTITY_CD='PIBB', BORSTAT='A')...
-  Reading FULL enrh_ln_note.sas7bdat (44 cols)...
-  Loaded 8,149,154 rows in 870.6s  RSS 5254MB
-  Converted to Polars, RSS 4335MB
-  Filtered to 297 rows, RSS 4599MB
-  NPLA survivors: 297
-  NPLA ready: 297 rows
-
-STEP 3: IIS / SP2...
-  Reading: iis.sas7bdat - 135,725 rows, 0.7s
-  Reading: sp2.sas7bdat - 135,725 rows, 0.9s
-  IIS: 135,725  SP2: 135,725
-  WARNING: IIS and SP2 have identical row counts (135,725). Verify paths: iis.sas7bdat vs sp2.sas7bdat
-
-STEP 4: Combine NPL...
-  NPL combined: 135,924
-
-STEP 5: CCRIS...
-  WARNING: missing /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/icredmsubac1126.sas7bdat
-  WARNING: missing /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/ICREDMSUBAC1126.sas7bdat
-  WARNING: missing /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/icredmsubac11026.sas7bdat
-  WARNING: missing /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/ICREDMSUBAC11026.sas7bdat
-  CCRIS: 0
-
-STEP 6+7: MERGE NPL/CREDSUB/LOAN + derived fields...
-  LOAN ready: 135,924
-
-STEP 9: Customer names...
-  Reading: loan.sas7bdat - 13,557,834 rows, 534.2s
-  CNAME: 12,580,070
-
-STEP 10: Guarantors...
-  WARNING: missing /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/lnliab07226.sas7bdat
-  Guarantor keys: 0
-
-STEP 11: Previous balance...
-  WARNING: missing /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/loan104.sas7bdat
-  SASLN: 0
-
-STEP 12: Final merge + filter...
-  WOFF pre-filter: 135,924
-  WOFF after filter: 0
-
-STEP 13: Writing outputs...
-No accounts for write-off — creating empty files.
-
-============================================================
-COMPLETED IN 1512.0s
-============================================================
-  /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftext.txt
-  /sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1/wofftex1.txt
+PROC PRINT;
+DATA STORE.HARDRMP1
+     STORE.HARDRMP2
+     STORE.HARDFXP1
+     STORE.HARDFXP2
+     STORE.HARDUTP1
+   ;
+   SET HARDCODE;
+   BALANCE = SUM(WEEK,MONTH,QTR,HALFYR,YEAR,LAST);
+   IF PROD IN ('93229') THEN DO;
+       ITEM = 'A1.11';
+   END;
+   IF PROD IN ('95229') THEN DO;
+       ITEM = 'A1.11';
+   END;
+   IF PROD IN ('94229') THEN DO;
+       ITEM = 'B1.11';
+   END;
+   IF PROD IN ('96229') THEN DO;
+       ITEM = 'B1.11';
+   END;
+    /** ADD NEW **/
+   IF PROD IN ('93329') THEN DO;
+       ITEM = 'A1.20';
+   END;
+   IF PROD IN ('93421') THEN DO;
+       ITEM = 'A1.23';
+   END;
+   IF PROD IN ('93423') THEN DO;
+       ITEM = 'A1.25';
+   END;
+   IF PROD IN ('93424') THEN DO;
+       ITEM = 'A1.27';
+   END;
+   IF PROD IN ('93425') THEN DO;
+       ITEM = 'A1.28';
+   END;
+   IF PROD IN ('93429') THEN DO;
+       ITEM = 'A1.29';
+   END;
+   IF PROD IN ('94329') THEN DO;
+       ITEM = 'B1.20';
+   END;
+   IF PROD IN ('94421') THEN DO;
+       ITEM = 'B1.23';
+   END;
+   IF PROD IN ('94423') THEN DO;
+       ITEM = 'B1.25';
+   END;
+   IF PROD IN ('94424') THEN DO;
+       ITEM = 'B1.27';
+   END;
+   IF PROD IN ('94425') THEN DO;
+       ITEM = 'B1.28';
+   END;
+   IF PROD IN ('94429') THEN DO;
+       ITEM = 'B1.29';
+   END;
+   IF PROD IN ('95329') THEN DO;
+       ITEM = 'A1.20';
+   END;
+   IF PROD IN ('95421') THEN DO;
+       ITEM = 'A1.23';
+   END;
+   IF PROD IN ('95423') THEN DO;
+       ITEM = 'A1.25';
+   END;
+   IF PROD IN ('95424') THEN DO;
+       ITEM = 'A1.27';
+   END;
+   IF PROD IN ('95425') THEN DO;
+       ITEM = 'A1.28';
+   END;
+   IF PROD IN ('95429') THEN DO;
+       ITEM = 'A1.29';
+   END;
+   IF PROD IN ('96329') THEN DO;
+       ITEM = 'B1.20';
+   END;
+   IF PROD IN ('96421') THEN DO;
+       ITEM = 'B1.23';
+   END;
+   IF PROD IN ('96423') THEN DO;
+       ITEM = 'B1.25';
+   END;
+   IF PROD IN ('96424') THEN DO;
+       ITEM = 'B1.27';
+   END;
+   IF PROD IN ('96425') THEN DO;
+       ITEM = 'B1.28';
+   END;
+   IF PROD IN ('96429') THEN DO;
+       ITEM = 'B1.29';
+   END;
+   IF PROD IN ('93419') THEN DO;
+       ITEM = 'A1.22';
+   END;
+   IF PROD IN ('94419') THEN DO;
+       ITEM = 'B1.22';
+   END;
+   IF PROD IN ('93635') THEN DO;
+       ITEM = 'A2.08';
+       OUTPUT STORE.HARDUTP1;
+   END;
+   IF SUBSTR(ITEM,1,1) = 'A' & ITEM NE 'A2.08' THEN DO;
+      IF SUBSTR(PROD,1,2) = '93' THEN OUTPUT
+         STORE.HARDRMP1;
+      IF SUBSTR(PROD,1,2) = '95' THEN OUTPUT
+         STORE.HARDRMP2;
+   END;
+   ELSE DO;
+      IF SUBSTR(PROD,1,2) = '94' THEN OUTPUT
+         STORE.HARDFXP1;
+      IF SUBSTR(PROD,1,2) = '96' THEN OUTPUT
+         STORE.HARDFXP2;
+   END;
+RUN;
+DATA STOREM.HARDRMP1;
+   SET STORE.HARDRMP1;
+DATA STOREM.HARDRMP2;
+   SET STORE.HARDRMP2;
+DATA STOREM.HARDFXP1;
+   SET STORE.HARDFXP1;
+DATA STOREM.HARDFXP2;
+   SET STORE.HARDFXP2;
+DATA STOREM.HARDUTP1;
+   SET STORE.HARDUTP1;
+RUN;
