@@ -13,6 +13,8 @@ Key differences from EIIFTXT1/EIIFTXT2:
   - PROC PRINT listing produced
 
 SASPy writes SAS7BDAT via NPLOUT libref. RSS guard bounds the large read.
+
+NOTE: Report date is now derived from (today - 1 day) instead of REPTDATE.sas7bdat.
 """
 
 import gc
@@ -68,7 +70,7 @@ RSS_GUARD_MB = 24000
 EXPECTED_LEN = 750
 
 # --- Input paths (each from its own source, no shared ROOT) -----------------
-PATH_REPTDATE = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT3/REPTDATE.sas7bdat')
+# PATH_REPTDATE removed — report date now derived from (today - 1 day).
 PATH_IIS      = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT3/iis.sas7bdat')
 PATH_SP2      = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT3/sp2.sas7bdat')
 PATH_LNNOTE   = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote/enrh_ln_lnnote.sas7bdat')
@@ -85,19 +87,9 @@ PRINT_PATH    = OUTPUT_DIR / 'EIIFTXT3_PRINT.txt'
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ============================================================================
-# Report date & week logic (read REPTDATE from table)
+# Report date & week logic (derived from today - 1 day)
 # ============================================================================
-def read_reptdate(path):
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-    df, _ = pyreadstat.read_sas7bdat(str(path), usecols=['REPTDATE'])
-    v = df['REPTDATE'].iloc[0]
-    if isinstance(v, (int, float)):
-        v = date.fromordinal(int(v))
-    return v
-
-reptdate = read_reptdate(PATH_REPTDATE)
+reptdate = date.today() - timedelta(days=1)
 
 day = reptdate.day
 if   day == 8:  wk, wk1 = '1', '4'
