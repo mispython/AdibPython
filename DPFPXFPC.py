@@ -52,16 +52,17 @@ except ImportError:
 HPD = HP_ACTIVE
 EXCLUDED_LOANTYPES = [983, 993, 678, 679, 698, 699]
 RSS_GUARD_MB = 24000
+EXPECTED_LEN = 797
 
-ROOT = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS')
+# --- Input paths (each from its own source, no shared ROOT) -----------------
+PATH_LN_NOTE = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/a_lnnote/enrh_ln_note.sas7bdat')
+PATH_IIS     = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/iis.sas7bdat')
+PATH_SP2     = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/sp2.sas7bdat')
+PATH_CNAME   = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/loan.sas7bdat')
+PATH_LIAB    = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/stg_ln_liabfile.sas7bdat')
 
-PATH_LN_NOTE = ROOT / 'input/prod/a_lnnote/enrh_ln_note.sas7bdat'
-PATH_IIS     = ROOT / 'input/prod/EIIFTXT1/iis.sas7bdat'
-PATH_SP2     = ROOT / 'input/prod/EIIFTXT1/sp2.sas7bdat'
-PATH_CNAME   = ROOT / 'input/prod/EIIFTXT1/loan.sas7bdat'
-PATH_LIAB    = ROOT / 'input/prod/EIIFTXT1/stg_ln_liabfile.sas7bdat'
-
-OUTPUT_DIR   = ROOT / 'output/EIIFTXT1'
+# --- Output paths ----------------------------------------------------------
+OUTPUT_DIR   = Path('/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIIFTXT1')
 OUTPUT_FILE  = OUTPUT_DIR / 'wofftext.txt'
 OUTPUT_FILE1 = OUTPUT_DIR / 'wofftex1.txt'
 
@@ -84,8 +85,15 @@ reptmon, reptmon1  = f'{mm:02d}', f'{mm1:02d}'
 reptyear = f'{reptdate.year % 100:02d}'
 rdate    = reptdate.strftime('%d/%m/%y')
 
-PATH_CCRIS = ROOT / f'input/prod/EIIFTXT1/icredmsubac{reptmon}{reptyear}.sas7bdat'
-PATH_SASLN = ROOT / f'input/prod/EIIFTXT1/loan{reptmon1}{nowks}.sas7bdat'
+# Dynamic input paths (date-dependent, fully qualified — no ROOT)
+PATH_CCRIS = Path(
+    f'/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
+    f'icredmsubac{reptmon}{reptyear}.sas7bdat'
+)
+PATH_SASLN = Path(
+    f'/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIIFTXT1/'
+    f'loan{reptmon1}{nowks}.sas7bdat'
+)
 
 print(f"\n{'='*60}\nBad Debt Write-Off List Generation\n{'='*60}")
 print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}  "
@@ -691,8 +699,6 @@ def _n(v, n, d=2):
     s = f"{v:.{d}f}"
     return s.rjust(n) if len(s) <= n else s[:n]
 
-EXPECTED_LEN = 797
-
 def _line_wofftex1(r):
     buf = [' '] * EXPECTED_LEN
 
@@ -777,7 +783,7 @@ def write_wofftex1(df, path):
 def write_wofftext_streaming(src, dst):
     with open(src) as fin, open(dst, 'w') as fout:
         for line in fin:
-            L = line.rstrip('\n').ljust(789)
+            L = line.rstrip('\n').ljust(EXPECTED_LEN)
             totiis  = _safe_float(L[100:116])
             balance = _safe_float(L[356:372])
             oi      = _safe_float(L[84:100])
@@ -806,9 +812,9 @@ if df_woff.height:
     with open(OUTPUT_FILE1) as f:
         lengths = [len(line.rstrip('\n')) for line in f]
     if lengths:
-        print(f"  wofftex1 line lengths: min={min(lengths)} max={max(lengths)} expected=789")
-        if min(lengths) < 789:
-            print(f"  WARNING: short lines detected — offsets may misalign")
+        print(f"  wofftex1 line lengths: min={min(lengths)} max={max(lengths)} expected={EXPECTED_LEN}")
+        if min(lengths) != EXPECTED_LEN:
+            print(f"  WARNING: line length mismatch — offsets may misalign")
 
     write_wofftext_streaming(OUTPUT_FILE1, OUTPUT_FILE)
     print(f"  {OUTPUT_FILE.name}: {OUTPUT_FILE.stat().st_size:,} bytes")
