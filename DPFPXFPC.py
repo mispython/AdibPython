@@ -486,7 +486,7 @@ if df_loan.height:
         g1.append(gd['GUARNAM1']); g2.append(gd['GUARNAM2'])
     df_loan = df_loan.with_columns([
         pl.Series('GUARNAM1', g1), pl.Series('GUARNAM2', g2)])
-del guarantor_data
+# NOTE: guarantor_data is still needed in STEP 7 — do NOT delete it here.
 gc.collect()
 
 # ============================================================================
@@ -512,6 +512,8 @@ if df_sasln is not None:
 else:
     df_sasln = empty_df({'ACCTNO':pl.Float64,'NOTENO':pl.Float64,
                          'PREVBAL':pl.Float64,'GUARNAM1':pl.Utf8,'GUARNAM2':pl.Utf8})
+del guarantor_data          # safe to drop now — STEP 6 & STEP 7 both done
+gc.collect()
 print(f"  SASLN: {df_sasln.height:,}\n")
 
 # ============================================================================
