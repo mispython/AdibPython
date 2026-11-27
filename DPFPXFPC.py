@@ -5,6 +5,8 @@ Key differences from EIIFTXT1:
 - Filters accounts by existing NPL.LIST (only accounts previously identified)
 - No LOANTYPE exclusion in NPLA WHERE clause
 - Same RSS guard, SASPy writes, 797-char fixed-width layout as EIIFTXT1
+
+LNNOTE filter: BORSTAT = 'A' AND ENTITY_CD = 'PIBB'
 """
 
 import gc
@@ -56,6 +58,7 @@ HPD = HP_ACTIVE
 RSS_GUARD_MB = 24000
 EXPECTED_LEN = 797
 EXCLUDED_LOANTYPES = []           # EIIFTXT2: NO LOANTYPE exclusion
+ENTITY_CD_FILTER = 'PIBB'         # LNNOTE: WHERE ENTITY_CD == 'PIBB'
 
 # --- Input paths (each from its own source, no shared ROOT) -----------------
 PATH_LN_NOTE = Path('/sas/ln/dwh/enrichment/enrh_ln_note.sas7bdat')
@@ -144,10 +147,12 @@ def read_full(path, columns=None):
         return None
 
 def read_lnnote_full_filtered(path, columns, excluded_loantypes,
+                              entity_cd=ENTITY_CD_FILTER,
                               max_mb=RSS_GUARD_MB):
     """
     Single full read + immediate filter. Linear time, bounded RSS.
-    EIIFTXT2: filter only BORSTAT='A'; NO LOANTYPE exclusion.
+    EIIFTXT2: filter BORSTAT='A' and ENTITY_CD=<entity_cd> ('PIBB');
+    NO LOANTYPE exclusion.
     """
     path = Path(path)
     if not path.exists():
@@ -172,10 +177,11 @@ def read_lnnote_full_filtered(path, columns, excluded_loantypes,
     gc.collect()
     print(f"  Converted to Polars, RSS {_rss_mb():.0f}MB", flush=True)
 
-    p = p.with_columns(
-        pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars()
-    ).filter(
-        pl.col('BORSTAT') == 'A'
+    p = p.with_columns([
+        pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars(),
+        pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars(),
+    ]).filter(
+        (pl.col('BORSTAT') == 'A') & (pl.col('ENTITY_CD') == entity_cd)
     )
     if excluded_loantypes:
         p = p.filter(~pl.col('LOANTYPE').is_in(excluded_loantypes))
@@ -266,12 +272,13 @@ def write_sas7bdat_saspy(df, table_name, libref='NPLOUT'):
 NPL_COLS = ['NAME', 'ACCTNO', 'NOTENO', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH']
 
 # ============================================================================
-# STEP 1: Read NPLA (BORSTAT='A', no LOANTYPE exclusion) — chunked-equivalent
+# STEP 1: Read NPLA (BORSTAT='A', ENTITY_CD='PIBB', no LOANTYPE exclusion)
 # ============================================================================
-print("STEP 1: Reading NPLA (BORSTAT='A')...")
+print(f"STEP 1: Reading NPLA (BORSTAT='A', ENTITY_CD='{ENTITY_CD_FILTER}')...")
 start_total = time.time()
 
 loan_columns = [
+    'ENTITY_CD',
     'BORSTAT', 'LOANTYPE', 'NAME', 'ACCTNO', 'NOTENO',
     'FEEDUE', 'FEEDUEMS', 'FEEAMT16', 'MARKETVL', 'NTBRCH',
     'FEETOTAL', 'NFEEAMT5', 'FEEAMT3', 'FEETOT2', 'FEEAMTA', 'FEEAMT5',
@@ -283,10 +290,12 @@ loan_columns = [
 ]
 
 df_npla_raw = read_lnnote_full_filtered(
-    PATH_LN_NOTE, columns=loan_columns, excluded_loantypes=EXCLUDED_LOANTYPES)
+    PATH_LN_NOTE, columns=loan_columns, excluded_loantypes=EXCLUDED_LOANTYPES,
+    entity_cd=ENTITY_CD_FILTER)
 
 if df_npla_raw.height == 0:
-    print("WARNING: No active accounts (BORSTAT='A'). Exiting.")
+    print(f"WARNING: No active accounts (BORSTAT='A', "
+          f"ENTITY_CD='{ENTITY_CD_FILTER}'). Exiting.")
     sys.exit(0)
 print(f"  NPLA survivors: {df_npla_raw.height:,}")
 
