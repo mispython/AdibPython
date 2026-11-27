@@ -1,12 +1,15 @@
 """
-EIFFTXT1 - Bad Debt Write-Off List (Conventional Banking)
+EIFFTXT2 - Bad Debt Write-Off List (Conventional Banking - Filtered by NPL.LIST)
 
-Key differences from EIIFTXT1 (Islamic):
-  - RIND = 'D' (Domestic/Conventional) vs 'I' (Islamic)
+Key differences from EIFFTXT1:
+  - Filtered by existing NPL.LIST (only pre-approved accounts)
+  - No LOANTYPE exclusion in NPLA WHERE clause
+  - Specific account deletion: ACCTNO=8396846630 AND NOTENO=90011
+
+Key differences from EIIFTXT2:
+  - RIND = 'D' (Conventional) vs 'I' (Islamic)
   - BIZTYPE = 'C' (Conventional) vs 'I' (Islamic)
-  - Uses CREDMSUBAC (not ICREDMSUBAC - no 'I' prefix)
-  - NPLA: BORSTAT='A' AND LOANTYPE NOT IN (983,993,678,679,698,699)
-  - LNNOTE: ENTITY_CD != 'PIBB'
+  - Uses CREDMSUBAC (not ICREDMSUBAC)
 
 Same RSS guard, SASPy writes, 797-char fixed-width layout as EIIFTXT1.
 """
@@ -59,8 +62,11 @@ except ImportError:
 HPD = HP_ACTIVE
 RSS_GUARD_MB = 24000
 EXPECTED_LEN = 797
-EXCLUDED_LOANTYPES = [983, 993, 678, 679, 698, 699]
-EXCLUDED_ENTITY_CD = 'PIBB'       # LNNOTE: WHERE ENTITY_CD != 'PIBB'
+EXCLUDED_LOANTYPES = []           # EIFFTXT2: NO LOANTYPE exclusion
+
+# EIFFTXT2-specific: delete this account from NPL.IIS/SP2 merge
+EXCLUDE_ACCTNO = 8396846630
+EXCLUDE_NOTENO = 90011
 
 # --- Input paths (each from its own source, no shared ROOT) -----------------
 PATH_LN_NOTE = Path('/sas/ln/dwh/enrichment/enrh_ln_note.sas7bdat')
@@ -95,7 +101,7 @@ reptyear = f'{reptdate.year % 100:02d}'
 rdate    = reptdate.strftime('%d/%m/%y')
 
 # Dynamic input paths (date-dependent, fully qualified — no ROOT)
-# EIFFTXT1 uses CREDMSUBAC (no 'I' prefix), unlike EIIFTXT1 (ICREDMSUBAC)
+# EIFFTXT2 uses CREDMSUBAC (no 'I' prefix), unlike EIIFTXT2 (ICREDMSUBAC)
 PATH_CCRIS = Path(
     f'/dwh/iccc_srb/'
     f'credmsubac{reptmon}{reptyear}.sas7bdat'
@@ -105,11 +111,11 @@ PATH_SASLN = Path(
     f'loan{reptmon1}{nowks}.sas7bdat'
 )
 
-print(f"\n{'='*60}\nBad Debt Write-Off List (Conventional Banking)\n{'='*60}")
+print(f"\n{'='*60}\nBad Debt Write-Off List (Conventional - Filtered by NPL.LIST)\n{'='*60}")
 print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}  "
       f"Week: {nowk}  Prev Month: {reptmon1}")
 print(f"Output Dir : {OUTPUT_DIR}")
-print(f"RIND: D  BIZTYPE: C")
+print(f"RIND: D  BIZTYPE: C  |  Delete ACCTNO={EXCLUDE_ACCTNO} NOTENO={EXCLUDE_NOTENO}")
 print(f"{'='*60}\n")
 
 # ============================================================================
@@ -151,13 +157,10 @@ def read_full(path, columns=None):
         return None
 
 def read_lnnote_full_filtered(path, columns, excluded_loantypes,
-                              excluded_entity_cd=EXCLUDED_ENTITY_CD,
                               max_mb=RSS_GUARD_MB):
     """
     Single full read + immediate filter. Linear time, bounded RSS.
-    EIFFTXT1: filter BORSTAT='A' AND LOANTYPE NOT IN excluded
-              AND ENTITY_CD != 'PIBB'.
-    Missing ENTITY_CD is kept (SAS semantics: missing != 'PIBB' is TRUE).
+    EIFFTXT2: filter ONLY BORSTAT='A'; NO LOANTYPE exclusion.
     """
     path = Path(path)
     if not path.exists():
@@ -182,14 +185,13 @@ def read_lnnote_full_filtered(path, columns, excluded_loantypes,
     gc.collect()
     print(f"  Converted to Polars, RSS {_rss_mb():.0f}MB", flush=True)
 
-    p = p.with_columns([
-        pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars(),
-        pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars().fill_null(''),
-    ]).filter(
-        (pl.col('BORSTAT') == 'A') &
-        (~pl.col('LOANTYPE').is_in(excluded_loantypes)) &
-        (pl.col('ENTITY_CD') != excluded_entity_cd)
+    p = p.with_columns(
+        pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars()
+    ).filter(
+        pl.col('BORSTAT') == 'A'
     )
+    if excluded_loantypes:
+        p = p.filter(~pl.col('LOANTYPE').is_in(excluded_loantypes))
     print(f"  Filtered to {p.height:,} rows, RSS {_rss_mb():.0f}MB", flush=True)
     return p
 
@@ -277,14 +279,12 @@ def write_sas7bdat_saspy(df, table_name, libref='NPLOUT'):
 NPL_COLS = ['NAME', 'ACCTNO', 'NOTENO', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH']
 
 # ============================================================================
-# STEP 1: Read NPLA (BORSTAT='A', LOANTYPE NOT IN excluded, ENTITY_CD != 'PIBB')
+# STEP 1: Read NPLA (BORSTAT='A' only, NO LOANTYPE exclusion)
 # ============================================================================
-print(f"STEP 1: Reading NPLA (BORSTAT='A', LOANTYPE NOT IN excluded, "
-      f"ENTITY_CD != '{EXCLUDED_ENTITY_CD}')...")
+print("STEP 1: Reading NPLA (BORSTAT='A' only)...")
 start_total = time.time()
 
 loan_columns = [
-    'ENTITY_CD',
     'BORSTAT', 'LOANTYPE', 'NAME', 'ACCTNO', 'NOTENO',
     'FEEDUE', 'FEEDUEMS', 'FEEAMT16', 'MARKETVL', 'NTBRCH',
     'FEETOTAL', 'NFEEAMT5', 'FEEAMT3', 'FEETOT2', 'FEEAMTA', 'FEEAMT5',
@@ -296,12 +296,10 @@ loan_columns = [
 ]
 
 df_npla_raw = read_lnnote_full_filtered(
-    PATH_LN_NOTE, columns=loan_columns, excluded_loantypes=EXCLUDED_LOANTYPES,
-    excluded_entity_cd=EXCLUDED_ENTITY_CD)
+    PATH_LN_NOTE, columns=loan_columns, excluded_loantypes=EXCLUDED_LOANTYPES)
 
 if df_npla_raw.height == 0:
-    print(f"WARNING: No active accounts (BORSTAT='A', LOANTYPE not excluded, "
-          f"ENTITY_CD != '{EXCLUDED_ENTITY_CD}'). Exiting.")
+    print("WARNING: No active accounts (BORSTAT='A'). Exiting.")
     sys.exit(0)
 print(f"  NPLA survivors: {df_npla_raw.height:,}")
 
@@ -335,6 +333,7 @@ print(f"  NPLA ready: {df_npla.height:,} rows\n")
 
 # ============================================================================
 # STEP 2: IIS / SP2 — SAS MERGE precedence (IIS wins on collision)
+# EIFFTXT2: DELETE specific ACCTNO/NOTENO from this merged NPL data
 # ============================================================================
 print("STEP 2: IIS / SP2...")
 _iis_cols = ['ACCTNO','NOTENO','NAME','IIS','OI','TOTIIS','SP','MARKETVL','BRANCH']
@@ -373,6 +372,15 @@ else:
         'NAME':pl.Utf8,'ACCTNO':pl.Float64,'NOTENO':pl.Float64,
         'IIS':pl.Float64,'OI':pl.Float64,'TOTIIS':pl.Float64,
         'SP':pl.Float64,'MARKETVL':pl.Float64,'BRANCH':pl.Utf8})
+
+# EIFFTXT2-specific: DELETE ACCTNO=8396846630 AND NOTENO=90011
+# (SAS: IF ACCTNO=8396846630 AND NOTENO=90011 THEN DELETE;)
+before_del = df_npl_data.height
+df_npl_data = df_npl_data.filter(
+    ~((pl.col('ACCTNO') == EXCLUDE_ACCTNO) & (pl.col('NOTENO') == EXCLUDE_NOTENO))
+)
+print(f"  Delete ACCTNO={EXCLUDE_ACCTNO} NOTENO={EXCLUDE_NOTENO}: "
+      f"{before_del:,} -> {df_npl_data.height:,}")
 
 del df_iis, df_sp
 gc.collect()
@@ -696,13 +704,13 @@ if df_sasln.height and df_loan.height:
     df_woff = df_woff.with_columns([
         (pl.col('CURBAL').fill_null(0) - pl.col('PREVBAL').fill_null(0)).alias('PAYMENT'),
         (pl.col('TOTIIS').fill_null(0) + pl.col('SP').fill_null(0)).alias('TOTAL'),
-        pl.lit('D').alias('RIND'),   # EIFFTXT1: Conventional = 'D'
+        pl.lit('D').alias('RIND'),   # EIFFTXT2: Conventional = 'D'
     ])
 else:
     df_woff = df_npl.clone().with_columns([
         pl.lit(0.0).alias('PAYMENT'),
         (pl.col('TOTIIS').fill_null(0) + pl.col('SP').fill_null(0)).alias('TOTAL'),
-        pl.lit('D').alias('RIND'),   # EIFFTXT1: Conventional = 'D'
+        pl.lit('D').alias('RIND'),   # EIFFTXT2: Conventional = 'D'
     ])
 del df_sasln, df_loan
 gc.collect()
@@ -729,7 +737,32 @@ df_woff = (df_woff
            .with_columns(pl.lit('Y').alias('CONFIRM'))
            .sort('ACCTNO'))
 
-# Attach NAME (SAS: MERGE WOFF(IN=A DROP=NAME) CNAME(RENAME=(CUSTNAM1=NAME)))
+# ============================================================================
+# STEP 12: KEY DIFFERENCE — filter by NPL.LIST
+# ============================================================================
+print("\nSTEP 12: Filtering by NPL.LIST...")
+list_candidates = [
+    PATH_LIST,
+    PATH_LIST.with_name('list.sas7bdat'),
+    OUTPUT_DIR / 'LIST.sas7bdat',
+    OUTPUT_DIR / 'list.sas7bdat',
+]
+df_list = None
+for p in list_candidates:
+    df_list = read_full(p, columns=['ACCTNO'])
+    if df_list is not None:
+        print(f"  Found LIST: {p.name}")
+        break
+
+if df_list is not None and df_list.height:
+    df_list = df_list.unique(subset=['ACCTNO']).sort('ACCTNO')
+    print(f"  NPL.LIST accounts: {df_list.height:,}")
+    df_woff = df_woff.join(df_list, on='ACCTNO', how='inner')
+    print(f"  WOFF after NPL.LIST filter: {df_woff.height:,}")
+else:
+    print("  WARNING: NPL.LIST not found — no filter applied")
+
+# CNAME attach (SAS: MERGE WOFF(IN=A DROP=NAME) CNAME)
 if 'NAME' in df_woff.columns:
     df_woff = df_woff.drop('NAME')
 if df_cname.height:
@@ -741,9 +774,9 @@ if df_cname.height:
 print()
 
 # ============================================================================
-# STEP 12: Output — 797-char fixed-width + SASPy SAS7BDAT
+# STEP 13: Output — 797-char fixed-width + SASPy SAS7BDAT
 # ============================================================================
-print("STEP 12: Writing outputs...")
+print("STEP 13: Writing outputs...")
 
 def _s(v, n):
     s = '' if v is None else str(v)
@@ -855,11 +888,11 @@ def write_wofftext_streaming(src, dst):
             fout.write(out + '\n')
 
 if df_woff.height:
-    # LIST.sas7bdat via SASPy
-    write_sas7bdat_saspy(df_woff, table_name='LIST')
+    # WOFFTXT (un-formatted) via SASPy
+    write_sas7bdat_saspy(df_woff, table_name='WOFFTXT')
 
     print(f"\n{'='*60}\nSUMMARY\n{'='*60}")
-    print(f"Accounts in write-off list: {len(df_woff):,}")
+    print(f"Accounts in filtered write-off list: {len(df_woff):,}")
     print(f"Total exposure: RM {df_woff['TOTAL'].sum():,.2f}")
 
     write_wofftex1(df_woff, OUTPUT_FILE1)
@@ -875,7 +908,7 @@ if df_woff.height:
     write_wofftext_streaming(OUTPUT_FILE1, OUTPUT_FILE)
     print(f"  {OUTPUT_FILE.name}: {OUTPUT_FILE.stat().st_size:,} bytes")
 
-    # WOFFTXT via SASPy (final formatted)
+    # WOFFTXT_FORMATTED via SASPy
     recs = []
     with open(OUTPUT_FILE1) as f:
         for line in f:
@@ -899,9 +932,9 @@ if df_woff.height:
             })
     if recs:
         df_t = pl.DataFrame(recs)
-        write_sas7bdat_saspy(df_t, table_name='WOFFTXT')
+        write_sas7bdat_saspy(df_t, table_name='WOFFTXT_FORMATTED')
 else:
-    print("\nNo accounts for write-off — creating empty files.")
+    print("\nNo accounts after NPL.LIST filter — creating empty files.")
     OUTPUT_FILE1.write_text('')
     OUTPUT_FILE.write_text('')
 
@@ -909,4 +942,4 @@ total_elapsed = time.time() - start_total
 print(f"\n{'='*60}\nCOMPLETED IN {total_elapsed:.1f}s\n{'='*60}")
 print(f"  {OUTPUT_FILE}\n  {OUTPUT_FILE1}")
 if df_woff.height:
-    print(f"  NPLOUT.LIST\n  NPLOUT.WOFFTXT")
+    print(f"  NPLOUT.WOFFTXT\n  NPLOUT.WOFFTXT_FORMATTED")
