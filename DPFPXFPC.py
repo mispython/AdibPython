@@ -1,901 +1,797 @@
 """
-EIFFTXT1 - Bad Debt Write-Off List (Conventional Banking)
+EIFFTXT2 - Bad Debt Write-Off List (Conventional Banking - Filtered by NPL.LIST)
+Includes: PBBLNFMT, PBBELF format definitions
 
-Key differences from EIIFTXT1 (Islamic):
-  - RIND = 'D' (Domestic/Conventional) vs 'I' (Islamic)
-  - BIZTYPE = 'C' (Conventional) vs 'I' (Islamic)
-  - Uses CREDMSUBAC (not ICREDMSUBAC - no 'I' prefix)
-  - NPLA: BORSTAT='A' AND LOANTYPE NOT IN (983,993,678,679,698,699)
+Key Differences from EIFFTXT1:
+- Filtered by existing NPL.LIST file (only pre-approved accounts)
+- No LOANTYPE exclusion in NPLA WHERE clause
+- Specific account deletion: ACCTNO=8396846630 AND NOTENO=90011
 
-Same RSS guard, SASPy writes, 797-char fixed-width layout as EIIFTXT1.
+Key Differences from EIIFTXT2:
+- RIND = 'D' (Conventional) vs 'I' (Islamic)
+- BIZTYPE = 'C' (Conventional) vs 'I' (Islamic)
+- Uses CREDMSUBAC (not ICREDMSUBAC)
 """
 
-import gc
-import os
-import re
-import sys
-import time
-from datetime import datetime, timedelta, date
-from pathlib import Path
-
-import polars as pl
+import pandas as pd
 import pyreadstat
+from datetime import datetime, timedelta
+import sys
+import os
+import gc
+import numpy as np
 
-try:
-    import psutil
-    def _rss_mb():
-        return psutil.Process(os.getpid()).memory_info().rss / 1024**2
-except ImportError:
-    def _rss_mb():
-        return 0.0
+# Input directory paths (all lowercase)
+LOAN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1_TXT2/'
+NPL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1_TXT2/'
+SASLN_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1_TXT2/'
+CISNAME_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1_TXT2/'
+CCRIS_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1_TXT2/'
+BKCTRL_DIR = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/input/prod/EIFFTXT1_TXT2/'
 
-try:
-    import saspy
-    _SASPY_OK = True
-except ImportError:
-    _SASPY_OK = False
+OUTPUT_FILE = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIFFTXT2/wofftext.txt'
+OUTPUT_FILE1 = '/sas/python/virt_edw/Data_Warehouse/MIS/XMIS/output/EIFFTXT2/wofftex1.txt'
 
-from PBBLNFMT import (
-    HP_ALL, HP_ACTIVE, AITAB, MORE_PLAN, MORE_ISLAM,
-    HOME_ISLAMIC, HOME_CONVENTIONAL, SWIFT_ISLAMIC, SWIFT_CONVENTIONAL,
-    FCY_PRODUCTS,
-    format_mthpass, format_ndays, format_lnprod, format_lndenom,
-    format_odprod, format_oddenom, format_collcd, format_riskcd,
-    format_delqdes, format_statecd,
-)
+# HPD loan types (from PBBLNFMT)
+HPD = [101, 102, 103, 104, 105, 106, 107, 108, 109, 110,
+       201, 202, 203, 204, 205, 206, 207, 208, 209, 210,
+       301, 302, 303, 304, 305, 306, 307, 308, 309, 310]
 
-try:
-    from PBBELF import LIBRARY_PATHS, format_ddmmyy10, format_mmddyy10
-except ImportError:
-    def format_ddmmyy10(d):
-        return d.strftime('%d/%m/%Y') if d else ''
-    def format_mmddyy10(d):
-        return d.strftime('%m/%d/%Y') if d else ''
 
-# ============================================================================
-# CONFIG
-# ============================================================================
-HPD = HP_ACTIVE
-RSS_GUARD_MB = 24000
-EXPECTED_LEN = 797
-EXCLUDED_LOANTYPES = [983, 993, 678, 679, 698, 699]
+# =====================================================================
+# ROBUST SAS READER (from EIFFTXT1)
+# =====================================================================
+def read_sas_columns(path, wanted_cols, required=None, disable_datetime_conversion=False,
+                      encoding=None, allow_missing_file=False):
+    
+    if required is None:
+        required = []
 
-# --- Input paths (each from its own source, no shared ROOT) -----------------
-PATH_LN_NOTE = Path('/sas/ln/dwh/enrichment/enrh_ln_note.sas7bdat')
-PATH_IIS     = Path('/exdwh/host/ln/npl_hp_sasdata/pibb/woff/iis.sas7bdat')
-PATH_SP2     = Path('/exdwh/host/ln/npl_hp_sasdata/pibb/woff/sp2.sas7bdat')
-PATH_CNAME   = Path('/dwh/rsd_cis/loan.sas7bdat')
-PATH_LIAB    = Path('/sas/ln/dwh/staging/stg_ln_liabfile.sas7bdat')
-PATH_LIST    = Path('/exdwh/host/ln/npl_hp_sasdata/pibb/woff/list.sas7bdat')
+    if not os.path.exists(path):
+        if allow_missing_file:
+            print(f"  Warning: file not found, using empty frame: {path}")
+            return pd.DataFrame(columns=[c.lower() for c in wanted_cols])
+        raise FileNotFoundError(f"Required SAS file not found: {path}")
 
-# --- Output paths ----------------------------------------------------------
-OUTPUT_DIR   = Path('/host_pq/mis/output/report/wofftxt_conv')
-OUTPUT_FILE  = OUTPUT_DIR / 'wofftext.txt'
-OUTPUT_FILE1 = OUTPUT_DIR / 'wofftex1.txt'
+    _, meta = pyreadstat.read_sas7bdat(path, metadataonly=True)
+    actual_cols = meta.column_names
+    actual_lookup = {c.lower(): c for c in actual_cols}
 
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    hard_missing = [c for c in required if c.lower() not in actual_lookup]
+    if hard_missing:
+        raise RuntimeError(
+            f"Required column(s) {hard_missing} not found in {path}.\n"
+            f"Available columns in file: {sorted(actual_cols)}"
+        )
 
-# ============================================================================
-# Report date & week logic
-# ============================================================================
-reptdate = datetime.now().date() - timedelta(days=1)
+    resolved_cols = []
+    skipped = []
+    for wc in wanted_cols:
+        real_name = actual_lookup.get(wc.lower())
+        if real_name is None:
+            skipped.append(wc)
+        else:
+            resolved_cols.append(real_name)
+
+    if skipped:
+        print(f"  Note: {path} has no column(s) {skipped} - continuing "
+              f"without them (not marked required).")
+
+    if not resolved_cols:
+        return pd.DataFrame(columns=[c.lower() for c in wanted_cols])
+
+    read_kwargs = {}
+    if disable_datetime_conversion:
+        read_kwargs['disable_datetime_conversion'] = True
+    if encoding:
+        read_kwargs['encoding'] = encoding
+
+    df, _ = pyreadstat.read_sas7bdat(path, usecols=resolved_cols, **read_kwargs)
+    df.columns = [c.lower() for c in df.columns]
+
+    return df
+
+
+def ensure_columns(df, cols, context=""):
+    """Fail fast and clearly if expected columns are missing after a merge."""
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise RuntimeError(
+            f"Missing expected column(s) {missing} {('in ' + context) if context else ''}. "
+            f"Columns present: {list(df.columns)}"
+        )
+
+
+# ===== FUNCTION DEFINITIONS =====
+def get_branch_name(branch_code):
+    """Get branch abbreviation - simplified version"""
+    branch_map = {
+        1: 'KL', 2: 'PJ', 3: 'JB', 4: 'PG', 5: 'IP',
+    }
+    try:
+        if branch_code is None or (isinstance(branch_code, float) and pd.isna(branch_code)):
+            return 'UNK'
+        branch_code = int(branch_code)
+    except (ValueError, TypeError):
+        return 'UNK'
+    return branch_map.get(branch_code, 'UNK')
+
+def ndays_format(days):
+    """Convert days to months past due"""
+    if days <= 0:
+        return 0
+    elif days <= 30:
+        return 1
+    elif days <= 60:
+        return 2
+    elif days <= 90:
+        return 3
+    elif days <= 120:
+        return 4
+    elif days <= 150:
+        return 5
+    elif days <= 180:
+        return 6
+    elif days <= 210:
+        return 7
+    elif days <= 240:
+        return 8
+    elif days <= 270:
+        return 9
+    elif days <= 300:
+        return 10
+    elif days <= 330:
+        return 11
+    elif days <= 365:
+        return 12
+    else:
+        return int(days / 30)
+
+def format_ddmmyy10(date_obj):
+    """Format date as DD/MM/YYYY"""
+    if pd.isna(date_obj) or date_obj is None:
+        return ''
+    return date_obj.strftime('%d/%m/%Y')
+
+def format_mmddyy10(date_obj):
+    """Format date as MM/DD/YYYY"""
+    if pd.isna(date_obj) or date_obj is None:
+        return ''
+    return date_obj.strftime('%m/%d/%Y')
+
+def mthpass_format(days):
+    """Convert days to months past due - same as NDAYS"""
+    return ndays_format(days)
+
+def safe_format_date(date_val, fmt_func):
+    """Safely format date values"""
+    if pd.isna(date_val) or date_val is None or date_val == 0:
+        return ''
+    try:
+        date_str = str(int(date_val)).zfill(8)
+        if len(date_str) >= 8:
+            dt = datetime.strptime(date_str[:8], '%m%d%Y')
+            return fmt_func(dt)
+    except:
+        pass
+    return ''
+
+def safe_get_date(date_val):
+    """Safely get date object"""
+    if pd.isna(date_val) or date_val is None or date_val == 0:
+        return None
+    try:
+        date_str = str(int(date_val)).zfill(8)
+        if len(date_str) >= 8:
+            return datetime.strptime(date_str[:8], '%m%d%Y').date()
+    except:
+        pass
+    return None
+
+def safe_float(val, default=0.0):
+    try:
+        if val is None:
+            return default
+        fval = float(val)
+        if pd.isna(fval) or np.isinf(fval):
+            return default
+        return fval
+    except (ValueError, TypeError):
+        return default
+
+def safe_int(val, default=0):
+    try:
+        if val is None:
+            return default
+        if isinstance(val, float) and pd.isna(val):
+            return default
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+def create_fixed_width_line(row):
+    """Create fixed-width line from row data"""
+    branch = str(row.get('branch', '') or '')[:7]
+    name = str(row.get('name', '') or '')[:40]
+    acctno = safe_float(row.get('acctno', 0))
+    noteno = safe_float(row.get('noteno', 0))
+    borstat = str(row.get('borstat', '') or '')[:1]
+    iis = safe_float(row.get('iis', 0))
+    oi = safe_float(row.get('oi', 0))
+    totiis = safe_float(row.get('totiis', 0))
+    sp = safe_float(row.get('sp', 0))
+    curbal = safe_float(row.get('curbal', 0))
+    prevbal = safe_float(row.get('prevbal', 0))
+    payment = safe_float(row.get('payment', 0))
+    ecsrrsrv = safe_float(row.get('ecsrrsrv', 0))
+    postamt = safe_float(row.get('postamt', 0))
+    otheramt = safe_float(row.get('otheramt', 0))
+    matdate = str(row.get('matdate', '') or '')[:10]
+    loantype = row.get('loantype', 0) or 0
+    intamt = safe_float(row.get('intamt', 0))
+    postntrn = str(row.get('postntrn', '') or '')[:1]
+    marketvl = safe_float(row.get('marketvl', 0))
+    intearn4 = safe_float(row.get('intearn4', 0))
+    days = row.get('days', 0) or 0
+    custcode = row.get('custcode', 0) or 0
+    rind = str(row.get('rind', '') or '')[:1]
+    oifeeamt = safe_float(row.get('oifeeamt', 0))
+    lasttra1 = str(row.get('lasttra1', '') or '')[:10]
+    lsttrncd = row.get('lsttrncd', 0) or 0
+    mthpdue = row.get('mthpdue', 0) or 0
+    balance = safe_float(row.get('balance', 0))
+    guarend = str(row.get('guarend', '') or '')[:20]
+    guarnam1 = str(row.get('guarnam1', '') or '')[:40]
+    guarnam2 = str(row.get('guarnam2', '') or '')[:40]
+
+    issxdte = row.get('issxdte', '')
+    if pd.notna(issxdte) and issxdte:
+        try:
+            issxdte_str = format_mmddyy10(issxdte)[:10]
+        except:
+            issxdte_str = ' ' * 10
+    else:
+        issxdte_str = ' ' * 10
+
+    netproc = safe_float(row.get('netproc', 0))
+    colldesc = str(row.get('colldesc', '') or '')[:70]
+    collyear = row.get('collyear', 0) or 0
+    bilpaid = row.get('bilpaid', 0) or 0
+    crrgrade = str(row.get('crrgrade', '') or '')[:5]
+    marginfi = safe_float(row.get('marginfi', 0))
+    noteterm = row.get('noteterm', 0) or 0
+    payamt = safe_float(row.get('payamt', 0))
+
+    dobmni = row.get('dobmni', '')
+    if pd.notna(dobmni) and dobmni:
+        try:
+            dobmni_str = format_mmddyy10(dobmni)[:10]
+        except:
+            dobmni_str = ' ' * 10
+    else:
+        dobmni_str = ' ' * 10
+
+    ecsrind = str(row.get('ecsrind', '') or '')[:1]
+    delqcd = str(row.get('delqcd', '') or '')[:2]
+    occupat = str(row.get('occupat', '') or '')[:3]
+    bgc = str(row.get('bgc', '') or '')[:2]
+    pay75pct = str(row.get('pay75pct', '') or '')[:1]
+    nacodate = str(row.get('nacodate', '') or '')[:10]
+    cp = str(row.get('cp', '') or '')[:1]
+    modeldes = str(row.get('modeldes', '') or '')[:6]
+    akpk_status = str(row.get('akpk_status', '') or '')[:9]
+
+    line = f"{branch:<7} {name:<40}{acctno:>10.0f}{noteno:>5.0f}{borstat:1}"
+    line += f"{iis:>16.2f}{oi:>16.2f}{totiis:>16.2f}{sp:>16.2f}"
+    line += f"{curbal:>16.2f}{prevbal:>16.2f}{payment:>16.2f}"
+    line += f"{ecsrrsrv:>16.2f}{postamt:>16.2f}{otheramt:>16.2f}"
+    line += f"{matdate:<10}{safe_int(loantype):>3d}{intamt:>16.2f}{postntrn:1}"
+    line += f"{marketvl:>16.2f}{intearn4:>16.2f}{safe_int(days):>6d}{safe_int(custcode):>3d}{rind:1}"
+    line += f"{oifeeamt:>16.2f}{lasttra1:<10}{safe_int(lsttrncd):>3d}{safe_int(mthpdue):>3d}"
+    line += f"{balance:>16.2f}{guarend:<20}{guarnam1:<40}{guarnam2:<40}"
+    line += f"{issxdte_str:<10}{netproc:>16.2f}{colldesc:<70}{safe_int(collyear):>4d}"
+    line += f"{safe_int(bilpaid):>3d}{crrgrade:<5}{marginfi:>16.2f}{safe_int(noteterm):>3d}"
+    line += f"{payamt:>16.2f}{dobmni_str:<10}{ecsrind:1}{delqcd:<2}"
+    line += f"{occupat:<3}{bgc:<2}{pay75pct:1}{nacodate:<10}{cp:1}"
+    line += f"{modeldes:<6}{akpk_status:<9}\n"
+
+    return line
+
+# Additional formats
+DELQDES = {
+    '01': 'RESIDENTIAL PROPERTY',
+    '02': 'NON-RESIDENTIAL PROPERTY',
+    '03': 'MOTOR VEHICLE',
+    '04': 'OTHERS',
+    '  ': 'NOT SPECIFIED'
+}
+
+OCCUPFMT = {
+    '001': 'PROFESSIONAL',
+    '002': 'BUSINESSMAN',
+    '003': 'SELF EMPLOYED',
+    '004': 'EMPLOYEE - PRIVATE',
+    '005': 'EMPLOYEE - GOVERNMENT',
+    '006': 'RETIRED',
+    '999': 'OTHERS'
+}
+
+BGCFMT = {
+    'B': 'BUSINESS',
+    'G': 'GOVERNMENT',
+    'C': 'CORPORATE',
+    'I': 'INDIVIDUAL',
+    '  ': 'NOT SPECIFIED'
+}
+
+def get_delq_desc(delqcd):
+    return DELQDES.get(str(delqcd).strip() if delqcd else '  ', 'UNKNOWN')
+
+def get_occup_desc(occupat):
+    return OCCUPFMT.get(str(occupat).strip() if occupat else '999', 'OTHERS')
+
+def get_bgc_desc(bgc):
+    return BGCFMT.get(str(bgc).strip() if bgc else '  ', 'NOT SPECIFIED')
+
+# ===== MAIN PROCESSING =====
+# Calculate report date (yesterday) - using datetime instead of REPTDATE file
+reptdate = datetime.now() - timedelta(days=1)
 
 day = reptdate.day
-if   day == 8:  wk, wk1 = '1', '4'
-elif day == 15: wk, wk1 = '2', '1'
-elif day == 22: wk, wk1 = '3', '2'
-else:           wk, wk1 = '4', '3'
+if day <= 7:
+    wk = '4'
+    wk1 = '3'
+elif day <= 14:
+    wk = '1'
+    wk1 = '4'
+elif day <= 21:
+    wk = '2'
+    wk1 = '1'
+elif day <= 28:
+    wk = '3'
+    wk1 = '2'
+else:
+    wk = '4'
+    wk1 = '3'
 
-mm, mm1 = reptdate.month, (reptdate.month - 1 if reptdate.month > 1 else 12)
-nowk, nowks, nowk1 = wk, '4', wk1
-reptmon, reptmon1  = f'{mm:02d}', f'{mm1:02d}'
+mm = reptdate.month
+mm1 = mm - 1 if mm > 1 else 12
+
+nowk = wk
+nowks = '4'
+nowk1 = wk1
+reptmon = f'{mm:02d}'
+reptmon1 = f'{mm1:02d}'
 reptyear = f'{reptdate.year % 100:02d}'
-rdate    = reptdate.strftime('%d/%m/%y')
+rdate = reptdate.strftime('%d/%m/%y')
 
-# Dynamic input paths (date-dependent, fully qualified — no ROOT)
-# EIFFTXT1 uses CREDMSUBAC (no 'I' prefix), unlike EIIFTXT1 (ICREDMSUBAC)
-PATH_CCRIS = Path(
-    f'/dwh/iccc_srb/'
-    f'credmsubac{reptmon}{reptyear}.sas7bdat'
-)
-PATH_SASLN = Path(
-    f'/dwh/dwh_m/tempsource/ln/'
-    f'loan{reptmon1}{nowks}.sas7bdat'
-)
+print(f"Processing Bad Debt Write-Off List (Conventional - Filtered by NPL.LIST)")
+print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}")
+print(f"Week: {nowk}, Previous Month: {reptmon1}")
 
-print(f"\n{'='*60}\nBad Debt Write-Off List (Conventional Banking)\n{'='*60}")
-print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}  "
-      f"Week: {nowk}  Prev Month: {reptmon1}")
-print(f"Output Dir : {OUTPUT_DIR}")
-print(f"RIND: D  BIZTYPE: C")
-print(f"{'='*60}\n")
+# ===== Columns needed from LNNOTE =====
+LNNOTE_COLS_NEEDED = [
+    'borstat', 'loantype', 'feedue', 'feeduems', 'feeamt16',
+    'name', 'acctno', 'noteno', 'marketvl', 'ntbrch',
+    'feetotal', 'nfeeamt5', 'feeamt3', 'feetot2', 'feeamta',
+    'feeamt5', 'ecsrrsrv', 'maturedt', 'lasttran',
+    'score2', 'contrtype', 'netproc', 'appvalue', 'birthdt',
+    'orgbal', 'curbal', 'payamt', 'nacospadt', 'intamt',
+    'postntrn', 'intearn4', 'custcode', 'lsttrncd', 'balance',
+    'guarend', 'issxdte', 'colldesc', 'collyear', 'noteterm',
+    'delqcd', 'cp', 'modeldes', 'akpk_status', 'paidind'
+]
 
-# ============================================================================
-# Format maps
-# ============================================================================
-OCCUPFMT = {
-    '001': 'PROFESSIONAL', '002': 'BUSINESSMAN', '003': 'SELF EMPLOYED',
-    '004': 'EMPLOYEE - PRIVATE', '005': 'EMPLOYEE - GOVERNMENT',
-    '006': 'RETIRED', '999': 'OTHERS',
-}
-BGCFMT = {
-    'B': 'BUSINESS', 'G': 'GOVERNMENT', 'C': 'CORPORATE',
-    'I': 'INDIVIDUAL', '  ': 'NOT SPECIFIED',
-}
-def get_delq_desc(d):  return format_delqdes(d) if d else 'NO LEGAL ACTION TAKEN'
-def get_occup_desc(o): return OCCUPFMT.get(o if o else '999', 'OTHERS')
-def get_bgc_desc(b):   return BGCFMT.get(b if b else '  ', 'NOT SPECIFIED')
-
-def get_branch_name(code):
-    m = {1:'HQ',2:'KL',3:'PJ',4:'JB',5:'PG',6:'IP',7:'KK',8:'KU',9:'MK',10:'SB'}
-    return m.get(code, 'BR')
-
-# ============================================================================
-# Helpers
-# ============================================================================
-def read_full(path, columns=None):
-    path = Path(path)
-    if not path.exists():
-        print(f"  WARNING: missing {path}")
-        return None
-    t0 = time.time()
-    print(f"  Reading: {path.name}", end="", flush=True)
-    try:
-        df, _ = pyreadstat.read_sas7bdat(str(path), usecols=columns or None)
-        print(f" - {len(df):,} rows, {time.time()-t0:.1f}s")
-        return pl.from_pandas(df) if len(df) else None
-    except Exception as e:
-        print(f"\n  ERROR: {e}")
-        return None
-
-def read_lnnote_full_filtered(path, columns, excluded_loantypes,
-                              max_mb=RSS_GUARD_MB):
-    """
-    Single full read + immediate filter. Linear time, bounded RSS.
-    EIFFTXT1: filter BORSTAT='A' AND LOANTYPE NOT IN excluded (per SAS).
-    """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-
-    rss_start = _rss_mb()
-    if rss_start > max_mb:
-        raise MemoryError(f"RSS {rss_start:.0f}MB already over guard {max_mb}MB")
-
-    t0 = time.time()
-    print(f"  Reading FULL {path.name} ({len(columns)} cols)...", flush=True)
-    df, _ = pyreadstat.read_sas7bdat(str(path), usecols=columns)
-    print(f"  Loaded {len(df):,} rows in {time.time()-t0:.1f}s  "
-          f"RSS {_rss_mb():.0f}MB", flush=True)
-
-    if _rss_mb() > max_mb:
-        del df; gc.collect()
-        raise MemoryError(f"RSS over guard {max_mb}MB after load")
-
-    p = pl.from_pandas(df)
-    del df
-    gc.collect()
-    print(f"  Converted to Polars, RSS {_rss_mb():.0f}MB", flush=True)
-
-    p = p.with_columns(
-        pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars()
-    ).filter(
-        (pl.col('BORSTAT') == 'A') &
-        (~pl.col('LOANTYPE').is_in(excluded_loantypes))
+# ===== Read LNNOTE once (like EIFFTXT1) =====
+print("Reading LNNOTE...")
+try:
+    df_lnnote = read_sas_columns(
+        f'{LOAN_DIR}lnnote.sas7bdat',
+        LNNOTE_COLS_NEEDED,
+        required=['borstat', 'loantype', 'acctno', 'noteno'],
+        disable_datetime_conversion=True,
+        encoding='latin1',
     )
-    print(f"  Filtered to {p.height:,} rows, RSS {_rss_mb():.0f}MB", flush=True)
-    return p
-
-def standardize_schema(df, schema):
-    if df is None or df.height == 0:
-        return df
-    exprs = [pl.col(c).cast(dt) for c, dt in schema.items() if c in df.columns]
-    return df.with_columns(exprs) if exprs else df
-
-def empty_df(schema):
-    return pl.DataFrame(schema=schema)
-
-def align(df, cols):
-    for c in cols:
-        if c not in df.columns:
-            df = df.with_columns(pl.lit(None).alias(c))
-    return df.select(cols)
-
-def calc_mthpdue(days):
-    """SAS: MTHPDUE = PUT(DAYS,MTHPASS.)*1; IF MTHPDUE=24 THEN INT((DAYS/365)*12);"""
-    if days is None or days <= 0:
-        return 0
-    s = format_mthpass(days)
-    v = int(s) if s else 0
-    if v == 24:
-        v = int((days / 365) * 12)
-    return v
-
-def decode_z11_mmddyy(v):
-    """SAS: INPUT(SUBSTR(PUT(val,Z11.),1,8),MMDDYY8.) -> date."""
-    if v is None or v == 0:
-        return None
+    print(f"Successfully read {len(df_lnnote)} records from LNNOTE")
+except Exception as e:
+    print(f"pyreadstat-based safe reader failed: {e}")
+    print("Trying pandas SAS reader as a last resort...")
     try:
-        head = str(int(v)).zfill(11)[:8]
-        return datetime.strptime(head, '%m%d%y').date()
-    except Exception:
-        return None
+        df_lnnote = pd.read_sas(
+            f'{LOAN_DIR}lnnote.sas7bdat',
+            format='sas7bdat',
+            encoding='latin1'
+        )
+        df_lnnote.columns = [c.lower() for c in df_lnnote.columns]
+        existing_cols = [col for col in LNNOTE_COLS_NEEDED if col in df_lnnote.columns]
+        df_lnnote = df_lnnote[existing_cols]
+        print(f"Successfully read {len(df_lnnote)} records using pandas")
+    except Exception as e2:
+        print(f"All readers failed. Error: {e2}")
+        sys.exit(1)
 
-def fmt_mmddyy10(d):
-    return d.strftime('%m/%d/%Y') if isinstance(d, date) else ''
+ensure_columns(df_lnnote, ['borstat', 'loantype', 'acctno', 'noteno'], context="LNNOTE")
+if len(df_lnnote) == 0:
+    print("ERROR: LNNOTE read returned 0 rows.")
+    sys.exit(1)
 
-def _safe_float(s, default=0.0):
-    try:
-        return float(s.strip()) if s and s.strip() else default
-    except (ValueError, TypeError):
-        m = re.match(r'^\s*([+-]?\d+(?:\.\d+)?)', s or '')
-        return float(m.group(1)) if m else default
+# Step 1: KEY DIFFERENCE FROM EIFFTXT1 - Create NPLA with BORSTAT='A' only, NO LOANTYPE exclusion
+print("Step 1: Creating NPLA (BORSTAT='A' only, no loan type exclusion)...")
+mask_npla = (df_lnnote['borstat'] == 'A')
+df_npla = df_lnnote[mask_npla].copy()
 
-# ============================================================================
-# SASPy session (lazy init)
-# ============================================================================
-_SAS_SESSION = None
-def get_sas_session():
-    global _SAS_SESSION
-    if _SAS_SESSION is not None:
-        return _SAS_SESSION
-    if not _SASPY_OK:
-        print("  SASPy not installed — SAS7BDAT writes will be skipped")
-        return None
-    try:
-        _SAS_SESSION = saspy.SASsession(cfgname='default')
-        print(f"  SAS session ready: {_SAS_SESSION}")
-        _SAS_SESSION.saslib('NPLOUT', path=str(OUTPUT_DIR))
-        print(f"  libref NPLOUT -> {OUTPUT_DIR}")
-        return _SAS_SESSION
-    except Exception as e:
-        print(f"  SASPy init failed: {e}")
-        return None
+df_npla['iis'] = 0
+df_npla['oi'] = df_npla['feedue'] - df_npla['feeduems']
+df_npla['totiis'] = df_npla['oi']
+df_npla['sp'] = df_npla['feeduems'] + df_npla['feeamt16']
 
-def write_sas7bdat_saspy(df, table_name, libref='NPLOUT'):
-    sas = get_sas_session()
-    if sas is None:
-        print(f"  Skipped {libref}.{table_name} (no SAS session)")
-        return False
-    try:
-        pdf = df.to_pandas()
-        sas.df2sd(pdf, table=table_name, libref=libref)
-        print(f"  {libref}.{table_name} written via SASPy")
-        return True
-    except Exception as e:
-        print(f"  SASPy write failed for {libref}.{table_name}: {e}")
-        return False
+# Branch formatting (vectorized)
+branch_map = {1: 'KL', 2: 'PJ', 3: 'JB', 4: 'PG', 5: 'IP'}
+ntbrch_int = pd.to_numeric(df_npla['ntbrch'], errors='coerce').fillna(0).astype(int)
+branch_abbr = ntbrch_int.map(branch_map).fillna('UNK')
+branch_code_str = ntbrch_int.astype(str).str.zfill(3)
+df_npla['branch'] = branch_abbr + ' ' + branch_code_str
 
-# Canonical NPL column order
-NPL_COLS = ['NAME', 'ACCTNO', 'NOTENO', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH']
+df_npla = df_npla[['name', 'acctno', 'noteno', 'iis', 'oi', 'totiis', 'sp', 'marketvl', 'branch']]
 
-# ============================================================================
-# STEP 1: Read NPLA (BORSTAT='A', LOANTYPE NOT IN excluded)
-# ============================================================================
-print("STEP 1: Reading NPLA (BORSTAT='A', LOANTYPE NOT IN excluded)...")
-start_total = time.time()
+# Derive HPD loan rows from same LNNOTE frame
+print("Deriving HPD loan rows from LNNOTE...")
+df_loan_raw = df_lnnote[df_lnnote['loantype'].isin(HPD)].copy()
+df_loan_raw = df_loan_raw.drop_duplicates(subset=['acctno', 'noteno'])
+print(f"HPD loan records: {len(df_loan_raw)}")
 
-loan_columns = [
-    'BORSTAT', 'LOANTYPE', 'NAME', 'ACCTNO', 'NOTENO',
-    'FEEDUE', 'FEEDUEMS', 'FEEAMT16', 'MARKETVL', 'NTBRCH',
-    'FEETOTAL', 'NFEEAMT5', 'FEEAMT3', 'FEETOT2', 'FEEAMTA', 'FEEAMT5',
-    'ECSRRSRV', 'MATUREDT', 'LASTTRAN', 'SCORE2', 'CONTRTYPE', 'NETPROC',
-    'APPVALUE', 'BIRTHDT', 'ORGBAL', 'CURBAL', 'PAYAMT', 'NACOSPADT',
-    'BALANCE', 'GUAREND', 'ISSXDTE', 'COLLDESC', 'COLLYEAR', 'DELQCD',
-    'CP', 'MODELDES', 'AKPK_STATUS', 'PAIDIND', 'POSTNTRN', 'INTAMT',
-    'INTEARN4', 'CUSTCODE', 'LSTTRNCD',
+del df_lnnote
+gc.collect()
+
+# Step 2: Get IIS and SP data
+print("Step 2: Reading IIS and SP data...")
+try:
+    df_iis = read_sas_columns(
+        f'{NPL_DIR}iis.sas7bdat',
+        ['acctno', 'noteno', 'iis', 'oi', 'totiis', 'name', 'sp', 'marketvl', 'branch'],
+        required=['acctno', 'noteno'],
+        allow_missing_file=True,
+    )
+except Exception as e:
+    print(f"  Warning: could not read iis.sas7bdat cleanly ({e}); using empty frame.")
+    df_iis = pd.DataFrame(columns=['acctno', 'noteno', 'iis', 'oi', 'totiis', 'name', 'sp', 'marketvl', 'branch'])
+
+try:
+    df_sp = read_sas_columns(
+        f'{NPL_DIR}sp2.sas7bdat',
+        ['acctno', 'noteno', 'sp', 'name', 'marketvl', 'branch'],
+        required=['acctno', 'noteno'],
+        allow_missing_file=True,
+    )
+except Exception as e:
+    print(f"  Warning: could not read sp2.sas7bdat cleanly ({e}); using empty frame.")
+    df_sp = pd.DataFrame(columns=['acctno', 'noteno', 'sp', 'name', 'marketvl', 'branch'])
+
+df_iis = df_iis.drop_duplicates(subset=['acctno', 'noteno'])
+df_sp = df_sp.drop_duplicates(subset=['acctno', 'noteno'])
+
+df_npl_data = df_sp.merge(df_iis, on=['acctno', 'noteno'], how='outer')
+cols_needed = ['name', 'acctno', 'noteno', 'iis', 'oi', 'totiis', 'sp', 'marketvl', 'branch']
+existing_cols = [col for col in cols_needed if col in df_npl_data.columns]
+df_npl_data = df_npl_data[existing_cols]
+
+# KEY DIFFERENCE: Delete specific account ACCTNO=8396846630 AND NOTENO=90011
+print("Removing specific account: ACCTNO=8396846630, NOTENO=90011")
+df_npl_data = df_npl_data[
+    ~((df_npl_data['acctno'] == 8396846630) & (df_npl_data['noteno'] == 90011))
 ]
 
-df_npla_raw = read_lnnote_full_filtered(
-    PATH_LN_NOTE, columns=loan_columns, excluded_loantypes=EXCLUDED_LOANTYPES)
+# Combine NPLA and NPL data
+df_npl = pd.concat([df_npla, df_npl_data], ignore_index=True)
+df_npl['marketvl'] = df_npl['marketvl'].round(2)
+df_npl['brno'] = df_npl['branch'].str[3:7]
+df_npl['brabr'] = df_npl['branch'].str[0:3]
+df_npl = df_npl.drop_duplicates(subset=['acctno', 'noteno'])
 
-if df_npla_raw.height == 0:
-    print("WARNING: No active accounts (BORSTAT='A', LOANTYPE not excluded). Exiting.")
-    sys.exit(0)
-print(f"  NPLA survivors: {df_npla_raw.height:,}")
+print(f"NPL records: {len(df_npl)}")
 
-df_npla_raw = standardize_schema(df_npla_raw, {
-    'ACCTNO': pl.Float64, 'NOTENO': pl.Float64,
-    'FEEDUE': pl.Float64, 'FEEDUEMS': pl.Float64, 'FEEAMT16': pl.Float64,
-    'MARKETVL': pl.Float64, 'NTBRCH': pl.Float64, 'LOANTYPE': pl.Float64,
-})
+# Step 3: Get CCRIS credit submission data (CONVENTIONAL - CREDMSUBAC)
+print("Step 3: Reading CREDMSUBAC...")
+credmsubac_file = f'{CCRIS_DIR}credmsubac{reptmon}{reptyear}.sas7bdat'
+if os.path.exists(credmsubac_file):
+    try:
+        df_credsub = read_sas_columns(
+            credmsubac_file,
+            ['facility', 'acctnum', 'daysarr', 'noteno'],
+            required=['facility', 'acctnum', 'daysarr', 'noteno'],
+        )
+        df_credsub = df_credsub[
+            df_credsub['facility'].astype(str).isin(['34331', '34332'])
+        ].rename(columns={'acctnum': 'acctno', 'daysarr': 'days'})
 
-branch_vals = []
-for n in df_npla_raw['NTBRCH'].to_list():
-    if n is None:
-        branch_vals.append('BR 000')
-    else:
-        try:
-            c = int(n) if isinstance(n, float) else n
-            branch_vals.append(f"{get_branch_name(c)} {int(c):03d}")
-        except Exception:
-            branch_vals.append('BR 000')
-
-df_npla = (df_npla_raw
-           .with_columns([
-               pl.Series('BRANCH', branch_vals),
-               pl.lit(0.0).alias('IIS'),
-               (pl.col('FEEDUE').fill_null(0) - pl.col('FEEDUEMS').fill_null(0)).alias('OI'),
-               (pl.lit(0.0) + (pl.col('FEEDUE').fill_null(0) - pl.col('FEEDUEMS').fill_null(0))).alias('TOTIIS'),
-               (pl.col('FEEDUEMS').fill_null(0) + pl.col('FEEAMT16').fill_null(0)).alias('SP'),
-           ])
-           .select(NPL_COLS))
-print(f"  NPLA ready: {df_npla.height:,} rows\n")
-
-# ============================================================================
-# STEP 2: IIS / SP2 — SAS MERGE precedence (IIS wins on collision)
-# ============================================================================
-print("STEP 2: IIS / SP2...")
-_iis_cols = ['ACCTNO','NOTENO','NAME','IIS','OI','TOTIIS','SP','MARKETVL','BRANCH']
-df_iis = read_full(PATH_IIS, columns=_iis_cols)
-df_sp  = read_full(PATH_SP2, columns=_iis_cols)
-
-if df_iis is not None:
-    df_iis = standardize_schema(df_iis, {'ACCTNO':pl.Float64,'NOTENO':pl.Float64,
-        'IIS':pl.Float64,'OI':pl.Float64,'TOTIIS':pl.Float64,'SP':pl.Float64,
-        'MARKETVL':pl.Float64}).unique(subset=['ACCTNO','NOTENO'])
-if df_sp is not None:
-    df_sp = standardize_schema(df_sp, {'ACCTNO':pl.Float64,'NOTENO':pl.Float64,
-        'IIS':pl.Float64,'OI':pl.Float64,'TOTIIS':pl.Float64,'SP':pl.Float64,
-        'MARKETVL':pl.Float64}).unique(subset=['ACCTNO','NOTENO'])
-
-print(f"  IIS: {df_iis.height if df_iis is not None else 0:,}  "
-      f"SP2: {df_sp.height if df_sp is not None else 0:,}")
-
-if df_iis is not None and df_sp is not None and df_iis.height == df_sp.height:
-    print(f"  WARNING: IIS and SP2 have identical row counts ({df_iis.height:,}). "
-          f"Verify: {PATH_IIS.name} vs {PATH_SP2.name}")
-
-if df_iis is not None and df_sp is not None and df_iis.height and df_sp.height:
-    overlap = [c for c in df_iis.columns
-               if c in df_sp.columns and c not in ('ACCTNO','NOTENO')]
-    df_npl_data = (df_sp.join(df_iis, on=['ACCTNO','NOTENO'], how='full', suffix='_iis')
-                        .with_columns([pl.coalesce([pl.col(f'{c}_iis'), pl.col(c)]).alias(c)
-                                       for c in overlap])
-                        .select(NPL_COLS))
-elif df_iis is not None and df_iis.height:
-    df_npl_data = df_iis.select(NPL_COLS)
-elif df_sp is not None and df_sp.height:
-    df_npl_data = df_sp.select(NPL_COLS)
+        df_credsub = df_credsub.sort_values(
+            ['acctno', 'noteno', 'days'],
+            ascending=[True, True, False]
+        )
+        df_credsub = df_credsub.drop_duplicates(subset=['acctno', 'noteno'])
+        df_credsub = df_credsub[['acctno', 'noteno', 'days', 'facility']]
+        print(f"CREDMSUBAC records: {len(df_credsub)}")
+    except Exception as e:
+        print(f"Error reading CREDMSUBAC: {e}")
+        df_credsub = pd.DataFrame(columns=['acctno', 'noteno', 'days', 'facility'])
 else:
-    df_npl_data = empty_df({
-        'NAME':pl.Utf8,'ACCTNO':pl.Float64,'NOTENO':pl.Float64,
-        'IIS':pl.Float64,'OI':pl.Float64,'TOTIIS':pl.Float64,
-        'SP':pl.Float64,'MARKETVL':pl.Float64,'BRANCH':pl.Utf8})
+    print(f"Warning: {credmsubac_file} not found.")
+    df_credsub = pd.DataFrame(columns=['acctno', 'noteno', 'days', 'facility'])
 
-del df_iis, df_sp
-gc.collect()
+# Step 4: Merge NPL, CREDSUB, and LOAN
+print("Merging NPL, CREDSUB, and LOAN data...")
+df_loan = df_npl.merge(df_credsub, on=['acctno', 'noteno'], how='left')
+df_loan = df_loan.merge(df_loan_raw, on=['acctno', 'noteno'], how='left', suffixes=('', '_loan'))
+df_loan = df_loan[df_loan['acctno'].notna()]
 
-# ============================================================================
-# STEP 3: Combine NPLA + NPL — align schemas first
-# ============================================================================
-print("\nSTEP 3: Combine NPL...")
+print(f"Merged loan records: {len(df_loan)}")
 
-df_npla     = align(df_npla,     NPL_COLS)
-df_npl_data = align(df_npl_data, NPL_COLS)
+# Step 5: Calculate derived fields (vectorized - same as EIFFTXT1)
+print("Step 5: Calculating derived fields...")
+for col in ['feetotal', 'nfeeamt5', 'feeamt3', 'feetot2', 'feeamta', 'feeamt5']:
+    if col not in df_loan.columns:
+        df_loan[col] = 0
 
-df_npla = standardize_schema(df_npla, {
-    'ACCTNO':pl.Float64,'NOTENO':pl.Float64,'IIS':pl.Float64,
-    'OI':pl.Float64,'TOTIIS':pl.Float64,'SP':pl.Float64,'MARKETVL':pl.Float64,
-})
-df_npl_data = standardize_schema(df_npl_data, {
-    'ACCTNO':pl.Float64,'NOTENO':pl.Float64,'IIS':pl.Float64,
-    'OI':pl.Float64,'TOTIIS':pl.Float64,'SP':pl.Float64,'MARKETVL':pl.Float64,
-})
+df_loan['postamt'] = df_loan['feetotal'].fillna(0) + df_loan['nfeeamt5'].fillna(0)
+df_loan['otheramt'] = df_loan['feeamt3'].fillna(0) - df_loan['postamt']
+df_loan['oifeeamt'] = df_loan['feetot2'].fillna(0) - df_loan['feeamta'].fillna(0) + df_loan['feeamt5'].fillna(0)
+df_loan['ecsrrsrv'] = df_loan.get('ecsrrsrv', 0)
+df_loan['ecsrrsrv'] = df_loan['ecsrrsrv'].apply(lambda x: 0 if pd.isna(x) or x <= 0 else x)
 
-if df_npl_data.height > 0:
-    df_npl = pl.concat([df_npla, df_npl_data], how='vertical')
-else:
-    df_npl = df_npla.clone()
+# Date formatting
+df_loan['matdate'] = df_loan['maturedt'].apply(lambda x: safe_format_date(x, format_mmddyy10)) if 'maturedt' in df_loan.columns else ''
+df_loan['lasttra1'] = df_loan['lasttran'].apply(lambda x: safe_format_date(x, format_mmddyy10)) if 'lasttran' in df_loan.columns else ''
 
-df_npl = (df_npl
-          .with_columns([
-              pl.col('MARKETVL').fill_null(0).round(2),
-              pl.col('BRANCH').str.slice(3, 4).alias('BRNO'),
-              pl.col('BRANCH').str.slice(0, 3).alias('BRABBR'),
-          ])
-          .unique(subset=['ACCTNO','NOTENO'], keep='first'))
-del df_npl_data
-gc.collect()
-print(f"  NPL combined: {df_npl.height:,}\n")
+# Months past due
+df_loan['days'] = df_loan['days'].fillna(0).astype(int) if 'days' in df_loan.columns else 0
+df_loan['mthpdue'] = df_loan['days'].apply(mthpass_format)
+mask = df_loan['mthpdue'] == 24
+df_loan.loc[mask, 'mthpdue'] = (df_loan.loc[mask, 'days'] / 365 * 12).astype(int)
 
-# ============================================================================
-# STEP 4: CCRIS (CREDMSUBAC — no 'I' prefix)
-# ============================================================================
-print("STEP 4: CCRIS (CREDMSUBAC)...")
-ccris_paths = [
-    PATH_CCRIS,
-    PATH_CCRIS.with_name(f'CREDMSUBAC{reptmon}{reptyear}.sas7bdat'),
-    PATH_CCRIS.with_name(f'credmsubac{reptmon}0{reptyear}.sas7bdat'),
-    PATH_CCRIS.with_name(f'CREDMSUBAC{reptmon}0{reptyear}.sas7bdat'),
-]
-df_credsub = None
-for p in ccris_paths:
-    df_credsub = read_full(p)
-    if df_credsub is not None:
-        print(f"  Found: {p.name}")
-        break
+# Credit grade
+df_loan['score2'] = df_loan.get('score2', '').fillna('').astype(str) if 'score2' in df_loan.columns else ''
+df_loan['contrtype'] = df_loan.get('contrtype', '').fillna('').astype(str) if 'contrtype' in df_loan.columns else ''
+df_loan['crrgrade'] = (df_loan['score2'].astype(str) + df_loan['contrtype'].astype(str)).str.strip()
 
-if df_credsub is not None and df_credsub.height:
-    acct_col = next((c for c in df_credsub.columns
-                     if c.lower() in ('acctnum','acctno','acct_num','account','accountno')), None)
-    days_col = next((c for c in df_credsub.columns
-                     if c.lower() in ('daysarr','days','days_arr','daysarrears')), None)
-    fac_col  = next((c for c in df_credsub.columns
-                     if c.lower() in ('facility','facility_cd','facilitycd','fac')), None)
-    print(f"  cols -> ACCT:{acct_col} DAYS:{days_col} FAC:{fac_col}")
+# Margin of financing
+df_loan['netproc'] = df_loan['netproc'].fillna(0) if 'netproc' in df_loan.columns else 0
+df_loan['appvalue'] = df_loan['appvalue'].fillna(0) if 'appvalue' in df_loan.columns else 0
+df_loan['marginfi'] = np.where(
+    df_loan['appvalue'] > 0,
+    (df_loan['netproc'] / df_loan['appvalue']).round(2),
+    0
+)
 
-    if acct_col is None:
-        df_credsub = empty_df({'ACCTNO':pl.Float64,'NOTENO':pl.Float64,
-                               'DAYS':pl.Float64,'FACILITY':pl.Utf8})
-    else:
-        ren = {}
-        if acct_col != 'ACCTNO': ren[acct_col] = 'ACCTNO'
-        if days_col and days_col != 'DAYS': ren[days_col] = 'DAYS'
-        if fac_col and fac_col != 'FACILITY': ren[fac_col] = 'FACILITY'
-        if ren: df_credsub = df_credsub.rename(ren)
+# Date of birth
+df_loan['dobmni'] = df_loan['birthdt'].apply(safe_get_date) if 'birthdt' in df_loan.columns else None
 
-        if 'FACILITY' in df_credsub.columns:
-            df_credsub = df_credsub.filter(pl.col('FACILITY').is_in(['34331','34332']))
+# ECSR indicator
+df_loan['ecsrind'] = np.where(df_loan['ecsrrsrv'] > 0, 'Y', 'N')
 
-        keep = [c for c in ['ACCTNO','NOTENO','DAYS','FACILITY'] if c in df_credsub.columns]
-        df_credsub = df_credsub.select(keep)
-        if {'ACCTNO','NOTENO'} <= set(df_credsub.columns):
-            df_credsub = (df_credsub
-                          .sort(['ACCTNO','NOTENO','DAYS'], descending=[False,False,True])
-                          .unique(subset=['ACCTNO','NOTENO'], keep='first'))
-        df_credsub = standardize_schema(df_credsub, {
-            'ACCTNO':pl.Float64,'NOTENO':pl.Float64,'DAYS':pl.Float64})
-else:
-    df_credsub = empty_df({'ACCTNO':pl.Float64,'NOTENO':pl.Float64,
-                           'DAYS':pl.Float64,'FACILITY':pl.Utf8})
-print(f"  CCRIS: {df_credsub.height:,}\n")
+# Bills paid
+df_loan['orgbal'] = df_loan.get('orgbal', 0)
+df_loan['orgbal'] = df_loan['orgbal'].fillna(0) if 'orgbal' in df_loan.columns else 0
+df_loan['curbal'] = df_loan['curbal'].fillna(0) if 'curbal' in df_loan.columns else 0
+df_loan['payamt'] = df_loan['payamt'].fillna(0) if 'payamt' in df_loan.columns else 0
 
-# ============================================================================
-# STEP 5: LOAN (HPD types) — LOAN wins on collision
-# ============================================================================
-print("STEP 5: Filtering HPD loan types...")
-if 'LOANTYPE' in df_npla_raw.columns:
-    df_loan_src = (df_npla_raw
-                   .select(['ACCTNO','NOTENO','LOANTYPE'])
-                   .unique(subset=['ACCTNO','NOTENO'])
-                   .filter(pl.col('LOANTYPE').is_in(HPD)))
-else:
-    df_loan_src = empty_df({'ACCTNO':pl.Float64,'NOTENO':pl.Float64,'LOANTYPE':pl.Float64})
-print(f"  HPD rows: {df_loan_src.height:,}\n")
+with np.errstate(divide='ignore', invalid='ignore'):
+    bilpaid_ratio = (df_loan['orgbal'] - df_loan['curbal']) / df_loan['payamt']
+bilpaid_ratio = bilpaid_ratio.replace([np.inf, -np.inf], 0).fillna(0)
+df_loan['bilpaid'] = np.where(
+    df_loan['payamt'] > 0,
+    bilpaid_ratio.astype(int),
+    0
+)
 
-# ============================================================================
-# STEP 6: MERGE NPL(IN=AA) CREDSUB LOAN; IF AA -> keep NPL, LOAN wins
-# ============================================================================
-print("STEP 6: MERGE NPL / CREDSUB / LOAN...")
+# NACO special attention
+df_loan['nacospadt'] = df_loan.get('nacospadt', 0)
+df_loan['pay75pct'] = np.where(df_loan['nacospadt'].fillna(0) > 0, 'Y', 'N')
+df_loan['nacodate'] = df_loan['nacospadt'].apply(lambda x: safe_format_date(x, format_mmddyy10))
 
-df_loan = df_npl.clone()
+print("Derived fields calculated")
 
-# CREDSUB
-if df_credsub.height > 0:
-    df_loan = df_loan.join(df_credsub, on=['ACCTNO','NOTENO'], how='left')
-else:
-    df_loan = df_loan.with_columns([
-        pl.lit(None).cast(pl.Float64).alias('DAYS'),
-        pl.lit(None).cast(pl.Utf8).alias('FACILITY'),
-    ])
-del df_credsub
-gc.collect()
+# Step 6: Get customer names
+print("Step 6: Reading customer names...")
+try:
+    df_cname = read_sas_columns(
+        f'{CISNAME_DIR}loan.sas7bdat',
+        ['acctno', 'custnam1', 'occupat', 'bgc', 'seccust'],
+        required=['acctno', 'seccust'],
+    )
+    df_cname = df_cname[df_cname['seccust'].astype(str) == '901']
+    df_cname = df_cname[['acctno', 'custnam1', 'occupat', 'bgc']].drop_duplicates(subset=['acctno'])
+    print(f"Customer records: {len(df_cname)}")
+except Exception as e:
+    print(f"Error reading customer names: {e}")
+    df_cname = pd.DataFrame(columns=['acctno', 'custnam1', 'occupat', 'bgc'])
 
-# LOAN — LOAN wins on overlap
-if df_loan_src.height > 0:
-    ov = [c for c in df_loan_src.columns
-          if c in df_loan.columns and c not in ('ACCTNO','NOTENO')]
-    df_loan = (df_loan.join(df_loan_src, on=['ACCTNO','NOTENO'], how='left', suffix='_loan')
-                      .with_columns([pl.coalesce([pl.col(f'{c}_loan'), pl.col(c)]).alias(c)
-                                     for c in ov]))
-else:
-    df_loan = df_loan.with_columns(pl.lit(None).cast(pl.Float64).alias('LOANTYPE'))
-del df_loan_src
-gc.collect()
+# Step 7: Get guarantors
+print("Step 7: Reading liability data...")
+liab_file = f'{LOAN_DIR}lnliab{reptmon}{nowk}{reptyear}.sas7bdat'
+try:
+    df_liab = read_sas_columns(
+        liab_file,
+        ['acctno', 'noteno', 'liabacct', 'liabname'],
+        required=['acctno', 'noteno', 'liabacct'],
+    )
+    df_liab = df_liab.sort_values('liabacct')
 
-# ============================================================================
-# STEP 7: Extras (derived fields)
-# ============================================================================
-print("STEP 7: Derived fields...")
-extra_cols = ['ACCTNO','NOTENO','FEETOTAL','NFEEAMT5','FEEAMT3','FEETOT2',
-              'FEEAMTA','FEEAMT5','ECSRRSRV','MATUREDT','LASTTRAN','SCORE2',
-              'CONTRTYPE','NETPROC','APPVALUE','BIRTHDT','ORGBAL','CURBAL',
-              'PAYAMT','NACOSPADT','BALANCE','GUAREND','ISSXDTE','COLLDESC',
-              'COLLYEAR','DELQCD','CP','MODELDES','AKPK_STATUS','BORSTAT',
-              'PAIDIND','POSTNTRN','INTAMT','INTEARN4','CUSTCODE','LSTTRNCD']
-
-avail = [c for c in extra_cols if c in df_npla_raw.columns]
-df_extra = df_npla_raw.select(avail).unique(subset=['ACCTNO','NOTENO'])
-for c in ('FEETOTAL','NFEEAMT5','FEEAMT3','FEETOT2','FEEAMTA','FEEAMT5',
-          'ECSRRSRV','NETPROC','APPVALUE','ORGBAL','CURBAL','PAYAMT',
-          'BALANCE','INTAMT','INTEARN4','CUSTCODE','LSTTRNCD'):
-    if c in df_extra.columns:
-        df_extra = df_extra.with_columns(pl.col(c).cast(pl.Float64))
-
-ov = [c for c in df_extra.columns
-      if c in df_loan.columns and c not in ('ACCTNO','NOTENO')]
-df_loan = (df_loan.join(df_extra, on=['ACCTNO','NOTENO'], how='left', suffix='_x')
-                  .with_columns([pl.coalesce([pl.col(f'{c}_x'), pl.col(c)]).alias(c)
-                                 for c in ov]))
-del df_extra, df_npla_raw
-gc.collect()
-
-for c in ('FEETOTAL','NFEEAMT5','FEEAMT3','FEETOT2','FEEAMTA','FEEAMT5',
-          'ECSRRSRV','ORGBAL','CURBAL','PAYAMT','NACOSPADT','SCORE2',
-          'CONTRTYPE','NETPROC','APPVALUE'):
-    if c not in df_loan.columns:
-        df_loan = df_loan.with_columns(pl.lit(None).cast(pl.Float64).alias(c))
-
-# Derived numeric
-df_loan = df_loan.with_columns(
-    (pl.col('FEETOTAL').fill_null(0) + pl.col('NFEEAMT5').fill_null(0)).alias('POSTAMT'))
-df_loan = df_loan.with_columns(
-    (pl.col('FEEAMT3').fill_null(0) - pl.col('POSTAMT')).alias('OTHERAMT'))
-df_loan = df_loan.with_columns(
-    (pl.col('FEETOT2').fill_null(0) - pl.col('FEEAMTA').fill_null(0) + pl.col('FEEAMT5').fill_null(0)).alias('OIFEEAMT'))
-
-# ECSRRSRV / ECSRIND
-df_loan = df_loan.with_columns(
-    pl.when(pl.col('ECSRRSRV').is_null() | (pl.col('ECSRRSRV') <= 0))
-      .then(0.0).otherwise(pl.col('ECSRRSRV')).alias('ECSRRSRV'))
-df_loan = df_loan.with_columns(
-    pl.when(pl.col('ECSRRSRV') > 0).then(pl.lit('Y')).otherwise(pl.lit('N')).alias('ECSRIND'))
-
-# MATUREDT / LASTTRAN / BIRTHDT -> date strings
-df_loan = df_loan.with_columns([
-    pl.col('MATUREDT').map_elements(decode_z11_mmddyy, return_dtype=pl.Date).alias('_MATD'),
-    pl.col('LASTTRAN').map_elements(decode_z11_mmddyy, return_dtype=pl.Date).alias('_LASTD'),
-    pl.col('BIRTHDT').map_elements(decode_z11_mmddyy, return_dtype=pl.Date).alias('_DOBD'),
-])
-df_loan = df_loan.with_columns([
-    pl.col('_MATD').map_elements(fmt_mmddyy10, return_dtype=pl.Utf8).alias('MATDATE'),
-    pl.col('_LASTD').map_elements(fmt_mmddyy10, return_dtype=pl.Utf8).alias('LASTTRA1'),
-    pl.col('_DOBD').map_elements(fmt_mmddyy10, return_dtype=pl.Utf8).alias('DOBMNI'),
-]).drop(['_MATD','_LASTD','_DOBD'])
-
-# MTHPDUE
-if 'DAYS' in df_loan.columns:
-    df_loan = df_loan.with_columns(
-        pl.col('DAYS').map_elements(calc_mthpdue, return_dtype=pl.Int64).alias('MTHPDUE'))
-else:
-    df_loan = df_loan.with_columns(pl.lit(0).alias('MTHPDUE'))
-
-# CRRGRADE
-def _trunc_str(v):
-    if v is None: return ''
-    if isinstance(v, float):
-        return str(int(v)) if v == int(v) else str(v).rstrip('0').rstrip('.')
-    return str(v).strip()
-
-df_loan = df_loan.with_columns(
-    (pl.col('SCORE2').map_elements(_trunc_str, return_dtype=pl.Utf8) +
-     pl.col('CONTRTYPE').map_elements(_trunc_str, return_dtype=pl.Utf8)).alias('CRRGRADE'))
-
-# MARGINFI
-df_loan = df_loan.with_columns(
-    pl.when(pl.col('APPVALUE').is_not_null() & (pl.col('APPVALUE') != 0))
-      .then((pl.col('NETPROC') / pl.col('APPVALUE')).round(2))
-      .otherwise(0.0).alias('MARGINFI'))
-
-# BILPAID (SAS INT -> floor)
-df_loan = df_loan.with_columns(
-    pl.when(pl.col('PAYAMT').is_not_null() & (pl.col('PAYAMT') > 0))
-      .then(((pl.col('ORGBAL').fill_null(0) - pl.col('CURBAL').fill_null(0)) / pl.col('PAYAMT')).floor())
-      .otherwise(0).cast(pl.Int64).alias('BILPAID'))
-
-# PAY75PCT / NACODATE
-df_loan = df_loan.with_columns(
-    pl.when(pl.col('NACOSPADT').is_not_null() & (pl.col('NACOSPADT') > 0))
-      .then(pl.lit('Y')).otherwise(pl.lit('N')).alias('PAY75PCT'))
-df_loan = df_loan.with_columns(
-    pl.when(pl.col('NACOSPADT').is_not_null() & (pl.col('NACOSPADT') > 0))
-      .then(pl.col('NACOSPADT').map_elements(
-          lambda v: fmt_mmddyy10(decode_z11_mmddyy(v)), return_dtype=pl.Utf8))
-      .otherwise(pl.lit('')).alias('NACODATE'))
-
-# Drop helpers
-drop_helpers = ['FEETOTAL','NFEEAMT5','FEEAMT3','FEETOT2','FEEAMTA','FEEAMT5',
-                'ECSRRSRV','MATUREDT','LASTTRAN','SCORE2','CONTRTYPE','NETPROC',
-                'APPVALUE','BIRTHDT','ORGBAL','PAYAMT','NACOSPADT']
-df_loan = df_loan.drop([c for c in drop_helpers if c in df_loan.columns])
-gc.collect()
-print(f"  LOAN ready: {df_loan.height:,}\n")
-
-# ============================================================================
-# STEP 8: CNAME
-# ============================================================================
-print("STEP 8: Customer names...")
-df_cname = read_full(PATH_CNAME,
-                     columns=['ACCTNO','CUSTNAM1','OCCUPAT','BGC','SECCUST'])
-if df_cname is not None:
-    df_cname = (standardize_schema(df_cname, {'ACCTNO':pl.Float64})
-                .filter(pl.col('SECCUST') == '901')
-                .select(['ACCTNO','CUSTNAM1','OCCUPAT','BGC'])
-                .unique(subset=['ACCTNO']))
-else:
-    df_cname = empty_df({'ACCTNO':pl.Float64,'CUSTNAM1':pl.Utf8,
-                         'OCCUPAT':pl.Utf8,'BGC':pl.Utf8})
-print(f"  CNAME: {df_cname.height:,}\n")
-
-# ============================================================================
-# STEP 9: Guarantors
-# ============================================================================
-print("STEP 9: Guarantors...")
-guarantor_data = {}
-df_liab = read_full(PATH_LIAB,
-                    columns=['ACCTNO','NOTENO','LIABACCT','LIABNAME'])
-if df_liab is not None and df_cname.height:
-    df_liab = standardize_schema(df_liab, {
-        'ACCTNO':pl.Float64,'NOTENO':pl.Float64,'LIABACCT':pl.Float64,
-    }).sort('LIABACCT')
-    df_liab = (df_liab
-               .join(df_cname.rename({'ACCTNO':'LIABACCT','CUSTNAM1':'GNAME'}),
-                     on='LIABACCT', how='left')
-               .with_columns(
-                   pl.when(pl.col('GNAME').is_null() | (pl.col('GNAME') == ''))
-                     .then(pl.col('LIABNAME')).otherwise(pl.col('GNAME')).alias('GNAME'))
-               .sort(['ACCTNO','NOTENO']))
-    for (a, n), grp in df_liab.group_by(['ACCTNO','NOTENO']):
-        names = grp['GNAME'].to_list()
-        guarantor_data[(a, n)] = {
-            'GUARNAM1': names[0] if names else '',
-            'GUARNAM2': names[1] if len(names) > 1 else '',
-        }
-del df_liab
-gc.collect()
-print(f"  Guarantor keys: {len(guarantor_data):,}\n")
-
-if df_loan.height:
-    g1, g2 = [], []
-    for r in df_loan.iter_rows(named=True):
-        gd = guarantor_data.get((r['ACCTNO'], r['NOTENO']),
-                                {'GUARNAM1':'','GUARNAM2':''})
-        g1.append(gd['GUARNAM1']); g2.append(gd['GUARNAM2'])
-    df_loan = df_loan.with_columns([
-        pl.Series('GUARNAM1', g1), pl.Series('GUARNAM2', g2)])
-del guarantor_data
-gc.collect()
-
-# ============================================================================
-# STEP 10: Previous balance
-# ============================================================================
-print("STEP 10: Previous balance...")
-df_sasln = read_full(PATH_SASLN, columns=['ACCTNO','NOTENO','CURBAL'])
-if df_sasln is not None:
-    df_sasln = (standardize_schema(df_sasln, {
-                    'ACCTNO':pl.Float64,'NOTENO':pl.Float64,'CURBAL':pl.Float64})
-                .rename({'CURBAL':'PREVBAL'})
-                .sort(['ACCTNO','NOTENO'])
-                .join(df_npl.select(['ACCTNO','NOTENO']),
-                      on=['ACCTNO','NOTENO'], how='inner'))
-else:
-    df_sasln = empty_df({'ACCTNO':pl.Float64,'NOTENO':pl.Float64,'PREVBAL':pl.Float64})
-print(f"  SASLN: {df_sasln.height:,}\n")
-
-# ============================================================================
-# STEP 11: Final merge + SAS filter (WOFF construction)
-# ============================================================================
-print("STEP 11: Final merge...")
-if df_sasln.height and df_loan.height:
-    df_woff = df_sasln.join(df_loan, on=['ACCTNO','NOTENO'], how='inner')
-    if 'BRANCH' not in df_woff.columns:
-        df_woff = df_woff.join(df_npl.select(['ACCTNO','BRANCH','MARKETVL']),
-                               on='ACCTNO', how='left')
-    df_woff = df_woff.with_columns([
-        (pl.col('CURBAL').fill_null(0) - pl.col('PREVBAL').fill_null(0)).alias('PAYMENT'),
-        (pl.col('TOTIIS').fill_null(0) + pl.col('SP').fill_null(0)).alias('TOTAL'),
-        pl.lit('D').alias('RIND'),   # EIFFTXT1: Conventional = 'D'
-    ])
-else:
-    df_woff = df_npl.clone().with_columns([
-        pl.lit(0.0).alias('PAYMENT'),
-        (pl.col('TOTIIS').fill_null(0) + pl.col('SP').fill_null(0)).alias('TOTAL'),
-        pl.lit('D').alias('RIND'),   # EIFFTXT1: Conventional = 'D'
-    ])
-del df_sasln, df_loan
-gc.collect()
-print(f"  WOFF pre-filter: {df_woff.height:,}")
-
-# Ensure required columns exist
-for c in ('BORSTAT','DAYS','LOANTYPE','PAIDIND','TOTAL'):
-    if c not in df_woff.columns:
-        df_woff = df_woff.with_columns(pl.lit(None).alias(c))
-df_woff = (df_woff
-           .with_columns([pl.col(c).cast(pl.Utf8) for c in ('BORSTAT','PAIDIND')] +
-                         [pl.col(c).cast(pl.Float64) for c in ('DAYS','LOANTYPE','TOTAL')]))
-
-# SAS: (BORSTAT IN ('F','I') & DAYS GE 334) OR DAYS GE 334 OR
-#      (BORSTAT='A' & LOANTYPE NOT IN excluded & PAIDIND NE 'P'); TOTAL NE 0
-cond_borstat_fi = (pl.col('BORSTAT').is_in(['F','I'])) & (pl.col('DAYS') >= 334)
-cond_days       = pl.col('DAYS') >= 334
-cond_active     = ((pl.col('BORSTAT') == 'A') &
-                   (~pl.col('LOANTYPE').is_in(EXCLUDED_LOANTYPES)) &
-                   (pl.col('PAIDIND').is_null() | (pl.col('PAIDIND') != 'P')))
-
-df_woff = (df_woff
-           .filter((cond_borstat_fi | cond_days | cond_active) & (pl.col('TOTAL') != 0))
-           .with_columns(pl.lit('Y').alias('CONFIRM'))
-           .sort('ACCTNO'))
-
-# Attach NAME (SAS: MERGE WOFF(IN=A DROP=NAME) CNAME(RENAME=(CUSTNAM1=NAME)))
-if 'NAME' in df_woff.columns:
-    df_woff = df_woff.drop('NAME')
-if df_cname.height:
-    df_woff = df_woff.join(
-        df_cname.rename({'CUSTNAM1':'NAME'}),
-        on='ACCTNO',
+    df_liab = df_liab.merge(
+        df_cname.rename(columns={'acctno': 'liabacct', 'custnam1': 'gname'}),
+        on='liabacct',
         how='left'
     )
-print()
 
-# ============================================================================
-# STEP 12: Output — 797-char fixed-width + SASPy SAS7BDAT
-# ============================================================================
-print("STEP 12: Writing outputs...")
+    df_liab['gname'] = df_liab['gname'].fillna(df_liab['liabname'])
+    df_liab = df_liab.sort_values(['acctno', 'noteno'])
 
-def _s(v, n):
-    s = '' if v is None else str(v)
-    s = s.replace('\n', ' ').replace('\r', ' ')
-    return s[:n].ljust(n)
+    guarantor_data = {}
+    for (acctno, noteno), group in df_liab.groupby(['acctno', 'noteno']):
+        gnames = group['gname'].tolist()
+        guarantor_data[(acctno, noteno)] = {
+            'guarnam1': gnames[0] if len(gnames) > 0 else '',
+            'guarnam2': gnames[1] if len(gnames) > 1 else ''
+        }
+    print(f"Guarantor records processed: {len(guarantor_data)}")
+except Exception as e:
+    print(f"Error reading liability data ({liab_file}): {e}")
+    guarantor_data = {}
+    df_liab = pd.DataFrame()
 
-def _n(v, n, d=2):
-    try: v = 0.0 if v is None else float(v)
-    except Exception: v = 0.0
-    s = f"{v:.{d}f}"
-    return s.rjust(n) if len(s) <= n else s[:n]
+# Step 8: Get previous month balance
+print("Step 8: Reading previous month balance...")
+sasln_file = f'{SASLN_DIR}loan{reptmon1}{nowks}.sas7bdat'
+try:
+    df_sasln = read_sas_columns(
+        sasln_file,
+        ['acctno', 'noteno', 'curbal'],
+        required=['acctno', 'noteno'],
+        allow_missing_file=True,
+    )
+    df_sasln = df_sasln.rename(columns={'curbal': 'prevbal'})
+    df_sasln = df_sasln.sort_values(['acctno', 'noteno'])
+    print(f"Previous balance records: {len(df_sasln)}")
+except Exception as e:
+    print(f"Error reading {sasln_file}: {e}")
+    df_sasln = pd.DataFrame(columns=['acctno', 'noteno', 'prevbal'])
 
-def _line_wofftex1(r):
-    buf = [' '] * EXPECTED_LEN
+# Merge with NPL to get only relevant accounts
+df_sasln = df_sasln.merge(df_npl[['acctno', 'noteno']], on=['acctno', 'noteno'], how='inner')
 
-    def put(pos, s, n):
-        s = ('' if s is None else str(s)).replace('\n', ' ').replace('\r', ' ')[:n].ljust(n)
-        start = pos - 1
-        buf[start:start+n] = list(s)
-
-    def put_num(pos, v, n, d=2):
-        try: v = 0.0 if v is None else float(v)
-        except Exception: v = 0.0
-        s = f"{v:.{d}f}".rjust(n)
-        if len(s) > n: s = s[:n]
-        put(pos, s, n)
-
-    def put_int(pos, v, n):
-        try: v = 0 if v is None else int(float(v))
-        except Exception: v = 0
-        put(pos, str(v).rjust(n), n)
-
-    put(1,   r.get('BRANCH'), 7)
-    put(9,   r.get('NAME'), 40)
-    put_num(50, r.get('ACCTNO'), 10, 0)
-    put_num(61, r.get('NOTENO'), 5, 0)
-    put(67,  r.get('BORSTAT'), 1)
-    put_num(69,  r.get('IIS'), 16)
-    put_num(85,  r.get('OI'), 16)
-    put_num(101, r.get('TOTIIS'), 16)
-    put_num(117, r.get('SP'), 16)
-    put_num(149, r.get('CURBAL'), 16)
-    put_num(165, r.get('PREVBAL'), 16)
-    put_num(181, r.get('PAYMENT'), 16)
-    put_num(197, r.get('ECSRRSRV'), 16)
-    put_num(213, r.get('POSTAMT'), 16)
-    put_num(229, r.get('OTHERAMT'), 16)
-    put(245, r.get('MATDATE'), 10)
-    put_int(255, r.get('LOANTYPE'), 3)
-    put_num(258, r.get('INTAMT'), 16)
-    put(274, r.get('POSTNTRN'), 1)
-    put_num(278, r.get('MARKETVL'), 16)
-    put_num(294, r.get('INTEARN4'), 16)
-    put_int(310, r.get('DAYS'), 6)
-    put_int(317, r.get('CUSTCODE'), 3)
-    put(321, r.get('RIND'), 1)
-    put_num(322, r.get('OIFEEAMT'), 16)
-    put(339, r.get('LASTTRA1'), 10)
-    put_int(350, r.get('LSTTRNCD'), 3)
-    put_int(354, r.get('MTHPDUE'), 3)
-    put_num(357, r.get('BALANCE'), 16)
-    put(408, r.get('GUAREND'), 20)
-    put(429, r.get('GUARNAM1'), 40)
-    put(470, r.get('GUARNAM2'), 40)
-    iss = r.get('ISSXDTE')
-    iss_s = fmt_mmddyy10(iss) if isinstance(iss, date) else (iss or '')
-    put(511, iss_s, 10)
-    put_num(522, r.get('NETPROC'), 16)
-    put(539, r.get('COLLDESC'), 70)
-    put_int(610, r.get('COLLYEAR'), 4)
-    put_int(615, r.get('BILPAID'), 3)
-    put(619, r.get('CRRGRADE'), 5)
-    put_num(625, r.get('MARGINFI'), 16)
-    put_int(642, r.get('NOTETERM'), 3)
-    put_num(646, r.get('PAYAMT'), 16)
-    put(663, r.get('DOBMNI'), 10)
-    put(674, r.get('ECSRIND'), 1)
-    put(677, r.get('DELQCD'), 2)
-    put(713, r.get('OCCUPAT'), 3)
-    put(743, r.get('BGC'), 2)
-    put(767, r.get('PAY75PCT'), 1)
-    put(769, r.get('NACODATE'), 10)
-    put(780, r.get('CP'), 1)
-    put(782, r.get('MODELDES'), 6)
-    put(789, r.get('AKPK_STATUS'), 9)
-
-    return ''.join(buf)
-
-def write_wofftex1(df, path):
-    with open(path, 'w') as f:
-        for r in df.iter_rows(named=True):
-            f.write(_line_wofftex1(r) + '\n')
-
-def write_wofftext_streaming(src, dst):
-    with open(src) as fin, open(dst, 'w') as fout:
-        for line in fin:
-            L = line.rstrip('\n').ljust(EXPECTED_LEN)
-            totiis  = _safe_float(L[100:116])
-            balance = _safe_float(L[356:372])
-            oi      = _safe_float(L[84:100])
-            sp   = balance - totiis
-            tot  = totiis + sp
-            delqcd, occupat, bgc = L[676:678], L[712:715], L[742:744]
-            out = (L[:116] + _n(sp,16) + _n(tot,16) + L[148:373] +
-                   _n(0.0,16) + _n(oi,16) + L[407:679] +
-                   _s(get_delq_desc(delqcd),30) + _s('C',1) +    # BIZTYPE='C' Conventional
-                   _s(occupat,3) + _s(get_occup_desc(occupat),25) +
-                   _s(bgc,2) + _s(get_bgc_desc(bgc),20) + L[766:])
-            fout.write(out + '\n')
-
-if df_woff.height:
-    # LIST.sas7bdat via SASPy
-    write_sas7bdat_saspy(df_woff, table_name='LIST')
-
-    print(f"\n{'='*60}\nSUMMARY\n{'='*60}")
-    print(f"Accounts in write-off list: {len(df_woff):,}")
-    print(f"Total exposure: RM {df_woff['TOTAL'].sum():,.2f}")
-
-    write_wofftex1(df_woff, OUTPUT_FILE1)
-    print(f"  {OUTPUT_FILE1.name}: {OUTPUT_FILE1.stat().st_size:,} bytes")
-
-    with open(OUTPUT_FILE1) as f:
-        lengths = [len(line.rstrip('\n')) for line in f]
-    if lengths:
-        print(f"  wofftex1 line lengths: min={min(lengths)} max={max(lengths)} expected={EXPECTED_LEN}")
-        if min(lengths) != EXPECTED_LEN:
-            print(f"  WARNING: line length mismatch — offsets may misalign")
-
-    write_wofftext_streaming(OUTPUT_FILE1, OUTPUT_FILE)
-    print(f"  {OUTPUT_FILE.name}: {OUTPUT_FILE.stat().st_size:,} bytes")
-
-    # WOFFTXT via SASPy (final formatted)
-    recs = []
-    with open(OUTPUT_FILE1) as f:
-        for line in f:
-            L = line.rstrip('\n')
-            if len(L) < 372:
-                continue
-            tot = _safe_float(L[100:116])
-            bal = _safe_float(L[356:372])
-            recs.append({
-                'BRANCH':  L[0:7].strip(),
-                'NAME':    L[8:48].strip(),
-                'ACCTNO':  _safe_float(L[49:59]),
-                'NOTENO':  L[60:65].strip(),
-                'BORSTAT': L[66:67],
-                'IIS':     _safe_float(L[68:84]),
-                'OI':      _safe_float(L[84:100]),
-                'TOTIIS':  tot,
-                'BALANCE': bal,
-                'SP':      bal - tot,
-                'TOTAL':   tot + (bal - tot),
-            })
-    if recs:
-        df_t = pl.DataFrame(recs)
-        write_sas7bdat_saspy(df_t, table_name='WOFFTXT')
+# Add guarantor data (vectorized)
+if guarantor_data:
+    df_guar = pd.DataFrame(
+        [
+            {'acctno': acctno, 'noteno': noteno, **names}
+            for (acctno, noteno), names in guarantor_data.items()
+        ]
+    )
 else:
-    print("\nNo accounts for write-off — creating empty files.")
-    OUTPUT_FILE1.write_text('')
-    OUTPUT_FILE.write_text('')
+    df_guar = pd.DataFrame(columns=['acctno', 'noteno', 'guarnam1', 'guarnam2'])
 
-total_elapsed = time.time() - start_total
-print(f"\n{'='*60}\nCOMPLETED IN {total_elapsed:.1f}s\n{'='*60}")
-print(f"  {OUTPUT_FILE}\n  {OUTPUT_FILE1}")
-if df_woff.height:
-    print(f"  NPLOUT.LIST\n  NPLOUT.WOFFTXT")
+df_sasln = df_sasln.merge(df_guar, on=['acctno', 'noteno'], how='left')
+df_sasln['guarnam1'] = df_sasln['guarnam1'].fillna('')
+df_sasln['guarnam2'] = df_sasln['guarnam2'].fillna('')
+
+# Step 9: Merge all data
+print("Step 9: Merging all data...")
+df_woff = df_sasln.merge(df_loan, on=['acctno', 'noteno'], how='outer')
+df_woff = df_woff.merge(df_npl, on='acctno', how='outer', suffixes=('', '_npl'))
+
+df_woff['payment'] = df_woff['curbal'].fillna(0) - df_woff['prevbal'].fillna(0)
+df_woff['total'] = df_woff['totiis'].fillna(0) + df_woff['sp'].fillna(0)
+df_woff['rind'] = 'D'
+
+gc.collect()
+
+# Step 10: KEY DIFFERENCE FROM EIFFTXT1 - Filter by NPL.LIST file
+print("Step 10: Filtering by NPL.LIST file...")
+npl_list_file = f'{NPL_DIR}list.parquet'
+if os.path.exists(npl_list_file):
+    df_list = pd.read_parquet(npl_list_file)
+    if 'acctno' in df_list.columns:
+        df_list = df_list[['acctno']].drop_duplicates()
+        print(f"NPL.LIST accounts: {len(df_list)}")
+        
+        # Inner join to only keep accounts in NPL.LIST
+        df_woff = df_woff.merge(df_list, on='acctno', how='inner')
+        print(f"Accounts after NPL.LIST filter: {len(df_woff)}")
+    else:
+        print("Warning: NPL.LIST file has no 'acctno' column. Skipping filter.")
+else:
+    print(f"Warning: NPL.LIST file not found at {npl_list_file}. Proceeding without filter.")
+
+# Step 11: Merge with customer names
+print("Step 11: Merging customer names...")
+df_woff = df_woff.merge(
+    df_cname.rename(columns={'custnam1': 'name'}),
+    on='acctno',
+    how='left',
+    suffixes=('', '_cname')
+)
+
+df_woff = df_woff.sort_values('acctno')
+
+print(f"Write-off candidates: {len(df_woff)}")
+
+# Save to parquet
+os.makedirs(os.path.dirname(f'{NPL_DIR}list_filtered.parquet'), exist_ok=True)
+df_woff.to_parquet(f'{NPL_DIR}list_filtered.parquet', index=False)
+
+print(f"\nBad Debt Write-Off List (Conventional - Filtered) Generation Complete")
+
+# Step 12: Write fixed-width output file (same format as EIFFTXT1)
+print("Step 12: Writing fixed-width output file...")
+os.makedirs(os.path.dirname(OUTPUT_FILE1), exist_ok=True)
+
+with open(OUTPUT_FILE1, 'w', buffering=8192*1024) as f:
+    lines = []
+    for row in df_woff.to_dict('records'):
+        lines.append(create_fixed_width_line(row))
+
+        if len(lines) >= 1000:
+            f.writelines(lines)
+            lines = []
+
+    if lines:
+        f.writelines(lines)
+
+# Step 13-14: Read, recalculate, write final output
+print("Step 13-14: Writing final formatted output...")
+with open(OUTPUT_FILE1, 'r', buffering=8192*1024) as f_in, \
+     open(OUTPUT_FILE, 'w', buffering=8192*1024) as f_out:
+
+    for line in f_in:
+        totiis = float(line[100:116]) if line[100:116].strip() else 0
+        balance = float(line[356:372]) if line[356:372].strip() else 0
+        oi = float(line[84:100]) if line[84:100].strip() else 0
+
+        sp_calc = balance - totiis
+        total_calc = totiis + sp_calc
+
+        delqcd = line[676:678]
+        occupat = line[712:715]
+        bgc = line[742:744]
+
+        delqdes = get_delq_desc(delqcd)
+        occupdes = get_occup_desc(occupat)
+        bgcdes = get_bgc_desc(bgc)
+
+        biztype = 'C'
+        cap = 0.0
+        latechg = oi
+
+        f_out.write(line[:116])
+        f_out.write(f"{sp_calc:>16.2f}")
+        f_out.write(f"{total_calc:>16.2f}")
+        f_out.write(line[148:373])
+        f_out.write(f"{cap:>16.2f}")
+        f_out.write(f"{latechg:>16.2f}")
+        f_out.write(line[407:679])
+        f_out.write(f"{delqdes:<30}")
+        f_out.write(f"{biztype:1}")
+        f_out.write(line[712:715])
+        f_out.write(f"{occupdes:<25}")
+        f_out.write(line[742:744])
+        f_out.write(f"{bgcdes:<20}")
+        f_out.write(line[766:])
+
+# Save final dataset
+df_final = df_woff.copy()
+df_final.to_parquet(f'{NPL_DIR}WOFFTXT.parquet', index=False)
+
+print(f"\nOutput files generated:")
+print(f"  {OUTPUT_FILE} (Final formatted output)")
+print(f"  {OUTPUT_FILE1} (Intermediate output)")
+print(f"  {NPL_DIR}list_filtered.parquet (Filtered data file)")
+print(f"  {NPL_DIR}WOFFTXT.parquet (Final dataset)")
+print(f"\nAccounts in filtered write-off list: {len(df_woff)}")
+if len(df_woff) > 0:
+    print(f"Total exposure: RM {df_woff['total'].sum():,.2f}")
+print(f"\nKey Differences from EIFFTXT1:")
+print(f"  - Filtered by existing NPL.LIST file (only pre-approved accounts)")
+print(f"  - No LOANTYPE exclusion in NPLA WHERE clause")
+print(f"  - Deleted ACCTNO 8396846630, NOTENO 90011")
+print(f"  - RIND = 'D' (Conventional)")
+print(f"  - BIZTYPE = 'C' (Conventional)")
+print(f"  - Uses CREDMSUBAC (Conventional CCRIS)")
