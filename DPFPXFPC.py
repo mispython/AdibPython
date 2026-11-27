@@ -1,12 +1,13 @@
 """
-EIIFTXT2 - Bad Debt Write-Off List (Filtered by NPL.LIST)
+EIFFTXT1 - Bad Debt Write-Off List (Conventional Banking)
 
-Key differences from EIIFTXT1:
-- Filters accounts by existing NPL.LIST (only accounts previously identified)
-- No LOANTYPE exclusion in NPLA WHERE clause
-- Same RSS guard, SASPy writes, 797-char fixed-width layout as EIIFTXT1
+Key differences from EIIFTXT1 (Islamic):
+  - RIND = 'D' (Domestic/Conventional) vs 'I' (Islamic)
+  - BIZTYPE = 'C' (Conventional) vs 'I' (Islamic)
+  - Uses CREDMSUBAC (not ICREDMSUBAC - no 'I' prefix)
+  - NPLA: BORSTAT='A' AND LOANTYPE NOT IN (983,993,678,679,698,699)
 
-LNNOTE filter: BORSTAT = 'A' AND ENTITY_CD = 'PIBB'
+Same RSS guard, SASPy writes, 797-char fixed-width layout as EIIFTXT1.
 """
 
 import gc
@@ -57,8 +58,7 @@ except ImportError:
 HPD = HP_ACTIVE
 RSS_GUARD_MB = 24000
 EXPECTED_LEN = 797
-EXCLUDED_LOANTYPES = []           # EIIFTXT2: NO LOANTYPE exclusion
-ENTITY_CD_FILTER = 'PIBB'         # LNNOTE: WHERE ENTITY_CD == 'PIBB'
+EXCLUDED_LOANTYPES = [983, 993, 678, 679, 698, 699]
 
 # --- Input paths (each from its own source, no shared ROOT) -----------------
 PATH_LN_NOTE = Path('/sas/ln/dwh/enrichment/enrh_ln_note.sas7bdat')
@@ -69,7 +69,7 @@ PATH_LIAB    = Path('/sas/ln/dwh/staging/stg_ln_liabfile.sas7bdat')
 PATH_LIST    = Path('/exdwh/host/ln/npl_hp_sasdata/pibb/woff/list.sas7bdat')
 
 # --- Output paths ----------------------------------------------------------
-OUTPUT_DIR   = Path('/host_pq/mis/output/report/wofftxt')
+OUTPUT_DIR   = Path('/host_pq/mis/output/report/wofftxt_conv')
 OUTPUT_FILE  = OUTPUT_DIR / 'wofftext.txt'
 OUTPUT_FILE1 = OUTPUT_DIR / 'wofftex1.txt'
 
@@ -93,19 +93,21 @@ reptyear = f'{reptdate.year % 100:02d}'
 rdate    = reptdate.strftime('%d/%m/%y')
 
 # Dynamic input paths (date-dependent, fully qualified — no ROOT)
+# EIFFTXT1 uses CREDMSUBAC (no 'I' prefix), unlike EIIFTXT1 (ICREDMSUBAC)
 PATH_CCRIS = Path(
     f'/dwh/iccc_srb/'
-    f'icredmsubac{reptmon}{reptyear}.sas7bdat'
+    f'credmsubac{reptmon}{reptyear}.sas7bdat'
 )
 PATH_SASLN = Path(
     f'/dwh/dwh_m/tempsource/ln/'
     f'loan{reptmon1}{nowks}.sas7bdat'
 )
 
-print(f"\n{'='*60}\nBad Debt Write-Off List (Filtered by NPL.LIST)\n{'='*60}")
+print(f"\n{'='*60}\nBad Debt Write-Off List (Conventional Banking)\n{'='*60}")
 print(f"Report Date: {reptdate.strftime('%d/%m/%Y')}  "
       f"Week: {nowk}  Prev Month: {reptmon1}")
 print(f"Output Dir : {OUTPUT_DIR}")
+print(f"RIND: D  BIZTYPE: C")
 print(f"{'='*60}\n")
 
 # ============================================================================
@@ -147,12 +149,10 @@ def read_full(path, columns=None):
         return None
 
 def read_lnnote_full_filtered(path, columns, excluded_loantypes,
-                              entity_cd=ENTITY_CD_FILTER,
                               max_mb=RSS_GUARD_MB):
     """
     Single full read + immediate filter. Linear time, bounded RSS.
-    EIIFTXT2: filter BORSTAT='A' and ENTITY_CD=<entity_cd> ('PIBB');
-    NO LOANTYPE exclusion.
+    EIFFTXT1: filter BORSTAT='A' AND LOANTYPE NOT IN excluded (per SAS).
     """
     path = Path(path)
     if not path.exists():
@@ -177,14 +177,12 @@ def read_lnnote_full_filtered(path, columns, excluded_loantypes,
     gc.collect()
     print(f"  Converted to Polars, RSS {_rss_mb():.0f}MB", flush=True)
 
-    p = p.with_columns([
-        pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars(),
-        pl.col('ENTITY_CD').cast(pl.Utf8).str.strip_chars(),
-    ]).filter(
-        (pl.col('BORSTAT') == 'A') & (pl.col('ENTITY_CD') == entity_cd)
+    p = p.with_columns(
+        pl.col('BORSTAT').cast(pl.Utf8).str.strip_chars()
+    ).filter(
+        (pl.col('BORSTAT') == 'A') &
+        (~pl.col('LOANTYPE').is_in(excluded_loantypes))
     )
-    if excluded_loantypes:
-        p = p.filter(~pl.col('LOANTYPE').is_in(excluded_loantypes))
     print(f"  Filtered to {p.height:,} rows, RSS {_rss_mb():.0f}MB", flush=True)
     return p
 
@@ -272,13 +270,12 @@ def write_sas7bdat_saspy(df, table_name, libref='NPLOUT'):
 NPL_COLS = ['NAME', 'ACCTNO', 'NOTENO', 'IIS', 'OI', 'TOTIIS', 'SP', 'MARKETVL', 'BRANCH']
 
 # ============================================================================
-# STEP 1: Read NPLA (BORSTAT='A', ENTITY_CD='PIBB', no LOANTYPE exclusion)
+# STEP 1: Read NPLA (BORSTAT='A', LOANTYPE NOT IN excluded)
 # ============================================================================
-print(f"STEP 1: Reading NPLA (BORSTAT='A', ENTITY_CD='{ENTITY_CD_FILTER}')...")
+print("STEP 1: Reading NPLA (BORSTAT='A', LOANTYPE NOT IN excluded)...")
 start_total = time.time()
 
 loan_columns = [
-    'ENTITY_CD',
     'BORSTAT', 'LOANTYPE', 'NAME', 'ACCTNO', 'NOTENO',
     'FEEDUE', 'FEEDUEMS', 'FEEAMT16', 'MARKETVL', 'NTBRCH',
     'FEETOTAL', 'NFEEAMT5', 'FEEAMT3', 'FEETOT2', 'FEEAMTA', 'FEEAMT5',
@@ -290,12 +287,10 @@ loan_columns = [
 ]
 
 df_npla_raw = read_lnnote_full_filtered(
-    PATH_LN_NOTE, columns=loan_columns, excluded_loantypes=EXCLUDED_LOANTYPES,
-    entity_cd=ENTITY_CD_FILTER)
+    PATH_LN_NOTE, columns=loan_columns, excluded_loantypes=EXCLUDED_LOANTYPES)
 
 if df_npla_raw.height == 0:
-    print(f"WARNING: No active accounts (BORSTAT='A', "
-          f"ENTITY_CD='{ENTITY_CD_FILTER}'). Exiting.")
+    print("WARNING: No active accounts (BORSTAT='A', LOANTYPE not excluded). Exiting.")
     sys.exit(0)
 print(f"  NPLA survivors: {df_npla_raw.height:,}")
 
@@ -405,14 +400,14 @@ gc.collect()
 print(f"  NPL combined: {df_npl.height:,}\n")
 
 # ============================================================================
-# STEP 4: CCRIS
+# STEP 4: CCRIS (CREDMSUBAC — no 'I' prefix)
 # ============================================================================
-print("STEP 4: CCRIS...")
+print("STEP 4: CCRIS (CREDMSUBAC)...")
 ccris_paths = [
     PATH_CCRIS,
-    PATH_CCRIS.with_name(f'ICREDMSUBAC{reptmon}{reptyear}.sas7bdat'),
-    PATH_CCRIS.with_name(f'icredmsubac{reptmon}0{reptyear}.sas7bdat'),
-    PATH_CCRIS.with_name(f'ICREDMSUBAC{reptmon}0{reptyear}.sas7bdat'),
+    PATH_CCRIS.with_name(f'CREDMSUBAC{reptmon}{reptyear}.sas7bdat'),
+    PATH_CCRIS.with_name(f'credmsubac{reptmon}0{reptyear}.sas7bdat'),
+    PATH_CCRIS.with_name(f'CREDMSUBAC{reptmon}0{reptyear}.sas7bdat'),
 ]
 df_credsub = None
 for p in ccris_paths:
@@ -690,13 +685,13 @@ if df_sasln.height and df_loan.height:
     df_woff = df_woff.with_columns([
         (pl.col('CURBAL').fill_null(0) - pl.col('PREVBAL').fill_null(0)).alias('PAYMENT'),
         (pl.col('TOTIIS').fill_null(0) + pl.col('SP').fill_null(0)).alias('TOTAL'),
-        pl.lit('I').alias('RIND'),
+        pl.lit('D').alias('RIND'),   # EIFFTXT1: Conventional = 'D'
     ])
 else:
     df_woff = df_npl.clone().with_columns([
         pl.lit(0.0).alias('PAYMENT'),
         (pl.col('TOTIIS').fill_null(0) + pl.col('SP').fill_null(0)).alias('TOTAL'),
-        pl.lit('I').alias('RIND'),
+        pl.lit('D').alias('RIND'),   # EIFFTXT1: Conventional = 'D'
     ])
 del df_sasln, df_loan
 gc.collect()
@@ -723,33 +718,10 @@ df_woff = (df_woff
            .with_columns(pl.lit('Y').alias('CONFIRM'))
            .sort('ACCTNO'))
 
-# ============================================================================
-# STEP 12: KEY DIFFERENCE — filter by NPL.LIST
-# ============================================================================
-print("\nSTEP 12: Filtering by NPL.LIST...")
-list_candidates = [
-    PATH_LIST,
-    PATH_LIST.with_name('list.sas7bdat'),
-    OUTPUT_DIR / 'LIST.sas7bdat',
-    OUTPUT_DIR / 'list.sas7bdat',
-]
-df_list = None
-for p in list_candidates:
-    df_list = read_full(p, columns=['ACCTNO'])
-    if df_list is not None:
-        print(f"  Found LIST: {p.name}")
-        break
-
-if df_list is not None and df_list.height:
-    df_list = df_list.unique(subset=['ACCTNO']).sort('ACCTNO')
-    print(f"  NPL.LIST accounts: {df_list.height:,}")
-    df_woff = df_woff.join(df_list, on='ACCTNO', how='inner')
-    print(f"  WOFF after NPL.LIST filter: {df_woff.height:,}")
-else:
-    print("  WARNING: NPL.LIST not found — no filter applied")
-
-# CNAME attach (SAS: MERGE WOFF(IN=A DROP=NAME) CNAME)
-if 'NAME' not in df_woff.columns and df_cname.height > 0:
+# Attach NAME (SAS: MERGE WOFF(IN=A DROP=NAME) CNAME(RENAME=(CUSTNAM1=NAME)))
+if 'NAME' in df_woff.columns:
+    df_woff = df_woff.drop('NAME')
+if df_cname.height:
     df_woff = df_woff.join(
         df_cname.rename({'CUSTNAM1':'NAME'}),
         on='ACCTNO',
@@ -758,9 +730,9 @@ if 'NAME' not in df_woff.columns and df_cname.height > 0:
 print()
 
 # ============================================================================
-# STEP 13: Output — 797-char fixed-width + SASPy SAS7BDAT
+# STEP 12: Output — 797-char fixed-width + SASPy SAS7BDAT
 # ============================================================================
-print("STEP 13: Writing outputs...")
+print("STEP 12: Writing outputs...")
 
 def _s(v, n):
     s = '' if v is None else str(v)
@@ -866,17 +838,17 @@ def write_wofftext_streaming(src, dst):
             delqcd, occupat, bgc = L[676:678], L[712:715], L[742:744]
             out = (L[:116] + _n(sp,16) + _n(tot,16) + L[148:373] +
                    _n(0.0,16) + _n(oi,16) + L[407:679] +
-                   _s(get_delq_desc(delqcd),30) + _s('I',1) +
+                   _s(get_delq_desc(delqcd),30) + _s('C',1) +    # BIZTYPE='C' Conventional
                    _s(occupat,3) + _s(get_occup_desc(occupat),25) +
                    _s(bgc,2) + _s(get_bgc_desc(bgc),20) + L[766:])
             fout.write(out + '\n')
 
 if df_woff.height:
-    # WOFFTXT (un-formatted) via SASPy
-    write_sas7bdat_saspy(df_woff, table_name='WOFFTXT')
+    # LIST.sas7bdat via SASPy
+    write_sas7bdat_saspy(df_woff, table_name='LIST')
 
     print(f"\n{'='*60}\nSUMMARY\n{'='*60}")
-    print(f"Accounts in filtered write-off list: {len(df_woff):,}")
+    print(f"Accounts in write-off list: {len(df_woff):,}")
     print(f"Total exposure: RM {df_woff['TOTAL'].sum():,.2f}")
 
     write_wofftex1(df_woff, OUTPUT_FILE1)
@@ -892,7 +864,7 @@ if df_woff.height:
     write_wofftext_streaming(OUTPUT_FILE1, OUTPUT_FILE)
     print(f"  {OUTPUT_FILE.name}: {OUTPUT_FILE.stat().st_size:,} bytes")
 
-    # WOFFTXT_FORMATTED via SASPy
+    # WOFFTXT via SASPy (final formatted)
     recs = []
     with open(OUTPUT_FILE1) as f:
         for line in f:
@@ -916,9 +888,9 @@ if df_woff.height:
             })
     if recs:
         df_t = pl.DataFrame(recs)
-        write_sas7bdat_saspy(df_t, table_name='WOFFTXT_FORMATTED')
+        write_sas7bdat_saspy(df_t, table_name='WOFFTXT')
 else:
-    print("\nNo accounts after NPL.LIST filter — creating empty files.")
+    print("\nNo accounts for write-off — creating empty files.")
     OUTPUT_FILE1.write_text('')
     OUTPUT_FILE.write_text('')
 
@@ -926,4 +898,4 @@ total_elapsed = time.time() - start_total
 print(f"\n{'='*60}\nCOMPLETED IN {total_elapsed:.1f}s\n{'='*60}")
 print(f"  {OUTPUT_FILE}\n  {OUTPUT_FILE1}")
 if df_woff.height:
-    print(f"  NPLOUT.WOFFTXT\n  NPLOUT.WOFFTXT_FORMATTED")
+    print(f"  NPLOUT.LIST\n  NPLOUT.WOFFTXT")
